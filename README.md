@@ -1,5 +1,8 @@
 # Lightning Memory Database (LMDB) for ZIO
 
+This is a work in progress, no release yet, all current tests are OK but I'll start soon a refactoring to
+enhance errors management, expect some API changes.
+
 ## Usage example
 
 ```scala
