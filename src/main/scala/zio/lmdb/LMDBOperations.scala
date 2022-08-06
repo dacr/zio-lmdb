@@ -40,7 +40,7 @@ class LMDBOperations(
   env: Env[ByteBuffer],
   openedDatabasesRef: Ref[Map[String, Dbi[ByteBuffer]]],
   reentrantLock: TReentrantLock
-) {
+) extends LMDB {
   val charset = StandardCharsets.UTF_8
 
   private def makeKeyByteBuffer(id: String) = {
@@ -379,7 +379,7 @@ class LMDBOperations(
     }
   }
 
-  def extractKeyVal(keyval: KeyVal[ByteBuffer]): (String, String) = {
+  private def extractKeyVal(keyval: KeyVal[ByteBuffer]): (String, String) = {
     val key          = keyval.key()
     val value        = keyval.`val`()
     val decodedKey   = charset.decode(key).toString
