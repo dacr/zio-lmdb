@@ -13,8 +13,6 @@ scmInfo := Some(
 
 scalaVersion := "3.1.3"
 
-mainClass := Some("fr.janalyse.cem.Main")
-
 lazy val versions = new {
   val zio     = "2.0.0"
   val zionio  = "2.0.0"
