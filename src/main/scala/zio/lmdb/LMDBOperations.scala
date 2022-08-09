@@ -31,11 +31,11 @@ import java.time.OffsetDateTime
 import java.util.concurrent.TimeUnit
 import scala.jdk.CollectionConverters.*
 
-/*
-REQUIRED OPTIONS WHEN USED WITH RECENT JVM
---add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
- */
-
+/** LMDB ZIO abstraction layer, provides standard atomic operations implementations
+  * @param env
+  * @param openedDatabasesRef
+  * @param reentrantLock
+  */
 class LMDBOperations(
   env: Env[ByteBuffer],
   openedDatabasesRef: Ref[Map[String, Dbi[ByteBuffer]]],
@@ -46,9 +46,13 @@ class LMDBOperations(
   private def makeKeyByteBuffer(id: String) = {
     val keyBytes = id.getBytes(charset)
     for {
-      _   <- ZIO.cond(keyBytes.length <= env.getMaxKeySize, (), Exception(s"Key size is over limit ${env.getMaxKeySize}"))
-      key <- ZIO.attempt(ByteBuffer.allocateDirect(env.getMaxKeySize))
-      _   <- ZIO.attempt(key.put(id.getBytes(charset)).flip)
+      _   <- ZIO.cond(
+               keyBytes.length <= env.getMaxKeySize,
+               (),
+               InternalError(s"Given key size (${id.size} which expands to ${keyBytes.length} bytes) is bigger than limit ${env.getMaxKeySize}")
+             )
+      key <- ZIO.attempt(ByteBuffer.allocateDirect(env.getMaxKeySize)).mapError(err => InternalError(s"Couldn't allocate byte buffer for key", Some(err)))
+      _   <- ZIO.attempt(key.put(keyBytes).flip).mapError(err => InternalError(s"Couldn't copy key bytes to buffer", Some(err)))
     } yield key
   }
 
@@ -56,7 +60,7 @@ class LMDBOperations(
     * @param dbName
     * @return
     */
-  private def getDatabase(dbName: String): Task[Dbi[ByteBuffer]] = {
+  private def getDatabase(dbName: String): IO[DatabaseNotFound, Dbi[ByteBuffer]] = {
     val alreadyHereLogic = for {
       databases <- openedDatabasesRef.get
     } yield databases.get(dbName)
@@ -73,7 +77,7 @@ class LMDBOperations(
         .tap(_ => ZIO.logDebug(s"DB $dbName found"))
         .orElse(
           addAndGetLogic.some
-            .mapError(err => Exception(s"Couldn't find DB $dbName : $err"))
+            .mapError(err => DatabaseNotFound(dbName))
             .tap(_ => ZIO.logDebug(s"collection $dbName opened"))
         )
     }
@@ -83,7 +87,7 @@ class LMDBOperations(
     * @param dbName
     * @return
     */
-  def databaseExists(dbName: String): Task[Boolean] = {
+  override def databaseExists(dbName: String): IO[LMDBError, Boolean] = {
     ZIO.logSpan("databaseExists") {
       for {
         openedDatabases <- openedDatabasesRef.get
@@ -97,7 +101,7 @@ class LMDBOperations(
     * @param dbName
     * @return
     */
-  def databaseCreate(dbName: String): Task[Unit] = {
+  override def databaseCreate(dbName: String): IO[LMDBError, Unit] = {
     ZIO.logSpan("databaseCreate") {
       databaseExists(dbName)
         .filterOrElse(identity)(
@@ -110,36 +114,54 @@ class LMDBOperations(
 
   private def databaseCreateLogic(dbName: String) = reentrantLock.withWriteLock {
     for {
-      databases <-
-        openedDatabasesRef.updateAndGet(before =>
-          if (before.contains(dbName)) before
-          else before + (dbName -> env.openDbi(dbName, DbiFlags.MDB_CREATE))
-        )
-      db        <-
-        ZIO
-          .from(databases.get(dbName))
-          .tapError(err => ZIO.logDebug(s"Couldn't create DB $dbName ${err}"))
-          .mapError(err => Exception(s"Couldn't create DB $dbName : $err"))
+      databases <- openedDatabasesRef.updateAndGet(before =>
+                     if (before.contains(dbName)) before
+                     else before + (dbName -> env.openDbi(dbName, DbiFlags.MDB_CREATE)) // TODO
+                   )
+      db        <- ZIO
+                     .from(databases.get(dbName))
+                     .tapError(err => ZIO.logDebug(s"Couldn't create DB $dbName ${err}"))
+                     .mapError(err => InternalError(s"Couldn't create DB $dbName"))
     } yield ()
   }
+
+  private def withWriteTransaction(dbName: String) =
+    ZIO.acquireReleaseWith(
+      ZIO
+        .attemptBlocking(env.txnWrite())
+        .tap(_ => ZIO.logDebug(s"transaction write on $dbName opened"))
+        .mapError(err => InternalError(s"Couldn't acquire write transaction on $dbName", Some(err)))
+    )(txn =>
+      ZIO
+        .attemptBlocking(txn.close())
+        .tap(_ => ZIO.logDebug(s"transaction write on $dbName closed"))
+        .ignoreLogged
+    )
+
+  private def withReadTransaction(dbName: String) =
+    ZIO.acquireReleaseWith(
+      ZIO
+        .attemptBlocking(env.txnRead())
+        .tap(_ => ZIO.logDebug(s"transaction read on $dbName opened"))
+        .mapError(err => InternalError(s"Couldn't acquire read transaction on $dbName", Some(err)))
+    )(txn =>
+      ZIO
+        .attemptBlocking(txn.close())
+        .tap(_ => ZIO.logDebug(s"transaction read on $dbName closed"))
+        .ignoreLogged
+    )
 
   /** Remove all the content of a database
     * @param dbName
     * @return
     */
-  def databaseClear(dbName: String): Task[Unit] = {
-    def databaseClearLogic(db: Dbi[ByteBuffer]) = {
-      ZIO.acquireReleaseWith(
+  override def databaseClear(dbName: String): IO[DatabaseNotFound | LMDBError, Unit] = {
+    def databaseClearLogic(db: Dbi[ByteBuffer]): ZIO[Any, InternalError, Unit] = {
+      withWriteTransaction(dbName) { txn =>
         ZIO
-          .attemptBlocking(env.txnWrite())
-          .tap(_ => ZIO.logDebug(s"transaction write on $dbName opened"))
-      )(txn =>
-        ZIO
-          .attemptBlocking(txn.close())
-          .tap(_ => ZIO.logDebug(s"transaction write on $dbName closed"))
-          .ignoreLogged
-      ) { txn =>
-        ZIO.attemptBlocking(db.drop(txn))
+          .attemptBlocking(db.drop(txn))
+          .mapError(err => InternalError(s"Couldn't clear $dbName", Some(err)))
+          .tapError(err => ZIO.logError(err.toString))
       }
     }
     reentrantLock.withWriteLock(
@@ -154,30 +176,29 @@ class LMDBOperations(
 
   /** Check server current configuration compatibility
     */
-  def platformCheck(): Task[Unit] = reentrantLock.withWriteLock {
-    for {
-      _ <- ZIO.attemptBlockingIO {
-             val verifier = new Verifier(env)
-             verifier.runFor(5, TimeUnit.SECONDS)
-           }
-    } yield ()
+  override def platformCheck(): IO[LMDBError, Unit] = reentrantLock.withWriteLock {
+    ZIO
+      .attemptBlockingIO(new Verifier(env).runFor(5, TimeUnit.SECONDS))
+      .mapError(err => InternalError(err.getMessage, Some(err)))
+      .unit
   }
 
   /** list databases
     */
-  def databases(): Task[List[String]] = {
+  override def databases(): IO[LMDBError, List[String]] = {
     reentrantLock.withWriteLock(
       ZIO.logSpan("databases") {
         for {
           databases <- ZIO
-                         .attempt {
+                         .attempt(
                            env
                              .getDbiNames()
                              .asScala
                              .map(bytes => new String(bytes))
                              .toList
-                         }
+                         )
                          .tap(l => ZIO.logDebug(s"${l.size} databases found : ${l.mkString(",")}"))
+                         .mapError(err => InternalError("Couldn't list databases", Some(err)))
         } yield databases
       }
     )
@@ -187,22 +208,13 @@ class LMDBOperations(
     * @param id
     * @return
     */
-  def delete(dbName: String, id: String): Task[Boolean] = {
+  override def delete(dbName: String, id: String): IO[DatabaseNotFound | LMDBError, Boolean] = {
     def deleteLogic(db: Dbi[ByteBuffer]) = {
-      ZIO.acquireReleaseWith(
-        ZIO
-          .attemptBlocking(env.txnWrite())
-          .tap(_ => ZIO.logDebug(s"transaction write on $dbName opened"))
-      )(txn =>
-        ZIO
-          .attemptBlocking(txn.close())
-          .tap(_ => ZIO.logDebug(s"transaction write on $dbName closed"))
-          .ignoreLogged
-      ) { txn =>
+      withWriteTransaction(dbName) { txn =>
         for {
           key      <- makeKeyByteBuffer(id)
-          keyFound <- ZIO.attemptBlocking(db.delete(txn, key))
-          _        <- ZIO.attemptBlocking(txn.commit())
+          keyFound <- ZIO.attemptBlocking(db.delete(txn, key)).mapError(err => InternalError(s"Couldn't delete $id from $dbName", Some(err)))
+          _        <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit transaction", Some(err)))
         } yield keyFound
       }
     }
@@ -220,28 +232,17 @@ class LMDBOperations(
     * @param id
     * @return
     */
-  def fetch[T](dbName: String, id: String)(using JsonDecoder[T]): Task[Option[T]] = {
-    def fetchLogic(db: Dbi[ByteBuffer]) = {
-      ZIO.acquireReleaseWith(
-        ZIO
-          .attemptBlocking(env.txnRead())
-          .tap(_ => ZIO.logDebug(s"transaction read on $dbName opened"))
-      )(txn =>
-        ZIO
-          .attemptBlocking(txn.close())
-          .tap(_ => ZIO.logDebug(s"transaction read on $dbName closed"))
-          .ignoreLogged
-      ) { txn =>
-        {
-          for {
-            key           <- makeKeyByteBuffer(id)
-            found         <- ZIO.attemptBlocking(Option(db.get(txn, key)))
-            mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.attemptBlocking(txn.`val`()))
-            document      <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                               ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError(msg => Exception(msg))
-                             }
-          } yield document
-        }
+  override def fetch[T](dbName: String, id: String)(using JsonDecoder[T]): IO[DatabaseNotFound | JsonFailure | LMDBError, Option[T]] = {
+    def fetchLogic(db: Dbi[ByteBuffer]): ZIO[Any, JsonFailure | LMDBError, Option[T]] = {
+      withReadTransaction(dbName) { txn =>
+        for {
+          key           <- makeKeyByteBuffer(id)
+          found         <- ZIO.attemptBlocking(Option(db.get(txn, key))).mapError(err => InternalError(s"Couldn't fetch $id on $dbName", Some(err)))
+          mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
+          document      <- ZIO.foreach(mayBeRawValue) { rawValue =>
+                             ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError(msg => JsonFailure(msg))
+                           }
+        } yield document
       }
     }
     ZIO.logSpan("fetch") {
@@ -258,27 +259,18 @@ class LMDBOperations(
     * @tparam T
     * @return
     */
-  def upsertOverwrite[T](dbName: String, id: String, document: T)(using JsonEncoder[T]): Task[T] = {
+  override def upsertOverwrite[T](dbName: String, id: String, document: T)(using JsonEncoder[T]): IO[DatabaseNotFound | LMDBError, T] = {
     val jsonDoc      = document.toJson
     val jsonDocBytes = jsonDoc.getBytes(charset)
 
-    def upsertOverwriteLogic(db: Dbi[ByteBuffer]) = {
-      ZIO.acquireReleaseWith(
-        ZIO
-          .attemptBlocking(env.txnWrite())
-          .tap(_ => ZIO.logDebug(s"transaction write on $dbName opened"))
-      )(txn =>
-        ZIO
-          .attemptBlocking(txn.close())
-          .tap(_ => ZIO.logDebug(s"transaction write on $dbName closed"))
-          .ignoreLogged
-      ) { txn =>
+    def upsertOverwriteLogic(db: Dbi[ByteBuffer]): IO[LMDBError, T] = {
+      withWriteTransaction(dbName) { txn =>
         for {
           key   <- makeKeyByteBuffer(id)
-          value <- ZIO.attempt(ByteBuffer.allocateDirect(jsonDocBytes.size))
-          _     <- ZIO.attempt(value.put(jsonDocBytes).flip)
-          _     <- ZIO.attemptBlockingIO(db.put(txn, key, value))
-          _     <- ZIO.attemptBlocking(txn.commit())
+          value <- ZIO.attempt(ByteBuffer.allocateDirect(jsonDocBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for json value", Some(err)))
+          _     <- ZIO.attempt(value.put(jsonDocBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer", Some(err)))
+          _     <- ZIO.attemptBlockingIO(db.put(txn, key, value)).mapError(err => InternalError(s"Couldn't upsert overwrite $id into $dbName", Some(err)))
+          _     <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit upsertOverwrite $id into $dbName", Some(err)))
         } yield document
       }
     }
@@ -298,31 +290,22 @@ class LMDBOperations(
     * @param modifier
     * @return
     */
-  def upsert[T](dbName: String, id: String, modifier: Option[T] => T)(using JsonEncoder[T], JsonDecoder[T]): Task[T] = {
-    def upsertLogic(db: Dbi[ByteBuffer]) = {
-      ZIO.acquireReleaseWith(
-        ZIO
-          .attemptBlocking(env.txnWrite())
-          .tap(_ => ZIO.logDebug(s"transaction write on $dbName opened"))
-      )(txn =>
-        ZIO
-          .attemptBlocking(txn.close())
-          .tap(_ => ZIO.logDebug(s"transaction write on $dbName closed"))
-          .ignoreLogged
-      ) { txn =>
+  override def upsert[T](dbName: String, id: String, modifier: Option[T] => T)(using JsonEncoder[T], JsonDecoder[T]): IO[DatabaseNotFound | JsonFailure | LMDBError, T] = {
+    def upsertLogic(db: Dbi[ByteBuffer]): IO[LMDBError | JsonFailure, T] = {
+      withWriteTransaction(dbName) { txn =>
         for {
           key            <- makeKeyByteBuffer(id)
-          found          <- ZIO.attemptBlocking(Option(db.get(txn, key)))
-          mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.attemptBlocking(txn.`val`()))
+          found          <- ZIO.attemptBlocking(Option(db.get(txn, key))).mapError(err => InternalError(s"Couldn't fetch $id for upsert on $dbName", Some(err)))
+          mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
           mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                              ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError(msg => Exception(msg))
+                              ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError(msg => JsonFailure(msg))
                             }
           docAfter        = modifier(mayBeDocBefore)
           jsonDocBytes    = docAfter.toJson.getBytes(charset)
-          valueBuffer    <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(jsonDocBytes.size))
-          _              <- ZIO.attemptBlocking(valueBuffer.put(jsonDocBytes).flip)
-          _              <- ZIO.attemptBlocking(db.put(txn, key, valueBuffer))
-          _              <- ZIO.attemptBlocking(txn.commit())
+          valueBuffer    <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(jsonDocBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for json value", Some(err)))
+          _              <- ZIO.attemptBlocking(valueBuffer.put(jsonDocBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer", Some(err)))
+          _              <- ZIO.attemptBlocking(db.put(txn, key, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $id into $dbName", Some(err)))
+          _              <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit upsertOverwrite $id into $dbName", Some(err)))
         } yield docAfter
       }
     }
@@ -339,12 +322,13 @@ class LMDBOperations(
   /** Dangerous collect method as it loads everything in memory, use keyFilter or valueFilter to limit loaded entries. Use stream method instead
     * @return
     */
-  def collect[T](dbName: String, keyFilter: String => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true)(using JsonDecoder[T]): Task[List[T]] = {
-    def collectLogic(db: Dbi[ByteBuffer]): ZIO[Scope, Throwable, List[T]] = for {
+  override def collect[T](dbName: String, keyFilter: String => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true)(using JsonDecoder[T]): IO[DatabaseNotFound | JsonFailure | InternalError, List[T]] = {
+    def collectLogic(db: Dbi[ByteBuffer]): ZIO[Scope, JsonFailure | InternalError, List[T]] = for {
       txn       <- ZIO.acquireRelease(
                      ZIO
                        .attemptBlocking(env.txnRead())
                        .tap(_ => ZIO.logDebug(s"transaction read on $dbName opened"))
+                       .mapError(err => InternalError(s"Couldn't acquire read transaction on $dbName", Some(err)))
                    )(txn =>
                      ZIO
                        .attemptBlocking(txn.close())
@@ -355,20 +339,23 @@ class LMDBOperations(
                      ZIO
                        .attemptBlocking(db.iterate(txn, KeyRange.all()))
                        .tap(_ => ZIO.logDebug(s"iterable on $dbName opened for txn ${txn.getId}"))
+                       .mapError(err => InternalError(s"Couldn't acquire iterable on $dbName", Some(err)))
                    )(cursor =>
                      ZIO
                        .attemptBlocking(cursor.close())
                        .tap(_ => ZIO.logDebug(s"iterable on $dbName closed for txn ${txn.getId}"))
                        .ignoreLogged
                    )
-      collected <- ZIO.attempt {
-                     Chunk
-                       .fromIterator(EncapsulatedIterator(iterable.iterator()))
-                       .filter((key, value) => keyFilter(key))
-                       .flatMap((key, value) => value.fromJson[T].toOption) // TODO error are hidden !!!
-                       .filter(valueFilter)
-                       .toList
-                   }
+      collected <- ZIO
+                     .attempt {
+                       Chunk
+                         .fromIterator(EncapsulatedIterator(iterable.iterator()))
+                         .filter((key, value) => keyFilter(key))
+                         .flatMap((key, value) => value.fromJson[T].toOption) // TODO error are hidden !!!
+                         .filter(valueFilter)
+                         .toList
+                     }
+                     .mapError(err => InternalError(s"Couldn't collect documents stored in $dbName", Some(err)))
     } yield collected
 
     ZIO.logSpan("collect") {
@@ -396,33 +383,39 @@ class LMDBOperations(
       key -> value
     }
   }
-
-  def stream[T](dbName: String, keyFilter: String => Boolean = _ => true)(using JsonDecoder[T]): ZStream[Scope, Throwable, T] = {
-    def streamLogic(db: Dbi[ByteBuffer]) = for {
+  /*
+  def stream[T](dbName: String, keyFilter: String => Boolean = _ => true)(using JsonDecoder[T]): ZStream[Scope, DatabaseNotFound | JsonFailure | InternalError, T] = {
+    def streamLogic(db: Dbi[ByteBuffer]): ZIO[Scope, InternalError, ZStream[Any, JsonFailure | InternalError, T]] = for {
       txn      <- ZIO.acquireRelease(
                     ZIO
                       .attemptBlocking(env.txnRead())
-                      .tap(_ => ZIO.logDebug(s"transaction read $dbName opened"))
+                      .tap(_ => ZIO.logDebug(s"transaction read on $dbName opened"))
+                      .mapError(err => InternalError(s"Couldn't acquire read transaction on $dbName", Some(err)))
                   )(txn =>
                     ZIO
                       .attemptBlocking(txn.close())
-                      .tap(_ => ZIO.logDebug(s"transaction read $dbName closed"))
+                      .tap(_ => ZIO.logDebug(s"transaction read on $dbName closed"))
                       .ignoreLogged
                   )
       iterable <- ZIO.acquireRelease(
                     ZIO
                       .attemptBlocking(db.iterate(txn, KeyRange.all()))
-                      .tap(_ => ZIO.logDebug(s"iterable $dbName opened on txn ${txn.getId}"))
+                      .tap(_ => ZIO.logDebug(s"iterable on $dbName opened for txn ${txn.getId}"))
+                      .mapError(err => InternalError(s"Couldn't acquire iterable on $dbName", Some(err)))
                   )(cursor =>
                     ZIO
                       .attemptBlocking(cursor.close())
-                      .tap(_ => ZIO.logDebug(s"iterable $dbName closed on txn ${txn.getId}"))
+                      .tap(_ => ZIO.logDebug(s"iterable on $dbName closed for txn ${txn.getId}"))
                       .ignoreLogged
                   )
     } yield ZStream
       .fromIterator(EncapsulatedIterator(iterable.iterator()))
       .filter((key, value) => keyFilter(key))
-      .mapZIO((key, value) => ZIO.from(value.fromJson[T]).mapError(err => Exception(s"Can't decode JSON : $err")))
+      .mapZIO((key, value) => ZIO.from(value.fromJson[T]).mapError(err => JsonFailure(err)))
+      .mapError[JsonFailure | InternalError] {
+        case err: Throwable   => InternalError(s"Couldn't stream from $dbName", Some(err))
+        case err: JsonFailure => err
+      }
 
     val result =
       ZIO.logSpan("stream") {
@@ -435,11 +428,8 @@ class LMDBOperations(
 
     ZStream.unwrap(result)
   }
+   */
 
-  //  def change(operations: => Unit): Task[Unit] = writeSemaphore.withPermit {
-  //
-  //  }
-  //
 }
 
 object LMDBOperations {

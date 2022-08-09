@@ -120,14 +120,14 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
           _             <- lmdb.upsertOverwrite(dbName, id, updatedValue)
           gottenUpdated <- lmdb.fetch[Str](dbName, id)
           listed1       <- lmdb.collect(dbName)
-          listed2       <- ZIO.scoped(lmdb.stream[Str](dbName).runCollect)
+          //listed2       <- ZIO.scoped(lmdb.stream[Str](dbName).runCollect)
           _             <- lmdb.delete(dbName, id)
           isFailed      <- lmdb.fetch[Str](dbName, id).some.isFailure
         } yield assertTrue(
           gotten == Some(value),
           gottenUpdated == Some(updatedValue),
           listed1.contains(updatedValue),
-          listed2.contains(updatedValue),
+          //listed2.contains(updatedValue),
           isFailed
         ).label(s"for key $id")
       }
@@ -206,18 +206,18 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
       )
     },
     // -----------------------------------------------------------------------------
-    test("stream collection content") {
-      for {
-        lmdb          <- ZIO.service[LMDBOperations]
-        count          = limit
-        dbName        <- randomDatabaseName
-        _             <- lmdb.databaseCreate(dbName)
-        _             <- ZIO.foreach(1.to(count))(num => lmdb.upsertOverwrite[Num](dbName, s"id#$num", Num(num)))
-        returnedCount <- ZIO.scoped(lmdb.stream[Num](dbName).filter(_.value.intValue() % 2 == 0).runCount)
-      } yield assertTrue(
-        returnedCount.toInt == count / 2
-      )
-    }
+//    test("stream collection content") {
+//      for {
+//        lmdb          <- ZIO.service[LMDBOperations]
+//        count          = limit
+//        dbName        <- randomDatabaseName
+//        _             <- lmdb.databaseCreate(dbName)
+//        _             <- ZIO.foreach(1.to(count))(num => lmdb.upsertOverwrite[Num](dbName, s"id#$num", Num(num)))
+//        returnedCount <- ZIO.scoped(lmdb.stream[Num](dbName).filter(_.value.intValue() % 2 == 0).runCount)
+//      } yield assertTrue(
+//        returnedCount.toInt == count / 2
+//      )
+//    }
     // -----------------------------------------------------------------------------
   ).provideCustomShared(
     lmdbLayer.orDie
