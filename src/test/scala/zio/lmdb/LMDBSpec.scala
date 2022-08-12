@@ -37,13 +37,13 @@ class LMDBSpec extends ZIOSpecDefault {
   override def spec = suite("LMDB for ZIO as a service")(
     test("basic usage")(
       for {
-        _        <- LMDB.databaseCreate("example")
-        record    = Record("John Doe", 42)
-        recordId <- Random.nextUUID.map(_.toString)
-        _        <- LMDB.upsertOverwrite("example", recordId, record)
-        gotten   <- LMDB.fetch[Record]("example", recordId).some
-        _        <- LMDB.delete("example", recordId)
-        deleted  <- LMDB.fetch[Record]("example", recordId)
+        _                    <- LMDB.databaseCreate("example")
+        record                = Record("John Doe", 42)
+        recordId             <- Random.nextUUID.map(_.toString)
+        (prevOption, newest) <- LMDB.upsertOverwrite("example", recordId, record)
+        gotten               <- LMDB.fetch[Record]("example", recordId).some
+        deleted              <- LMDB.delete[Record]("example", recordId)
+        deleted              <- LMDB.fetch[Record]("example", recordId)
       } yield assertTrue(
         gotten == record,
         deleted.isEmpty
