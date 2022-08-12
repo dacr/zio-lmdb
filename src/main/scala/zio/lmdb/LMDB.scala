@@ -26,16 +26,23 @@ trait LMDB {
 object LMDB {
   def platformCheck(): ZIO[LMDB, StorageSystemError, Unit] = ZIO.serviceWithZIO(_.platformCheck())
 
-  def databases(): ZIO[LMDB, StorageSystemError, List[String]]                              = ZIO.serviceWithZIO(_.databases())
-  def databaseExists(dbName: String): ZIO[LMDB, StorageSystemError, Boolean]                = ZIO.serviceWithZIO(_.databaseExists(dbName))
-  def databaseCreate(dbName: String): ZIO[LMDB, StorageSystemError, Unit]                   = ZIO.serviceWithZIO(_.databaseCreate(dbName))
+  def databases(): ZIO[LMDB, StorageSystemError, List[String]] = ZIO.serviceWithZIO(_.databases())
+
+  def databaseExists(dbName: String): ZIO[LMDB, StorageSystemError, Boolean] = ZIO.serviceWithZIO(_.databaseExists(dbName))
+
+  def databaseCreate(dbName: String): ZIO[LMDB, StorageSystemError, Unit] = ZIO.serviceWithZIO(_.databaseCreate(dbName))
+
   def databaseClear(dbName: String): ZIO[LMDB, DatabaseNotFound | StorageSystemError, Unit] = ZIO.serviceWithZIO(_.databaseClear(dbName))
 
-  def fetch[T](dbName: String, id: String)(using JsonDecoder[T]): ZIO[LMDB, OverSizedKey | DatabaseNotFound | JsonFailure | StorageSystemError, Option[T]]                                                 = ZIO.serviceWithZIO(_.fetch(dbName, id))
-  def upsertOverwrite[T](dbName: String, id: String, document: T)(using JsonEncoder[T], JsonDecoder[T]): ZIO[LMDB, OverSizedKey | DatabaseNotFound | JsonFailure| StorageSystemError, UpsertState[T]]                                   = ZIO.serviceWithZIO(_.upsertOverwrite(dbName, id, document))
+  def fetch[T](dbName: String, id: String)(using JsonDecoder[T]): ZIO[LMDB, OverSizedKey | DatabaseNotFound | JsonFailure | StorageSystemError, Option[T]] = ZIO.serviceWithZIO(_.fetch(dbName, id))
+
+  def upsertOverwrite[T](dbName: String, id: String, document: T)(using JsonEncoder[T], JsonDecoder[T]): ZIO[LMDB, OverSizedKey | DatabaseNotFound | JsonFailure | StorageSystemError, UpsertState[T]] =
+    ZIO.serviceWithZIO(_.upsertOverwrite(dbName, id, document))
+
   def upsert[T](dbName: String, id: String, modifier: Option[T] => T)(using JsonEncoder[T], JsonDecoder[T]): ZIO[LMDB, OverSizedKey | DatabaseNotFound | JsonFailure | StorageSystemError, UpsertState[T]] =
     ZIO.serviceWithZIO(_.upsert(dbName, id, modifier))
-  def delete[T](dbName: String, id: String)(using JsonDecoder[T]): ZIO[LMDB, OverSizedKey | DatabaseNotFound | JsonFailure | StorageSystemError, Option[T]]                                                                                    = ZIO.serviceWithZIO(_.delete(dbName, id))
+
+  def delete[T](dbName: String, id: String)(using JsonDecoder[T]): ZIO[LMDB, OverSizedKey | DatabaseNotFound | JsonFailure | StorageSystemError, Option[T]] = ZIO.serviceWithZIO(_.delete(dbName, id))
 
   def collect[T](dbName: String, keyFilter: String => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true)(using JsonDecoder[T]): ZIO[LMDB, DatabaseNotFound | JsonFailure | StorageSystemError, List[T]] =
     ZIO.serviceWithZIO(_.collect(dbName, keyFilter, valueFilter))
