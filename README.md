@@ -5,9 +5,9 @@ on maven central.
 
 ## Goal
 
-Simple embedded database API, easy to use, with features dedicated to changes follow-up. "changes follow-up" mean that
-the API provide you everything you need to know what is done by LMDB, an update mean you'll receive back both the 
-previous and the newest record.
+Simple embedded database, easy to use opinionated API, with features dedicated to changes follow-up.
+"changes follow-up" means that the API provide you everything you need to know about what is done by LMDB,
+for example an update mean you'll receive back both the previous and the newest record.
 
 The first API only provides atomic operations with hidden transactions. API is designed to not lie, all functions signatures
 describe precisely what you must expect from them, thanks to [ZIO][ZIO] and [Scala3][Scala3].  
