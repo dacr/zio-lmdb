@@ -1,12 +1,16 @@
 # Lightning Memory Database (LMDB) for ZIO [![][ZIOLMDBManagerImg]][ZIOLMDBManagerLnk]
 
-This is a work in progress, no release yet, all current tests are OK but I'll start soon a refactoring to
-enhance errors management, expect some API changes.
+This is a work in progress software library, all current tests are OK, first preliminary releases are available
+on maven central.
 
 ## Goal
 
-Simple embedded database API, easy to use, with features dedicated to changes follow-up. The first API only provides
-atomic operations with hidden transactions.
+Simple embedded database API, easy to use, with features dedicated to changes follow-up. "changes follow-up" mean that
+the API provide you everything you need to know what is done by LMDB, an update mean you'll receive back both the 
+previous and the newest record.
+
+The first API only provides atomic operations with hidden transactions. API is designed to not lie, all functions signatures
+describe precisely what you must expect from them, thanks to [ZIO][ZIO] and [Scala3][Scala3].  
 
 ## Usage example
 
@@ -42,3 +46,5 @@ When LVMDB is used for as persistence store with recent JVM it requires JVM some
 [ZIOLMDBManager]:    https://github.com/dacr/zio-lmdb
 [ZIOLMDBManagerImg]: https://img.shields.io/maven-central/v/fr.janalyse/zio-lmdb_3.svg
 [ZIOLMDBManagerLnk]: https://search.maven.org/#search%7Cga%7C1%7Cfr.janalyse.zio-lmdb
+[ZIO]: https://zio.dev/
+[Scala3]: https://docs.scala-lang.org/scala3/reference/
