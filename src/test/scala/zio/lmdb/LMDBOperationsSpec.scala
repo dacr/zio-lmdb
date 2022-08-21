@@ -19,7 +19,7 @@ import zio.*
 import zio.json.*
 import zio.json.ast.Json
 import zio.json.ast.Json.*
-import zio.nio.file.Files
+import zio.nio.file.*
 import zio.stream.{ZSink, ZStream}
 import zio.test.*
 import zio.test.Gen.*
@@ -42,7 +42,7 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
   val keygen   = stringBounded(1, 510)(asciiChar)
   val valuegen = stringBounded(0, 1024)(asciiChar)
 
-  val limit = 5_000
+  val limit = 10_000
 
   def randomUUID = for {
     seed <- Clock.currentTime(TimeUnit.MILLISECONDS)
@@ -94,7 +94,7 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
           gotten == Some(value)
         ).label(s"for key $id")
       }
-    ),
+    ) @@ samples(100),
     // -----------------------------------------------------------------------------
     test("try to get an non existent key")(
       for {
@@ -113,25 +113,25 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
         for {
           lmdb          <- ZIO.service[LMDBOperations]
           dbName         = "basic-crudl-operations"
-          //          dbName        <- randomDatabaseName
+          //dbName        <- randomDatabaseName
           _             <- lmdb.databaseCreate(dbName)
           _             <- lmdb.upsertOverwrite[Str](dbName, id, value)
           gotten        <- lmdb.fetch[Str](dbName, id)
           _             <- lmdb.upsertOverwrite(dbName, id, updatedValue)
           gottenUpdated <- lmdb.fetch[Str](dbName, id)
           listed1       <- lmdb.collect(dbName)
-          //listed2       <- ZIO.scoped(lmdb.stream[Str](dbName).runCollect)
+          // listed2       <- ZIO.scoped(lmdb.stream[Str](dbName).runCollect)
           _             <- lmdb.delete(dbName, id)
           isFailed      <- lmdb.fetch[Str](dbName, id).some.isFailure
         } yield assertTrue(
           gotten == Some(value),
           gottenUpdated == Some(updatedValue),
           listed1.contains(updatedValue),
-          //listed2.contains(updatedValue),
+          // listed2.contains(updatedValue),
           isFailed
         ).label(s"for key $id")
       }
-    } @@ tag("slow"),
+    } @@ tag("slow") @@ samples(100),
     // -----------------------------------------------------------------------------
     test("many overwrite updates") {
       for {
@@ -204,7 +204,7 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
       } yield assertTrue(
         collectedCount == count
       )
-    },
+    }
     // -----------------------------------------------------------------------------
 //    test("stream collection content") {
 //      for {
@@ -219,9 +219,9 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
 //      )
 //    }
     // -----------------------------------------------------------------------------
-  ).provideCustomShared(
+  ).provideCustom(
     lmdbLayer.orDie
-  ) @@ withLiveClock @@ withLiveRandom // @@ sequential
+  ) @@ withLiveClock @@ withLiveRandom
   // TODO Using provideCustomShared generates issues with some tests - Slower when shared is used
   // TODO Using provideCustomShared is a good test case to check LMDB concurrent access behavior
 }
