@@ -19,3 +19,5 @@ tmp-*.gif
 tmp-*.png
 
 private-application*.conf
+
+lmdb-test-data/
