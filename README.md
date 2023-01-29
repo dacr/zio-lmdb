@@ -36,7 +36,7 @@ test("basic usage")(
 
 ## Requirements
 
-When LVMDB is used for as persistence store with recent JVM it requires JVM some options :
+When LVMDB is used as persistence store with recent JVM it requires some JVM options :
 
 ```
 --add-opens java.base/java.nio=ALL-UNNAMED

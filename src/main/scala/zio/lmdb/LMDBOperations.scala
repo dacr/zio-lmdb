@@ -50,8 +50,8 @@ class LMDBOperations(
     if (keyBytes.length > env.getMaxKeySize) ZIO.fail(OverSizedKey(id, keyBytes.length, env.getMaxKeySize))
     else
       for {
-        key <- ZIO.attempt(ByteBuffer.allocateDirect(env.getMaxKeySize)).mapError(err => InternalError(s"Couldn't allocate byte buffer for key", Some(err)))
-        _   <- ZIO.attempt(key.put(keyBytes).flip).mapError(err => InternalError(s"Couldn't copy key bytes to buffer", Some(err)))
+        key <- ZIO.attempt(ByteBuffer.allocateDirect(env.getMaxKeySize)).mapError(err => InternalError("Couldn't allocate byte buffer for key", Some(err)))
+        _   <- ZIO.attempt(key.put(keyBytes).flip).mapError(err => InternalError("Couldn't copy key bytes to buffer", Some(err)))
       } yield key
   }
 
@@ -197,7 +197,7 @@ class LMDBOperations(
                              ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[DeleteLogicErrorsType](msg => JsonFailure(msg))
                            }
           keyFound      <- ZIO.attemptBlocking(db.delete(txn, key)).mapError[DeleteLogicErrorsType](err => InternalError(s"Couldn't delete $id from $dbName", Some(err)))
-          _             <- ZIO.attemptBlocking(txn.commit()).mapError[DeleteLogicErrorsType](err => InternalError(s"Couldn't commit transaction", Some(err)))
+          _             <- ZIO.attemptBlocking(txn.commit()).mapError[DeleteLogicErrorsType](err => InternalError("Couldn't commit transaction", Some(err)))
         } yield mayBeDoc
       }
     }
@@ -262,8 +262,8 @@ class LMDBOperations(
                             }
           docAfter        = modifier(mayBeDocBefore)
           jsonDocBytes    = docAfter.toJson.getBytes(charset)
-          valueBuffer    <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(jsonDocBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for json value", Some(err)))
-          _              <- ZIO.attemptBlocking(valueBuffer.put(jsonDocBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer", Some(err)))
+          valueBuffer    <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(jsonDocBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for json value", Some(err)))
+          _              <- ZIO.attemptBlocking(valueBuffer.put(jsonDocBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
           _              <- ZIO.attemptBlocking(db.put(txn, key, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $id into $dbName", Some(err)))
           _              <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit upsertOverwrite $id into $dbName", Some(err)))
         } yield UpsertState(previous = mayBeDocBefore, current = docAfter)
