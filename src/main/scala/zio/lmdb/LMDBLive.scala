@@ -136,7 +136,7 @@ class LMDBLive(
         .ignoreLogged
     )
 
-  private def withReadTransaction(colName: CollectionName) =
+  private def withReadTransaction(colName: CollectionName): ZIO.Release[Any, StorageSystemError, Txn[ByteBuffer]] =
     ZIO.acquireReleaseWith(
       ZIO
         .attemptBlocking(env.txnRead())
@@ -198,19 +198,18 @@ class LMDBLive(
     * @param key
     * @return
     */
-  override def delete[T](colName: CollectionName, key: RecordKey)(using JsonEncoder[T], JsonDecoder[T]): IO[OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError, Option[T]] = {
-    type DeleteLogicErrorsType = OverSizedKey | StorageSystemError | JsonFailure
-    def deleteLogic(db: Dbi[ByteBuffer]): IO[DeleteLogicErrorsType, Option[T]] = {
+  override def delete[T](colName: CollectionName, key: RecordKey)(using JsonEncoder[T], JsonDecoder[T]): IO[DeleteErrors, Option[T]] = {
+    def deleteLogic(db: Dbi[ByteBuffer]): IO[DeleteErrors, Option[T]] = {
       withWriteTransaction(colName) { txn =>
         for {
           key           <- makeKeyByteBuffer(key)
-          found         <- ZIO.attemptBlocking(Option(db.get(txn, key))).mapError[DeleteLogicErrorsType](err => InternalError(s"Couldn't fetch $key for delete on $colName", Some(err)))
+          found         <- ZIO.attemptBlocking(Option(db.get(txn, key))).mapError[DeleteErrors](err => InternalError(s"Couldn't fetch $key for delete on $colName", Some(err)))
           mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
           mayBeDoc      <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                             ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[DeleteLogicErrorsType](msg => JsonFailure(msg))
+                             ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[DeleteErrors](msg => JsonFailure(msg))
                            }
-          keyFound      <- ZIO.attemptBlocking(db.delete(txn, key)).mapError[DeleteLogicErrorsType](err => InternalError(s"Couldn't delete $key from $colName", Some(err)))
-          _             <- ZIO.attemptBlocking(txn.commit()).mapError[DeleteLogicErrorsType](err => InternalError("Couldn't commit transaction", Some(err)))
+          keyFound      <- ZIO.attemptBlocking(db.delete(txn, key)).mapError[DeleteErrors](err => InternalError(s"Couldn't delete $key from $colName", Some(err)))
+          _             <- ZIO.attemptBlocking(txn.commit()).mapError[DeleteErrors](err => InternalError("Couldn't commit transaction", Some(err)))
         } yield mayBeDoc
       }
     }
@@ -346,9 +345,9 @@ class LMDBLive(
       key -> value
     }
   }
-  /*
-  def stream[T](dbName: String, keyFilter: String => Boolean = _ => true)(using JsonDecoder[T]): ZStream[Scope, DatabaseNotFound | JsonFailure | InternalError, T] = {
-    def streamLogic(db: Dbi[ByteBuffer]): ZIO[Scope, InternalError, ZStream[Any, JsonFailure | InternalError, T]] = for {
+
+  def stream[T](dbName: String, keyFilter: String => Boolean = _ => true)(using JsonDecoder[T]): ZStream[Scope, CollectErrors, T] = {
+    def streamLogic(db: Dbi[ByteBuffer]): ZIO[Scope, CollectErrors, ZStream[Any, CollectErrors, T]] = for {
       txn      <- ZIO.acquireRelease(
                     ZIO
                       .attemptBlocking(env.txnRead())
@@ -378,14 +377,14 @@ class LMDBLive(
 
     val result =
         for {
-          db     <- reentrantLock.withWriteLock(getCollection(dbName))
+          db     <- reentrantLock.withWriteLock(getCollectionDbi(dbName))
           _      <- reentrantLock.readLock
           stream <- streamLogic(db)
         } yield stream
 
     ZStream.unwrap(result)
   }
-   */
+
 
 }
 
