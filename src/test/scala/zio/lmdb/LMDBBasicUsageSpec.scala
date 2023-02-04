@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 David Crosson
+ * Copyright 2023 David Crosson
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,16 +37,16 @@ class LMDBBasicUsageSpec extends ZIOSpecDefault {
   override def spec = suite("LMDB for ZIO as a service")(
     test("basic usage")(
       for {
-        collection        <- LMDB.collectionCreate[Record]("example")
-        record             = Record("John Doe", 42)
-        recordId          <- Random.nextUUID.map(_.toString)
-        updateState       <- collection.upsertOverwrite(recordId, record)
-        gotten            <- collection.fetch(recordId).some
-        deletedRecord     <- collection.delete(recordId)
-        gotNothing        <- collection.fetch(recordId)
+        collection    <- LMDB.collectionCreate[Record]("example")
+        record         = Record("John Doe", 42)
+        recordId      <- Random.nextUUID.map(_.toString)
+        updatedState  <- collection.upsert(recordId, previousRecord => record)
+        gotten        <- collection.fetch(recordId).some
+        deletedRecord <- collection.delete(recordId)
+        gotNothing    <- collection.fetch(recordId)
       } yield assertTrue(
-        updateState.previous.isEmpty,
-        updateState.current == record,
+        updatedState.previous.isEmpty,
+        updatedState.current == record,
         gotten == record,
         deletedRecord.contains(record),
         gotNothing.isEmpty

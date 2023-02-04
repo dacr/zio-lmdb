@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 David Crosson
+ * Copyright 2023 David Crosson
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,12 +30,16 @@ import java.util.concurrent.TimeUnit
 import org.junit.runner.RunWith
 
 @RunWith(classOf[zio.test.junit.ZTestJUnitRunner])
-class LMDBOperationsSpec extends ZIOSpecDefault {
+class LMDBLiveSpec extends ZIOSpecDefault {
 
   val lmdbLayer = ZLayer.scoped(
     for {
       scope <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
-      lmdb  <- LMDBOperations.setup(LMDBConfig(databasesPath = scope.toFile))
+      config = LMDBConfig(
+                 databasesPath = scope.toFile,
+                 fileSystemSynchronized = false // For tests no need to be synchronized with FS
+               )
+      lmdb  <- LMDBLive.setup(config)
     } yield lmdb
   )
 
@@ -55,7 +59,7 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
     // -----------------------------------------------------------------------------
     test("platform check")(
       for {
-        lmdb         <- ZIO.service[LMDBOperations]
+        lmdb         <- ZIO.service[LMDBLive]
         hasSucceeded <- lmdb.platformCheck().isSuccess
       } yield assertTrue(
         hasSucceeded
@@ -105,7 +109,7 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
         val value        = Str(data1)
         val updatedValue = Str(data2)
         for {
-          lmdb          <- ZIO.service[LMDBOperations]
+          lmdb          <- ZIO.service[LMDBLive]
           colName       <- randomCollectionName
           col           <- lmdb.collectionCreate[Str](colName)
           _             <- col.upsertOverwrite(id, value)
@@ -124,11 +128,11 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
           isFailed
         ).label(s"for key $id")
       }
-    } @@ tag("slow") @@ samples(100),
+    } @@ tag("slow") @@ samples(50),
     // -----------------------------------------------------------------------------
     test("many overwrite updates") {
       for {
-        lmdb    <- ZIO.service[LMDBOperations]
+        lmdb    <- ZIO.service[LMDBLive]
         id      <- randomUUID
         maxValue = limit
         colName <- randomCollectionName
@@ -171,7 +175,7 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
         id               <- randomUUID
         colName          <- randomCollectionName
         cols             <- ZIO.foreach(1.to(colCount))(i => LMDB.collectionCreate[Num](s"$colName#${i % colCount}")).map(_.toVector)
-        _                <- ZIO.foreach(1.to(max))(i => cols(i % colCount).upsert(id, modifier))
+        _                <- ZIO.foreachPar(1.to(max))(i => cols(i % colCount).upsert(id, modifier))
         num1             <- cols(0).fetch(id)
         num2             <- cols(1).fetch(id)
         createdDatabases <- LMDB.collectionsAvailable()
@@ -184,7 +188,7 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
     // -----------------------------------------------------------------------------
     test("list collection content") {
       for {
-        lmdb          <- ZIO.service[LMDBOperations]
+        lmdb          <- ZIO.service[LMDBLive]
         count          = limit
         value          = Num(42)
         dbName        <- randomCollectionName

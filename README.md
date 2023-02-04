@@ -34,13 +34,13 @@ test("basic usage")(
     collection        <- LMDB.collectionCreate[Record]("example")
     record             = Record("John Doe", 42)
     recordId          <- Random.nextUUID.map(_.toString)
-    updateState       <- collection.upsertOverwrite(recordId, record)
+    updatedState      <- collection.upsert(recordId, previousRecord => record)
     gotten            <- collection.fetch(recordId).some
     deletedRecord     <- collection.delete(recordId)
     gotNothing        <- collection.fetch(recordId)
   } yield assertTrue(
-    updateState.previous.isEmpty,
-    updateState.current == record,
+    updateStated.previous.isEmpty,
+    updateStated.current == record,
     gotten == record,
     deletedRecord.contains(record),
     gotNothing.isEmpty

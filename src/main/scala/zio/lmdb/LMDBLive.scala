@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 David Crosson
+ * Copyright 2023 David Crosson
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ import zio.lmdb.StorageSystemError.*
   * @param openedCollectionsRef
   * @param reentrantLock
   */
-class LMDBOperations(
+class LMDBLive(
   env: Env[ByteBuffer],
   openedCollectionsRef: Ref[Map[String, Dbi[ByteBuffer]]],
   reentrantLock: TReentrantLock
@@ -94,10 +94,10 @@ class LMDBOperations(
     *   collection name
     * @return
     */
-  override def collectionGet[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[StorageSystemError | CollectionNotFound, Collection[T]] = {
+  override def collectionGet[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[StorageSystemError | CollectionNotFound, LMDBCollection[T]] = {
     for {
       exists     <- collectionExists(name)
-      collection <- ZIO.cond[CollectionNotFound, Collection[T]](exists, Collection[T](name), CollectionNotFound(name))
+      collection <- ZIO.cond[CollectionNotFound, LMDBCollection[T]](exists, LMDBCollection[T](name), CollectionNotFound(name))
     } yield collection
   }
 
@@ -105,12 +105,12 @@ class LMDBOperations(
     * @param name
     * @return
     */
-  override def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[CollectionAlreadExists | StorageSystemError, Collection[T]] = {
+  override def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[CollectionAlreadExists | StorageSystemError, LMDBCollection[T]] = {
     for {
       exists <- collectionExists(name)
-      _      <- ZIO.cond[CollectionAlreadExists,Unit](!exists, (), CollectionAlreadExists(name))
+      _      <- ZIO.cond[CollectionAlreadExists, Unit](!exists, (), CollectionAlreadExists(name))
       _      <- collectionCreateLogic(name)
-    } yield Collection[T](name)
+    } yield LMDBCollection[T](name)
   }
 
   private def collectionCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = reentrantLock.withWriteLock {
@@ -389,30 +389,36 @@ class LMDBOperations(
 
 }
 
-object LMDBOperations {
+object LMDBLive {
 
-  private def lmdbCreateEnv(config: LMDBConfig) =
+  private def lmdbCreateEnv(config: LMDBConfig) = {
+    val syncFlag = if (!config.fileSystemSynchronized) Some(EnvFlags.MDB_NOSYNC) else None
+
+    val flags = Array(
+      EnvFlags.MDB_NOTLS,
+      // MDB_NOLOCK : the caller must enforce single-writer semantics
+      // MDB_NOLOCK : the caller must ensure that no readers are using old transactions while a writer is active
+      EnvFlags.MDB_NOLOCK // Locks managed using ZIO ReentrantLock
+    ) ++ syncFlag
+
     Env
       .create()
       .setMapSize(config.mapSize)
-      .setMaxDbs(config.maxDbs)
+      .setMaxDbs(config.maxCollections)
       .setMaxReaders(config.maxReaders)
       .open(
         config.databasesPath,
-        EnvFlags.MDB_NOTLS,
-        // MDB_NOLOCK : the caller must enforce single-writer semantics
-        // MDB_NOLOCK : the caller must ensure that no readers are using old transactions while a writer is active
-        EnvFlags.MDB_NOLOCK, // Locks managed using ZIO ReentrantLock
-        EnvFlags.MDB_NOSYNC  // Acceptable, in particular because EXT4 is used
+        flags*
       )
+  }
 
-  def setup(config: LMDBConfig): ZIO[Scope, Throwable, LMDBOperations] = {
+  def setup(config: LMDBConfig): ZIO[Scope, Throwable, LMDBLive] = {
     for {
       environment       <- ZIO.acquireRelease(
                              ZIO.attemptBlocking(lmdbCreateEnv(config))
                            )(env => ZIO.attemptBlocking(env.close).ignoreLogged)
       openedCollections <- Ref.make[Map[String, Dbi[ByteBuffer]]](Map.empty)
       reentrantLock     <- TReentrantLock.make.commit
-    } yield new LMDBOperations(environment, openedCollections, reentrantLock)
+    } yield new LMDBLive(environment, openedCollections, reentrantLock)
   }
 }
