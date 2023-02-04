@@ -44,16 +44,11 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
 
   val limit = 10_000
 
-  def randomUUID = for {
-    seed <- Clock.currentTime(TimeUnit.MILLISECONDS)
-    _    <- Random.setSeed(seed)
-    uuid <- Random.nextUUID.map(_.toString)
-  } yield uuid
+  val randomUUID = Random.nextUUID.map(_.toString)
 
-  def randomDatabaseName = for {
+  val randomCollectionName = for {
     uuid <- randomUUID
     name  = s"collection-$uuid"
-    // _    <- Console.printLine(s"Using random database name $name")
   } yield name
 
   override def spec = suite("Lightening Memory Mapped Database abstraction layer spec")(
@@ -67,29 +62,29 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
       )
     ) @@ ignore, // HAS IT HAS A GLOBAL IMPACT ON THE DATABASE IF IT HAS BEEN SHARED BETWEEN ALL TESTS !!
     // -----------------------------------------------------------------------------
-    test("create and list databases")(
+    test("create and list collections")(
       for {
-        dbName1   <- randomDatabaseName
-        dbName2   <- randomDatabaseName
-        lmdb      <- ZIO.service[LMDBOperations]
-        _         <- lmdb.databaseCreate(dbName1)
-        _         <- lmdb.databaseCreate(dbName2)
-        databases <- lmdb.databases()
+        colName1  <- randomCollectionName
+        colName2  <- randomCollectionName
+        colName3  <- randomCollectionName
+        _         <- LMDB.collectionCreate[String](colName1)
+        _         <- LMDB.collectionCreate[Double](colName2)
+        _         <- LMDB.collectionCreate[Json](colName3)
+        databases <- LMDB.collectionsAvailable()
       } yield assertTrue(
-        databases.contains(dbName1),
-        databases.contains(dbName2)
-      ).label(s"dbName1=$dbName1 dbName2=$dbName2")
+        databases.contains(colName1),
+        databases.contains(colName2)
+      ).label(s"colName1=$colName1 colName2=$colName2")
     ),
     // -----------------------------------------------------------------------------
     test("try to set/get a key")(
       check(keygen, string) { (id, data) =>
         val value = Str(data)
         for {
-          dbName <- randomDatabaseName
-          lmdb   <- ZIO.service[LMDBOperations]
-          _      <- lmdb.databaseCreate(dbName)
-          _      <- lmdb.upsertOverwrite[Str](dbName, id, value)
-          gotten <- lmdb.fetch[Str](dbName, id)
+          colName <- randomCollectionName
+          col     <- LMDB.collectionCreate[Str](colName)
+          _       <- col.upsertOverwrite(id, value)
+          gotten  <- col.fetch(id)
         } yield assertTrue(
           gotten == Some(value)
         ).label(s"for key $id")
@@ -98,11 +93,10 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
     // -----------------------------------------------------------------------------
     test("try to get an non existent key")(
       for {
-        dbName   <- randomDatabaseName
+        colName  <- randomCollectionName
         id       <- randomUUID
-        lmdb     <- ZIO.service[LMDBOperations]
-        _        <- lmdb.databaseCreate(dbName)
-        isFailed <- lmdb.fetch[Str](dbName, id).some.isFailure
+        col      <- LMDB.collectionCreate[Str](colName)
+        isFailed <- col.fetch(id).some.isFailure
       } yield assertTrue(isFailed).label(s"for key $id")
     ),
     // -----------------------------------------------------------------------------
@@ -112,17 +106,16 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
         val updatedValue = Str(data2)
         for {
           lmdb          <- ZIO.service[LMDBOperations]
-          dbName         = "basic-crudl-operations"
-          //dbName        <- randomDatabaseName
-          _             <- lmdb.databaseCreate(dbName)
-          _             <- lmdb.upsertOverwrite[Str](dbName, id, value)
-          gotten        <- lmdb.fetch[Str](dbName, id)
-          _             <- lmdb.upsertOverwrite(dbName, id, updatedValue)
-          gottenUpdated <- lmdb.fetch[Str](dbName, id)
-          listed1       <- lmdb.collect(dbName)
-          // listed2       <- ZIO.scoped(lmdb.stream[Str](dbName).runCollect)
-          _             <- lmdb.delete(dbName, id)
-          isFailed      <- lmdb.fetch[Str](dbName, id).some.isFailure
+          colName       <- randomCollectionName
+          col           <- lmdb.collectionCreate[Str](colName)
+          _             <- col.upsertOverwrite(id, value)
+          gotten        <- col.fetch(id)
+          _             <- col.upsertOverwrite(id, updatedValue)
+          gottenUpdated <- col.fetch(id)
+          listed1       <- col.collect()
+          // listed2       <- ZIO.scoped(col.stream(colName).runCollect)
+          _             <- col.delete(id)
+          isFailed      <- col.fetch(id).some.isFailure
         } yield assertTrue(
           gotten == Some(value),
           gottenUpdated == Some(updatedValue),
@@ -138,10 +131,10 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
         lmdb    <- ZIO.service[LMDBOperations]
         id      <- randomUUID
         maxValue = limit
-        dbName  <- randomDatabaseName
-        _       <- lmdb.databaseCreate(dbName)
-        _       <- ZIO.foreach(1.to(maxValue))(i => lmdb.upsertOverwrite[Num](dbName, id, Num(i)))
-        num     <- lmdb.fetch[Num](dbName, id)
+        colName <- randomCollectionName
+        col     <- lmdb.collectionCreate[Num](colName)
+        _       <- ZIO.foreach(1.to(maxValue))(i => col.upsertOverwrite(id, Num(i)))
+        num     <- col.fetch(id)
       } yield assertTrue(
         num.map(_.value.intValue()) == Some(maxValue)
       )
@@ -154,13 +147,12 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
       }
 
       for {
-        lmdb   <- ZIO.service[LMDBOperations]
-        id     <- randomUUID
-        count   = limit
-        dbName <- randomDatabaseName
-        _      <- lmdb.databaseCreate(dbName)
-        _      <- ZIO.foreach(1.to(count))(i => lmdb.upsert[Num](dbName, id, modifier))
-        num    <- lmdb.fetch[Num](dbName, id)
+        id      <- randomUUID
+        count    = limit
+        colName <- randomCollectionName
+        col     <- LMDB.collectionCreate[Num](colName)
+        _       <- ZIO.foreach(1.to(count))(i => col.upsert(id, modifier))
+        num     <- col.fetch(id)
       } yield assertTrue(
         num.map(_.value.intValue()) == Some(count)
       )
@@ -172,22 +164,21 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
         case Some(num) => Num(num.value.intValue() + 1)
       }
 
-      val dbcount = if (limit < 1000) 5 else 100
-      val max     = limit
+      val colCount = if (limit < 1000) 5 else 100
+      val max      = limit
 
       for {
-        lmdb             <- ZIO.service[LMDBOperations]
         id               <- randomUUID
-        dbName           <- randomDatabaseName
-        _                <- ZIO.foreach(1.to(max))(i => lmdb.databaseCreate(s"$dbName#${i % dbcount}"))
-        _                <- ZIO.foreach(1.to(max))(i => lmdb.upsert[Num](s"$dbName#${i % dbcount}", id, modifier))
-        num1             <- lmdb.fetch[Num](s"$dbName#1", id)
-        num2             <- lmdb.fetch[Num](s"$dbName#2", id)
-        createdDatabases <- lmdb.databases()
+        colName          <- randomCollectionName
+        cols             <- ZIO.foreach(1.to(colCount))(i => LMDB.collectionCreate[Num](s"$colName#${i % colCount}")).map(_.toVector)
+        _                <- ZIO.foreach(1.to(max))(i => cols(i % colCount).upsert(id, modifier))
+        num1             <- cols(0).fetch(id)
+        num2             <- cols(1).fetch(id)
+        createdDatabases <- LMDB.collectionsAvailable()
       } yield assertTrue(
-        num1.map(_.value.intValue()) == Some(max / dbcount),
-        num2.map(_.value.intValue()) == Some(max / dbcount),
-        createdDatabases.size >= dbcount
+        num1.map(_.value.intValue()) == Some(max / colCount),
+        num2.map(_.value.intValue()) == Some(max / colCount),
+        createdDatabases.size >= colCount
       )
     },
     // -----------------------------------------------------------------------------
@@ -196,8 +187,8 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
         lmdb          <- ZIO.service[LMDBOperations]
         count          = limit
         value          = Num(42)
-        dbName        <- randomDatabaseName
-        _             <- lmdb.databaseCreate(dbName)
+        dbName        <- randomCollectionName
+        _             <- lmdb.collectionCreate(dbName)
         _             <- ZIO.foreach(1.to(count))(num => lmdb.upsertOverwrite[Num](dbName, s"id#$num", value))
         collected     <- lmdb.collect[Num](dbName)
         collectedCount = collected.size
@@ -219,9 +210,5 @@ class LMDBOperationsSpec extends ZIOSpecDefault {
 //      )
 //    }
     // -----------------------------------------------------------------------------
-  ).provideCustom(
-    lmdbLayer.orDie
-  ) @@ withLiveClock @@ withLiveRandom
-  // TODO Using provideCustomShared generates issues with some tests - Slower when shared is used
-  // TODO Using provideCustomShared is a good test case to check LMDB concurrent access behavior
+  ).provide(lmdbLayer.orDie) @@ withLiveClock @@ withLiveRandom
 }

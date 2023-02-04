@@ -27,7 +27,7 @@ object Record {
 }
 
 @RunWith(classOf[zio.test.junit.ZTestJUnitRunner])
-class LMDBSpec extends ZIOSpecDefault {
+class LMDBBasicUsageSpec extends ZIOSpecDefault {
   val lmdbTestConfigLayer = ZLayer.scoped(
     for {
       scope <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
@@ -37,13 +37,13 @@ class LMDBSpec extends ZIOSpecDefault {
   override def spec = suite("LMDB for ZIO as a service")(
     test("basic usage")(
       for {
-        _             <- LMDB.databaseCreate("example")
-        record         = Record("John Doe", 42)
-        recordId      <- Random.nextUUID.map(_.toString)
-        updateState   <- LMDB.upsertOverwrite[Record]("example", recordId, record)
-        gotten        <- LMDB.fetch[Record]("example", recordId).some
-        deletedRecord <- LMDB.delete[Record]("example", recordId)
-        gotNothing    <- LMDB.fetch[Record]("example", recordId)
+        collection        <- LMDB.collectionCreate[Record]("example")
+        record             = Record("John Doe", 42)
+        recordId          <- Random.nextUUID.map(_.toString)
+        updateState       <- collection.upsertOverwrite(recordId, record)
+        gotten            <- collection.fetch(recordId).some
+        deletedRecord     <- collection.delete(recordId)
+        gotNothing        <- collection.fetch(recordId)
       } yield assertTrue(
         updateState.previous.isEmpty,
         updateState.current == record,

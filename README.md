@@ -12,18 +12,32 @@ for example an update mean you'll receive back both the previous and the newest 
 The first API only provides atomic operations with hidden transactions. API is designed to not lie, all functions signatures
 describe precisely what you must expect from them, thanks to [ZIO][ZIO] and [Scala3][Scala3].  
 
+## Definitions
+
+For better understanding, this library use a slightly different vocabulary from LMDB original one :  
+- **Database** :  (*LMDB talk about Environment*)
+  - The place where the database file is stored on your file system
+  - A set of configuration for this database (expected maximum size, expected collection number)
+- **Collection** : (*LMDB talk about Database*) 
+  - A sorted map where to store your data
+  - One database contains multiple collection
+- **Transaction** : (*the same for LMDB*)
+  - for global coherency within the same database
+  - only one simultaneous write access is possible within the same database 
+
+
 ## Usage example
 
 ```scala
 test("basic usage")(
   for {
-    _             <- LMDB.databaseCreate("example")
-    record         = Record("John Doe", 42)
-    recordId      <- Random.nextUUID.map(_.toString)
-    updateState   <- LMDB.upsertOverwrite[Record]("example", recordId, record)
-    gotten        <- LMDB.fetch[Record]("example", recordId).some
-    deletedRecord <- LMDB.delete[Record]("example", recordId)
-    gotNothing    <- LMDB.fetch[Record]("example", recordId)
+    collection        <- LMDB.collectionCreate[Record]("example")
+    record             = Record("John Doe", 42)
+    recordId          <- Random.nextUUID.map(_.toString)
+    updateState       <- collection.upsertOverwrite(recordId, record)
+    gotten            <- collection.fetch(recordId).some
+    deletedRecord     <- collection.delete(recordId)
+    gotNothing        <- collection.fetch(recordId)
   } yield assertTrue(
     updateState.previous.isEmpty,
     updateState.current == record,

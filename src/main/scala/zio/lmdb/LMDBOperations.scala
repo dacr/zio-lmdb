@@ -35,12 +35,12 @@ import zio.lmdb.StorageSystemError.*
 
 /** LMDB ZIO abstraction layer, provides standard atomic operations implementations
   * @param env
-  * @param openedDatabasesRef
+  * @param openedCollectionsRef
   * @param reentrantLock
   */
 class LMDBOperations(
   env: Env[ByteBuffer],
-  openedDatabasesRef: Ref[Map[String, Dbi[ByteBuffer]]],
+  openedCollectionsRef: Ref[Map[String, Dbi[ByteBuffer]]],
   reentrantLock: TReentrantLock
 ) extends LMDB {
   val charset = StandardCharsets.UTF_8
@@ -55,101 +55,114 @@ class LMDBOperations(
       } yield key
   }
 
-  /** return an existing database
-    * @param dbName
+  /** return an existing collection
+    * @param name
     * @return
     */
-  private def getDatabase(dbName: String): IO[DatabaseNotFound, Dbi[ByteBuffer]] = {
+  private def getCollectionDbi(name: CollectionName): IO[CollectionNotFound, Dbi[ByteBuffer]] = {
     val alreadyHereLogic = for {
-      databases <- openedDatabasesRef.get
-    } yield databases.get(dbName)
+      collections <- openedCollectionsRef.get
+    } yield collections.get(name)
 
-    val addAndGetLogic = for {
-      databases <- openedDatabasesRef.updateAndGet(before =>
-                     if (before.contains(dbName)) before
-                     else before + (dbName -> env.openDbi(dbName))
-                   )
-    } yield databases.get(dbName)
+    val openAndRememberLogic = for {
+      collections <- openedCollectionsRef.updateAndGet(before =>
+                       if (before.contains(name)) before
+                       else before + (name -> env.openDbi(name))
+                     )
+    } yield collections.get(name)
 
     alreadyHereLogic.some
-      .orElse(addAndGetLogic.some)
-      .mapError(err => DatabaseNotFound(dbName))
+      .orElse(openAndRememberLogic.some)
+      .mapError(err => CollectionNotFound(name))
   }
 
-  /** check if a database exists
-    * @param dbName
+  /** check if a collection exists
+    * @param name
     * @return
     */
-  override def databaseExists(dbName: String): IO[StorageSystemError, Boolean] = {
+  override def collectionExists(name: CollectionName): IO[StorageSystemError, Boolean] = {
     for {
-      openedDatabases <- openedDatabasesRef.get
-      found           <- if (openedDatabases.contains(dbName)) ZIO.succeed(true)
-                         else databases().map(_.contains(dbName))
+      openedDatabases <- openedCollectionsRef.get
+      found           <- if (openedDatabases.contains(name)) ZIO.succeed(true)
+                         else collectionsAvailable().map(_.contains(name))
     } yield found
   }
 
-  /** create the database (or does nothing if it already exists)
-    * @param dbName
+  /** Get a collection
+    *
+    * @param name
+    *   collection name
     * @return
     */
-  override def databaseCreate(dbName: String): IO[StorageSystemError, Unit] = {
-    databaseExists(dbName)
-      .filterOrElse(identity)(
-        databaseCreateLogic(dbName)
-      )
-      .unit
+  override def collectionGet[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[StorageSystemError | CollectionNotFound, Collection[T]] = {
+    for {
+      exists     <- collectionExists(name)
+      collection <- ZIO.cond[CollectionNotFound, Collection[T]](exists, Collection[T](name), CollectionNotFound(name))
+    } yield collection
   }
 
-  private def databaseCreateLogic(dbName: String) = reentrantLock.withWriteLock {
+  /** create the collection (or does nothing if it already exists)
+    * @param name
+    * @return
+    */
+  override def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[CollectionAlreadExists | StorageSystemError, Collection[T]] = {
     for {
-      databases <- openedDatabasesRef.updateAndGet(before =>
-                     if (before.contains(dbName)) before
-                     else before + (dbName -> env.openDbi(dbName, DbiFlags.MDB_CREATE)) // TODO
-                   )
-      db        <- ZIO
-                     .from(databases.get(dbName))
-                     .mapError(err => InternalError(s"Couldn't create DB $dbName"))
+      exists <- collectionExists(name)
+      _      <- ZIO.cond[CollectionAlreadExists,Unit](!exists, (), CollectionAlreadExists(name))
+      _      <- collectionCreateLogic(name)
+    } yield Collection[T](name)
+  }
+
+  private def collectionCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = reentrantLock.withWriteLock {
+    for {
+      collections <- openedCollectionsRef.updateAndGet(before =>
+                       if (before.contains(name)) before
+                       else before + (name -> env.openDbi(name, DbiFlags.MDB_CREATE)) // TODO
+                     )
+      collection  <- ZIO
+                       .from(collections.get(name))
+                       .mapError(err => InternalError(s"Couldn't create DB $name"))
     } yield ()
   }
 
-  private def withWriteTransaction(dbName: String): ZIO.Release[Any, StorageSystemError, Txn[ByteBuffer]] =
+  private def withWriteTransaction(colName: CollectionName): ZIO.Release[Any, StorageSystemError, Txn[ByteBuffer]] =
     ZIO.acquireReleaseWith(
       ZIO
         .attemptBlocking(env.txnWrite())
-        .mapError(err => InternalError(s"Couldn't acquire write transaction on $dbName", Some(err)))
+        .mapError(err => InternalError(s"Couldn't acquire write transaction on $colName", Some(err)))
     )(txn =>
       ZIO
         .attemptBlocking(txn.close())
         .ignoreLogged
     )
 
-  private def withReadTransaction(dbName: String) =
+  private def withReadTransaction(colName: CollectionName) =
     ZIO.acquireReleaseWith(
       ZIO
         .attemptBlocking(env.txnRead())
-        .mapError(err => InternalError(s"Couldn't acquire read transaction on $dbName", Some(err)))
+        .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
     )(txn =>
       ZIO
         .attemptBlocking(txn.close())
         .ignoreLogged
     )
 
-  /** Remove all the content of a database
-    * @param dbName
+  /** Remove all the content of a collection
+    * @param colName
     * @return
     */
-  override def databaseClear(dbName: String): IO[DatabaseNotFound | StorageSystemError, Unit] = {
-    def databaseClearLogic(db: Dbi[ByteBuffer]): ZIO[Any, StorageSystemError, Unit] = {
-      withWriteTransaction(dbName) { txn =>
+  override def collectionClear(colName: CollectionName): IO[CollectionNotFound | StorageSystemError, Unit] = {
+    def collectionClearLogic(db: Dbi[ByteBuffer]): ZIO[Any, StorageSystemError, Unit] = {
+      withWriteTransaction(colName) { txn =>
         ZIO
           .attemptBlocking(db.drop(txn))
-          .mapError(err => InternalError(s"Couldn't clear $dbName", Some(err)))
+          .mapError(err => InternalError(s"Couldn't clear $colName", Some(err)))
       }
     }
     reentrantLock.withWriteLock(
       for {
-        db <- getDatabase(dbName)
-        _  <- databaseClearLogic(db)
+        collection <- getCollectionDbi(colName)
+        _          <- collectionClearLogic(collection)
       } yield ()
     )
   }
@@ -163,116 +176,114 @@ class LMDBOperations(
       .unit
   }
 
-  /** list databases
+  /** list collections
     */
-  override def databases(): IO[StorageSystemError, List[String]] = {
+  override def collectionsAvailable(): IO[StorageSystemError, List[CollectionName]] = {
     reentrantLock.withWriteLock(
       for {
-        databases <- ZIO
-                       .attempt(
-                         env
-                           .getDbiNames()
-                           .asScala
-                           .map(bytes => new String(bytes))
-                           .toList
-                       )
-                       .mapError(err => InternalError("Couldn't list databases", Some(err)))
-      } yield databases
+        collections <- ZIO
+                         .attempt(
+                           env
+                             .getDbiNames()
+                             .asScala
+                             .map(bytes => new String(bytes))
+                             .toList
+                         )
+                         .mapError(err => InternalError("Couldn't list collections", Some(err)))
+      } yield collections
     )
   }
 
   /** delete record
-    * @param id
+    * @param key
     * @return
     */
-  override def delete[T](dbName: String, id: String)(using JsonDecoder[T]): IO[OverSizedKey | DatabaseNotFound | JsonFailure | StorageSystemError, Option[T]] = {
+  override def delete[T](colName: CollectionName, key: RecordKey)(using JsonEncoder[T], JsonDecoder[T]): IO[OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError, Option[T]] = {
     type DeleteLogicErrorsType = OverSizedKey | StorageSystemError | JsonFailure
     def deleteLogic(db: Dbi[ByteBuffer]): IO[DeleteLogicErrorsType, Option[T]] = {
-      withWriteTransaction(dbName) { txn =>
+      withWriteTransaction(colName) { txn =>
         for {
-          key           <- makeKeyByteBuffer(id)
-          found         <- ZIO.attemptBlocking(Option(db.get(txn, key))).mapError[DeleteLogicErrorsType](err => InternalError(s"Couldn't fetch $id for delete on $dbName", Some(err)))
+          key           <- makeKeyByteBuffer(key)
+          found         <- ZIO.attemptBlocking(Option(db.get(txn, key))).mapError[DeleteLogicErrorsType](err => InternalError(s"Couldn't fetch $key for delete on $colName", Some(err)))
           mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
           mayBeDoc      <- ZIO.foreach(mayBeRawValue) { rawValue =>
                              ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[DeleteLogicErrorsType](msg => JsonFailure(msg))
                            }
-          keyFound      <- ZIO.attemptBlocking(db.delete(txn, key)).mapError[DeleteLogicErrorsType](err => InternalError(s"Couldn't delete $id from $dbName", Some(err)))
+          keyFound      <- ZIO.attemptBlocking(db.delete(txn, key)).mapError[DeleteLogicErrorsType](err => InternalError(s"Couldn't delete $key from $colName", Some(err)))
           _             <- ZIO.attemptBlocking(txn.commit()).mapError[DeleteLogicErrorsType](err => InternalError("Couldn't commit transaction", Some(err)))
         } yield mayBeDoc
       }
     }
     reentrantLock.withWriteLock(
       for {
-        db     <- getDatabase(dbName)
+        db     <- getCollectionDbi(colName)
         status <- deleteLogic(db)
       } yield status
     )
   }
 
   /** fetch a record
-    * @param id
+    * @param key
     * @return
     */
-  override def fetch[T](dbName: String, id: String)(using JsonDecoder[T]): IO[OverSizedKey | DatabaseNotFound | JsonFailure | StorageSystemError, Option[T]] = {
-    type FetchLogicErrorTypes = OverSizedKey | JsonFailure | StorageSystemError
-    def fetchLogic(db: Dbi[ByteBuffer]): ZIO[Any, FetchLogicErrorTypes, Option[T]] = {
-      withReadTransaction(dbName) { txn =>
+  override def fetch[T](colName: CollectionName, key: RecordKey)(using JsonEncoder[T], JsonDecoder[T]): IO[FetchErrors, Option[T]] = {
+    def fetchLogic(db: Dbi[ByteBuffer]): ZIO[Any, FetchErrors, Option[T]] = {
+      withReadTransaction(colName) { txn =>
         for {
-          key           <- makeKeyByteBuffer(id)
-          found         <- ZIO.attemptBlocking(Option(db.get(txn, key))).mapError[FetchLogicErrorTypes](err => InternalError(s"Couldn't fetch $id on $dbName", Some(err)))
+          key           <- makeKeyByteBuffer(key)
+          found         <- ZIO.attemptBlocking(Option(db.get(txn, key))).mapError[FetchErrors](err => InternalError(s"Couldn't fetch $key on $colName", Some(err)))
           mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
           document      <- ZIO
                              .foreach(mayBeRawValue) { rawValue =>
-                               ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[FetchLogicErrorTypes](msg => JsonFailure(msg))
+                               ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[FetchErrors](msg => JsonFailure(msg))
                              }
         } yield document
       }
     }
     for {
-      db     <- reentrantLock.withWriteLock(getDatabase(dbName))
+      db     <- reentrantLock.withWriteLock(getCollectionDbi(colName))
       result <- reentrantLock.withReadLock(fetchLogic(db))
     } yield result
   }
 
   /** overwrite or insert a document
-    * @param id
+    * @param key
     * @param document
     * @tparam T
     * @return
     */
-  override def upsertOverwrite[T](dbName: String, id: String, document: T)(using JsonEncoder[T], JsonDecoder[T]): IO[OverSizedKey | DatabaseNotFound | JsonFailure | StorageSystemError, UpsertState[T]] = {
-    upsert(dbName, id, _ => document)
+  override def upsertOverwrite[T](colName: CollectionName, key: RecordKey, document: T)(using JsonEncoder[T], JsonDecoder[T]): IO[UpsertErrors, UpsertState[T]] = {
+    upsert(colName, key, _ => document)
   }
 
   /** atomic document update/insert throw a lambda
-    * @param id
+    * @param key
     * @param modifier
     * @return
     */
-  override def upsert[T](dbName: String, id: String, modifier: Option[T] => T)(using JsonEncoder[T], JsonDecoder[T]): IO[OverSizedKey | DatabaseNotFound | JsonFailure | StorageSystemError, UpsertState[T]] = {
-    type UpsertLogicErrorTypes = OverSizedKey | JsonFailure | StorageSystemError
-    def upsertLogic(db: Dbi[ByteBuffer]): IO[UpsertLogicErrorTypes, UpsertState[T]] = {
-      withWriteTransaction(dbName) { txn =>
+  override def upsert[T](colName: CollectionName, key: RecordKey, modifier: Option[T] => T)(using JsonEncoder[T], JsonDecoder[T]): IO[UpsertErrors, UpsertState[T]] = {
+    def upsertLogic(collection: Dbi[ByteBuffer]): IO[UpsertErrors, UpsertState[T]] = {
+      withWriteTransaction(colName) { txn =>
         for {
-          key            <- makeKeyByteBuffer(id)
-          found          <- ZIO.attemptBlocking(Option(db.get(txn, key))).mapError(err => InternalError(s"Couldn't fetch $id for upsert on $dbName", Some(err)))
+          key            <- makeKeyByteBuffer(key)
+          found          <- ZIO.attemptBlocking(Option(collection.get(txn, key))).mapError(err => InternalError(s"Couldn't fetch $key for upsert on $colName", Some(err)))
           mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
           mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                              ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[UpsertLogicErrorTypes](msg => JsonFailure(msg))
+                              ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[UpsertErrors](msg => JsonFailure(msg))
                             }
           docAfter        = modifier(mayBeDocBefore)
           jsonDocBytes    = docAfter.toJson.getBytes(charset)
           valueBuffer    <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(jsonDocBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for json value", Some(err)))
           _              <- ZIO.attemptBlocking(valueBuffer.put(jsonDocBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
-          _              <- ZIO.attemptBlocking(db.put(txn, key, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $id into $dbName", Some(err)))
-          _              <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit upsertOverwrite $id into $dbName", Some(err)))
+          _              <- ZIO.attemptBlocking(collection.put(txn, key, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $key into $colName", Some(err)))
+          _              <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit upsertOverwrite $key into $colName", Some(err)))
         } yield UpsertState(previous = mayBeDocBefore, current = docAfter)
       }
     }
     reentrantLock.withWriteLock(
       for {
-        db     <- getDatabase(dbName)
-        result <- upsertLogic(db)
+        collection <- getCollectionDbi(colName)
+        result     <- upsertLogic(collection)
       } yield result
     )
   }
@@ -280,13 +291,12 @@ class LMDBOperations(
   /** Dangerous collect method as it loads everything in memory, use keyFilter or valueFilter to limit loaded entries. Use stream method instead
     * @return
     */
-  override def collect[T](dbName: String, keyFilter: String => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true)(using JsonDecoder[T]): IO[DatabaseNotFound | JsonFailure | InternalError, List[T]] = {
-    type CollectLogicErrorTypes = JsonFailure | InternalError
-    def collectLogic(db: Dbi[ByteBuffer]): ZIO[Scope, CollectLogicErrorTypes, List[T]] = for {
+  override def collect[T](colName: CollectionName, keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true)(using JsonEncoder[T], JsonDecoder[T]): IO[CollectErrors, List[T]] = {
+    def collectLogic(collection: Dbi[ByteBuffer]): ZIO[Scope, CollectErrors, List[T]] = for {
       txn       <- ZIO.acquireRelease(
                      ZIO
                        .attemptBlocking(env.txnRead())
-                       .mapError[CollectLogicErrorTypes](err => InternalError(s"Couldn't acquire read transaction on $dbName", Some(err)))
+                       .mapError[CollectErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
                    )(txn =>
                      ZIO
                        .attemptBlocking(txn.close())
@@ -294,8 +304,8 @@ class LMDBOperations(
                    )
       iterable  <- ZIO.acquireRelease(
                      ZIO
-                       .attemptBlocking(db.iterate(txn, KeyRange.all()))
-                       .mapError[CollectLogicErrorTypes](err => InternalError(s"Couldn't acquire iterable on $dbName", Some(err)))
+                       .attemptBlocking(collection.iterate(txn, KeyRange.all()))
+                       .mapError[CollectErrors](err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
                    )(cursor =>
                      ZIO
                        .attemptBlocking(cursor.close())
@@ -310,12 +320,12 @@ class LMDBOperations(
                          .filter(valueFilter)
                          .toList
                      }
-                     .mapError[CollectLogicErrorTypes](err => InternalError(s"Couldn't collect documents stored in $dbName", Some(err)))
+                     .mapError[CollectErrors](err => InternalError(s"Couldn't collect documents stored in $colName", Some(err)))
     } yield collected
 
     for {
-      db        <- reentrantLock.withWriteLock(getDatabase(dbName))
-      collected <- reentrantLock.withReadLock(ZIO.scoped(collectLogic(db)))
+      collection <- reentrantLock.withWriteLock(getCollectionDbi(colName))
+      collected  <- reentrantLock.withReadLock(ZIO.scoped(collectLogic(collection)))
     } yield collected
   }
 
@@ -368,7 +378,7 @@ class LMDBOperations(
 
     val result =
         for {
-          db     <- reentrantLock.withWriteLock(getDatabase(dbName))
+          db     <- reentrantLock.withWriteLock(getCollection(dbName))
           _      <- reentrantLock.readLock
           stream <- streamLogic(db)
         } yield stream
@@ -398,11 +408,11 @@ object LMDBOperations {
 
   def setup(config: LMDBConfig): ZIO[Scope, Throwable, LMDBOperations] = {
     for {
-      environment     <- ZIO.acquireRelease(
-                           ZIO.attemptBlocking(lmdbCreateEnv(config))
-                         )(env => ZIO.attemptBlocking(env.close).ignoreLogged)
-      openedDatabases <- Ref.make[Map[String, Dbi[ByteBuffer]]](Map.empty)
-      reentrantLock   <- TReentrantLock.make.commit
-    } yield new LMDBOperations(environment, openedDatabases, reentrantLock)
+      environment       <- ZIO.acquireRelease(
+                             ZIO.attemptBlocking(lmdbCreateEnv(config))
+                           )(env => ZIO.attemptBlocking(env.close).ignoreLogged)
+      openedCollections <- Ref.make[Map[String, Dbi[ByteBuffer]]](Map.empty)
+      reentrantLock     <- TReentrantLock.make.commit
+    } yield new LMDBOperations(environment, openedCollections, reentrantLock)
   }
 }

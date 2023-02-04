@@ -15,9 +15,9 @@ scalaVersion := "3.2.1"
 
 lazy val versions = new {
   val zio     = "2.0.6"
-  val zionio  = "2.0.0"
+  val zionio  = "2.0.1"
   val ziojson = "0.4.2"
-  val lmdb    = "0.8.2"
+  val lmdb    = "0.8.3"
 }
 
 libraryDependencies ++= Seq(
