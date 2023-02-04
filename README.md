@@ -1,20 +1,23 @@
 # Lightning Memory Database (LMDB) for ZIO [![][ZIOLMDBManagerImg]][ZIOLMDBManagerLnk]
 
-This is a work in progress software library, all current tests are OK, first preliminary releases are available
-on maven central.
+Why ZIO-lmdb ? Because I wanted a very simple **embedded** (in the same process) ACID database for small
+applications while keeping deployment, maintenance, upgrades as simple as possible.
 
-## Goal
+ZIO-lmdb is based on the powerful [lmdb-java][JLMDB] library and bring a higher level API in order
+to enhance the developer experience.
 
-Simple embedded database, easy to use opinionated API, with features dedicated to changes follow-up.
-"changes follow-up" means that the API provide you everything you need to know about what is done by LMDB,
-for example an update mean you'll receive back both the previous and the newest record.
+So ZIO-lmdb is an embedded key/value database, with an easy to use opinionated API, choices have been made
+to make the developer experience as simple as possible :
+- JSON based storage using zio-json,
+- safe update by using a lambda which will be called with the previous value if it exists and returns the new value,
+- identifiers are managed by the developer, just use [UUID][UUID] or [ULID][ZIO-ULID].
 
-The first API only provides atomic operations with hidden transactions. API is designed to not lie, all functions signatures
-describe precisely what you must expect from them, thanks to [ZIO][ZIO] and [Scala3][Scala3].  
+API is designed to not lie, all functions signatures describe precisely
+what you must expect from them, thanks to [ZIO][ZIO] and [Scala3][Scala3].  
 
 ## Definitions
 
-For better understanding, this library use a slightly different vocabulary from LMDB original one :  
+For a better understanding, this library use a slightly different vocabulary from LMDB original one :  
 - **Database** :  (*LMDB talk about Environment*)
   - The place where the database file is stored on your file system
   - A set of configuration for this database (expected maximum size, expected collection number)
@@ -62,3 +65,7 @@ When LVMDB is used as persistence store with recent JVM it requires some JVM opt
 [ZIOLMDBManagerLnk]: https://search.maven.org/#search%7Cga%7C1%7Cfr.janalyse.zio-lmdb
 [ZIO]: https://zio.dev/
 [Scala3]: https://docs.scala-lang.org/scala3/reference/
+[JLMDB]: https://github.com/lmdbjava/lmdbjava
+[LMDB]: https://www.symas.com/lmdb
+[ZIO-ULID]: https://zio-ulid.bilal-fazlani.com/
+[UUID]: https://en.wikipedia.org/wiki/Universally_unique_identifier
