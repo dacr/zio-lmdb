@@ -27,10 +27,8 @@ import zio.test.TestAspect.*
 
 import java.util.UUID
 import java.util.concurrent.TimeUnit
-import org.junit.runner.RunWith
 
-@RunWith(classOf[zio.test.junit.ZTestJUnitRunner])
-class LMDBLiveSpec extends ZIOSpecDefault {
+object LMDBLiveSpec extends ZIOSpecDefault {
 
   val lmdbLayer = ZLayer.scoped(
     for {

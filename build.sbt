@@ -26,7 +26,7 @@ libraryDependencies ++= Seq(
   "dev.zio"     %% "zio-json"            % versions.ziojson,
   "org.lmdbjava" % "lmdbjava"            % versions.lmdb,
   "dev.zio"     %% "zio-test"            % versions.zio    % Test,
-  "dev.zio"     %% "zio-test-junit"      % versions.zio    % Test,
+  //"dev.zio"     %% "zio-test-junit"      % versions.zio    % Test,
   "dev.zio"     %% "zio-test-sbt"        % versions.zio    % Test,
   "dev.zio"     %% "zio-test-scalacheck" % versions.zio    % Test,
   "dev.zio"     %% "zio-nio"             % versions.zionio % Test

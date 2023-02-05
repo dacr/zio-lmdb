@@ -19,15 +19,13 @@ import zio.*
 import zio.test.*
 import zio.json.*
 import zio.nio.file.Files
-import org.junit.runner.RunWith
 
 case class Record(name: String, age: Long)
 object Record {
   given JsonCodec[Record] = DeriveJsonCodec.gen
 }
 
-@RunWith(classOf[zio.test.junit.ZTestJUnitRunner])
-class LMDBBasicUsageSpec extends ZIOSpecDefault {
+object LMDBBasicUsageSpec extends ZIOSpecDefault {
   val lmdbTestConfigLayer = ZLayer.scoped(
     for {
       scope <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
