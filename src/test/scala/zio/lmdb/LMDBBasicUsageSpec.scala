@@ -31,7 +31,7 @@ class LMDBBasicUsageSpec extends ZIOSpecDefault {
   val lmdbTestConfigLayer = ZLayer.scoped(
     for {
       scope <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
-    } yield LMDBConfig(databasesPath = scope.toFile)
+    } yield LMDBConfig(databasePath = scope.toFile)
   )
 
   override def spec = suite("LMDB for ZIO as a service")(

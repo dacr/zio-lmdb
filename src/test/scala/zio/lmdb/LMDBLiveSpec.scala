@@ -36,7 +36,7 @@ class LMDBLiveSpec extends ZIOSpecDefault {
     for {
       scope <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
       config = LMDBConfig(
-                 databasesPath = scope.toFile,
+                 databasePath = scope.toFile,
                  fileSystemSynchronized = false // For tests no need to be synchronized with FS
                )
       lmdb  <- LMDBLive.setup(config)
@@ -187,28 +187,27 @@ class LMDBLiveSpec extends ZIOSpecDefault {
     },
     // -----------------------------------------------------------------------------
     test("list collection content") {
+      val count = limit
+      val value = Num(42)
       for {
-        lmdb          <- ZIO.service[LMDBLive]
-        count          = limit
-        value          = Num(42)
-        dbName        <- randomCollectionName
-        _             <- lmdb.collectionCreate(dbName)
-        _             <- ZIO.foreach(1.to(count))(num => lmdb.upsertOverwrite[Num](dbName, s"id#$num", value))
-        collected     <- lmdb.collect[Num](dbName)
-        collectedCount = collected.size
+        colName    <- randomCollectionName
+        col        <- LMDB.collectionCreate(colName)
+        _          <- ZIO.foreach(1.to(count))(num => col.upsertOverwrite(s"id#$num", value))
+        gottenSize <- col.size()
+        collected  <- col.collect()
       } yield assertTrue(
-        collectedCount == count
+        collected.size == count,
+        gottenSize == count
       )
     }
     // -----------------------------------------------------------------------------
 //    test("stream collection content") {
+//      var count = limit
 //      for {
-//        lmdb          <- ZIO.service[LMDBOperations]
-//        count          = limit
-//        dbName        <- randomDatabaseName
-//        _             <- lmdb.databaseCreate(dbName)
-//        _             <- ZIO.foreach(1.to(count))(num => lmdb.upsertOverwrite[Num](dbName, s"id#$num", Num(num)))
-//        returnedCount <- ZIO.scoped(lmdb.stream[Num](dbName).filter(_.value.intValue() % 2 == 0).runCount)
+//        colName       <- randomCollectionName
+//        col           <- LMDB.collectionCreate(colName)
+//        _             <- ZIO.foreach(1.to(count))(num => col.upsertOverwrite(s"id#$num", Num(num)))
+//        returnedCount <- ZIO.scoped(col.stream().filter(_.value.intValue() % 2 == 0).runCount)
 //      } yield assertTrue(
 //        returnedCount.toInt == count / 2
 //      )

@@ -19,7 +19,7 @@ package zio.lmdb
 import java.io.File
 
 case class LMDBConfig(
-  databasesPath: File,
+  databasePath: File,
   mapSize: Long = 100_000_000_000L,
   maxCollections: Int = 10_000,
   maxReaders: Int = 100,
