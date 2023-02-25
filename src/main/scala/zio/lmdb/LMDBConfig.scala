@@ -17,6 +17,7 @@
 package zio.lmdb
 
 import java.io.File
+import zio.*
 
 case class LMDBConfig(
   databasePath: File,
@@ -25,3 +26,39 @@ case class LMDBConfig(
   maxReaders: Int = 100,
   fileSystemSynchronized: Boolean = true
 )
+
+object LMDBConfig {
+
+  /** Create a LMDBConfig without pain using the database Path .lmdb/name within $HOME or current directory if HOME is unset
+    * @param databaseName
+    *   database name which will be used as the destination directory name for storage purposes
+    * @param fileSystemSynchronized
+    * @return
+    *   a LMDB config
+    */
+  def build(
+    databaseName: String = "default",
+    fileSystemSynchronized: Boolean = true
+  ): IO[Exception, LMDBConfig] = {
+    for {
+      home             <- System.envOrElse("HOME", ".")
+      lmdbDatabasesHome = File(home, ".lmdb")
+      databasePath      = File(lmdbDatabasesHome, databaseName)
+      _                <- ZIO.attemptBlockingIO(databasePath.mkdirs())
+      config            = LMDBConfig(databasePath, fileSystemSynchronized = fileSystemSynchronized)
+    } yield config
+  }
+
+  /** Build a lmdb config layer
+    *
+    * @param databaseName
+    *   database name which will be used as the destination directory name for storage purposes
+    * @param fileSystemSynchronized
+    * @return
+    *   a LMDB config layer
+    */
+  def buildLayer(databaseName: String = "default", fileSystemSynchronized: Boolean = true): ULayer[LMDBConfig] = {
+    ZLayer.fromZIO(build(databaseName, fileSystemSynchronized)).orDie
+  }
+
+}

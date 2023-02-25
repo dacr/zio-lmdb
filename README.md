@@ -29,7 +29,7 @@ For a better understanding, this library use a slightly different vocabulary fro
   - only one simultaneous write access is possible within the same database 
 
 
-## Usage example
+## Usages example
 
 ```scala
 test("basic usage")(
@@ -50,6 +50,20 @@ test("basic usage")(
   )
 )
 ```
+
+Code snippets, runnable using scala-cli :
+- [ZIO LMDB feeding with French town postal codes](https://gist.github.com/6d24baf827ae0c590133e0f27f1ef20b)
+- [ZIO LMDB simple example](https://gist.github.com/dcb8a11f095ef0a2a95c24701e6eb804)
+
+## Operating lmdb databases
+
+LMDB standard tools can be used to manage the databases content : `sudo apt-get install lmdb-utils`
+- to get some database statistics : `mdb_stat -a database_directory_path/`
+- to dump the content of a database : `mdb_dump -a -p database_directory_path/`
+- to dump the content of a database collection : `mdb_dump -s collectionName -p database_directory_path/`
+- to restore some collection or the entire database use the command named `mdb_load` which uses the same format as for `mdb_dump` 
+
+As zio-lmdb is using json format, dumps are just text, which can be edited and then loaded back. So simple data migration is straightforward.
 
 ## Requirements
 
