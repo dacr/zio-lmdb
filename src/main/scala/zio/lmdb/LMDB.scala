@@ -31,6 +31,8 @@ trait LMDB {
 
   def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[CollectionAlreadExists | StorageSystemError, LMDBCollection[T]]
 
+  def collectionAllocate(name: CollectionName):IO[CollectionAlreadExists | StorageSystemError, Unit]
+
   def collectionGet[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[CollectionNotFound | StorageSystemError, LMDBCollection[T]]
 
   def collectionSize(name: CollectionName): IO[CollectionNotFound | StorageSystemError, Long]
@@ -59,6 +61,8 @@ object LMDB {
   def collectionExists(name: CollectionName): ZIO[LMDB, StorageSystemError, Boolean] = ZIO.serviceWithZIO(_.collectionExists(name))
 
   def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): ZIO[LMDB, CollectionAlreadExists | StorageSystemError, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionCreate(name))
+
+  def collectionAllocate(name: CollectionName):ZIO[LMDB, CollectionAlreadExists | StorageSystemError, Unit] = ZIO.serviceWithZIO(_.collectionAllocate(name))
 
   def collectionGet[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): ZIO[LMDB, CollectionNotFound | StorageSystemError, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionGet(name))
 

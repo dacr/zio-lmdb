@@ -120,16 +120,24 @@ class LMDBLive(
     } yield stats.entries
   }
 
-  /** create the collection (or does nothing if it already exists)
+  /** create the collection
     * @param name
-    * @return
+    * @return nothing
     */
-  override def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[CollectionAlreadExists | StorageSystemError, LMDBCollection[T]] = {
+  override def collectionAllocate(name: CollectionName): IO[CollectionAlreadExists | StorageSystemError, Unit] = {
     for {
       exists <- collectionExists(name)
       _      <- ZIO.cond[CollectionAlreadExists, Unit](!exists, (), CollectionAlreadExists(name))
       _      <- collectionCreateLogic(name)
-    } yield LMDBCollection[T](name, this)
+    } yield ()
+  }
+
+  /** create the collection and returns a collection handler
+    * @param name
+    * @return
+    */
+  override def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[CollectionAlreadExists | StorageSystemError, LMDBCollection[T]] = {
+    collectionAllocate(name) *> ZIO.succeed(LMDBCollection[T](name, this))
   }
 
   private def collectionCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = reentrantLock.withWriteLock {
