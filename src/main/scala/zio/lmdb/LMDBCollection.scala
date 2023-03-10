@@ -15,7 +15,7 @@
  */
 package zio.lmdb
 
-import zio.ZIO
+import zio.*
 import zio.json.{JsonDecoder, JsonEncoder}
 import zio.lmdb.StorageUserError.*
 import zio.lmdb.StorageSystemError
@@ -28,24 +28,24 @@ import zio.lmdb.StorageSystemError
  * @param JsonDecoder[T]
  * @tparam T the data class type for collection content
  */
-case class LMDBCollection[T](name: String)(using JsonEncoder[T], JsonDecoder[T]) {
+case class LMDBCollection[T](name: String, lmdb: LMDB)(using JsonEncoder[T], JsonDecoder[T]) {
 
-  def size(): ZIO[LMDB, CollectionNotFound | StorageSystemError, Long] = ZIO.serviceWithZIO(_.collectionSize(name))
+  def size(): IO[CollectionNotFound | StorageSystemError, Long] = lmdb.collectionSize(name)
 
-  def fetch(key: RecordKey): ZIO[LMDB, FetchErrors, Option[T]] = LMDB.fetch(name, key)
+  def fetch(key: RecordKey): IO[FetchErrors, Option[T]] = lmdb.fetch(name, key)
 
-  def upsert(key: RecordKey, modifier: Option[T] => T): ZIO[LMDB, UpsertErrors, UpsertState[T]] =
-    ZIO.serviceWithZIO(_.upsert[T](name, key, modifier))
+  def upsert(key: RecordKey, modifier: Option[T] => T): IO[UpsertErrors, UpsertState[T]] =
+    lmdb.upsert[T](name, key, modifier)
 
-  def upsertOverwrite(key: RecordKey, document: T): ZIO[LMDB, UpsertErrors, UpsertState[T]] =
-    ZIO.serviceWithZIO(_.upsertOverwrite[T](name, key, document))
+  def upsertOverwrite(key: RecordKey, document: T): IO[UpsertErrors, UpsertState[T]] =
+    lmdb.upsertOverwrite[T](name, key, document)
 
-  def delete(key: RecordKey): ZIO[LMDB, DeleteErrors, Option[T]] =
-    ZIO.serviceWithZIO(_.delete[T](name, key))
+  def delete(key: RecordKey): IO[DeleteErrors, Option[T]] =
+    lmdb.delete[T](name, key)
 
-  def collect(keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true): ZIO[LMDB, CollectErrors, List[T]] =
-    ZIO.serviceWithZIO(_.collect[T](name, keyFilter, valueFilter))
+  def collect(keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true): IO[CollectErrors, List[T]] =
+    lmdb.collect[T](name, keyFilter, valueFilter)
 
   // def stream(keyFilter: RecordKey => Boolean = _ => true): ZStream[Scope, DatabaseNotFound | LMDBError, T] = //TODO implement stream in LMDB service
-  //    ZStream.serviceWithZIO(_.stream(colName, keyFilter))
+  //    lmdb.stream(colName, keyFilter)
 }

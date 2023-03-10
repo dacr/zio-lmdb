@@ -99,7 +99,7 @@ class LMDBLive(
   override def collectionGet[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[StorageSystemError | CollectionNotFound, LMDBCollection[T]] = {
     for {
       exists     <- collectionExists(name)
-      collection <- ZIO.cond[CollectionNotFound, LMDBCollection[T]](exists, LMDBCollection[T](name), CollectionNotFound(name))
+      collection <- ZIO.cond[CollectionNotFound, LMDBCollection[T]](exists, LMDBCollection[T](name, this), CollectionNotFound(name))
     } yield collection
   }
 
@@ -129,7 +129,7 @@ class LMDBLive(
       exists <- collectionExists(name)
       _      <- ZIO.cond[CollectionAlreadExists, Unit](!exists, (), CollectionAlreadExists(name))
       _      <- collectionCreateLogic(name)
-    } yield LMDBCollection[T](name)
+    } yield LMDBCollection[T](name, this)
   }
 
   private def collectionCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = reentrantLock.withWriteLock {
