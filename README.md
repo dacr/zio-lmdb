@@ -55,6 +55,9 @@ Code snippets, runnable using scala-cli :
 - [ZIO LMDB feeding with French town postal codes](https://gist.github.com/6d24baf827ae0c590133e0f27f1ef20b)
 - [ZIO LMDB simple example](https://gist.github.com/dcb8a11f095ef0a2a95c24701e6eb804)
 
+ZIO-LMDB based Applications :
+- [zwords][ZWORDS-CODE] which can be played [zwords game][ZWORDS-LIVE]  
+
 ## Operating lmdb databases
 
 LMDB standard tools can be used to manage the databases content : `sudo apt-get install lmdb-utils`
@@ -83,3 +86,5 @@ When LVMDB is used as persistence store with recent JVM it requires some JVM opt
 [LMDB]: https://www.symas.com/lmdb
 [ZIO-ULID]: https://zio-ulid.bilal-fazlani.com/
 [UUID]: https://en.wikipedia.org/wiki/Universally_unique_identifier
+[ZWORDS-CODE]: https://github.com/dacr/zwords
+[ZWORDS-LIVE]: https://zwords.mapland.fr/
