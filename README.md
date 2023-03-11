@@ -79,7 +79,7 @@ When LVMDB is used as persistence store with recent JVM it requires some JVM opt
 
 [ZIOLMDBManager]:    https://github.com/dacr/zio-lmdb
 [ZIOLMDBManagerImg]: https://img.shields.io/maven-central/v/fr.janalyse/zio-lmdb_3.svg
-[ZIOLMDBManagerLnk]: https://search.maven.org/#search%7Cga%7C1%7Cfr.janalyse.zio-lmdb
+[ZIOLMDBManagerLnk]: https://mvnrepository.com/artifact/fr.janalyse/zio-lmdb
 [ZIO]: https://zio.dev/
 [Scala3]: https://docs.scala-lang.org/scala3/reference/
 [JLMDB]: https://github.com/lmdbjava/lmdbjava
