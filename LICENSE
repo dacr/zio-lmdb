@@ -1,3 +1,25 @@
+                             MACHINE LEARNING LICENSE
+                              Version 1.1, March 2023
+                       https://github.com/dacr/ai-ml-licenses
+
+   0. Introduction
+
+      Commercial machine learning training software defines in this document any company
+      which is using third parties data to feed their own not opensource machine learning
+      software and/or make revenues from this software usages directly or indirectly.
+
+      Usage by commercial machine learning training software of this code source
+      or any if its binary generated artifacts is not allowed without author consent.
+
+      So software such as Github COPILOT, OpenAI ChatGPT, ... are not allowed
+      to use the whole or any part of this software as a data source for any training
+      purposes without author explicit authorization.
+
+      Except for this particular source code or generated artifact specific use case,
+      everything else is covered by the standard unmodified Apache License
+
+--------------------------------------------------------------------------------------
+
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
