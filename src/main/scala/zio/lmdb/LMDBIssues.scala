@@ -16,13 +16,16 @@
 
 package zio.lmdb
 
-enum StorageUserError {
-  case CollectionAlreadExists(name: CollectionName)            extends StorageUserError
-  case CollectionNotFound(name: CollectionName)                extends StorageUserError
-  case JsonFailure(issue: String)                              extends StorageUserError
-  case OverSizedKey(id: String, expandedSize: Int, limit: Int) extends StorageUserError
+trait LmdbError
+trait StorageUserError extends LmdbError
+object StorageUserError {
+  case class CollectionAlreadExists(name: CollectionName)            extends StorageUserError
+  case class CollectionNotFound(name: CollectionName)                extends StorageUserError
+  case class JsonFailure(issue: String)                              extends StorageUserError
+  case class OverSizedKey(id: String, expandedSize: Int, limit: Int) extends StorageUserError
 }
 
-enum StorageSystemError {
-  case InternalError(message: String, cause: Option[Throwable] = None) extends StorageSystemError
+trait StorageSystemError extends LmdbError
+object StorageSystemError {
+  case class InternalError(message: String, cause: Option[Throwable] = None) extends StorageSystemError
 }

@@ -15,15 +15,15 @@
  */
 package zio.lmdb
 
-import zio.*
-import zio.json.*
+import zio._
+import zio.json._
 import zio.json.ast.Json
-import zio.json.ast.Json.*
-import zio.nio.file.*
+import zio.json.ast.Json._
+import zio.nio.file._
 import zio.stream.{ZSink, ZStream}
-import zio.test.*
-import zio.test.Gen.*
-import zio.test.TestAspect.*
+import zio.test._
+import zio.test.Gen._
+import zio.test.TestAspect._
 
 import java.util.UUID
 import java.util.concurrent.TimeUnit
