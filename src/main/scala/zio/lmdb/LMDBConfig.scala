@@ -17,7 +17,7 @@
 package zio.lmdb
 
 import java.io.File
-import zio.*
+import zio._
 
 case class LMDBConfig(
   databasePath: File,
@@ -42,8 +42,8 @@ object LMDBConfig {
   ): IO[Exception, LMDBConfig] = {
     for {
       home             <- System.envOrElse("HOME", ".")
-      lmdbDatabasesHome = File(home, ".lmdb")
-      databasePath      = File(lmdbDatabasesHome, databaseName)
+      lmdbDatabasesHome = new File(home, ".lmdb")
+      databasePath      = new File(lmdbDatabasesHome, databaseName)
       _                <- ZIO.attemptBlockingIO(databasePath.mkdirs())
       config            = LMDBConfig(databasePath, fileSystemSynchronized = fileSystemSynchronized)
     } yield config

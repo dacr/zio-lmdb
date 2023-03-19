@@ -15,10 +15,8 @@
  */
 package zio.lmdb
 
-import zio.*
+import zio._
 import zio.json.{JsonDecoder, JsonEncoder}
-import zio.lmdb.StorageUserError.*
-import zio.lmdb.StorageSystemError
 
 /**
  * A helper class to simplify user experience by avoiding repeating collection name and data types
@@ -28,9 +26,9 @@ import zio.lmdb.StorageSystemError
  * @param JsonDecoder[T]
  * @tparam T the data class type for collection content
  */
-case class LMDBCollection[T](name: String, lmdb: LMDB)(using JsonEncoder[T], JsonDecoder[T]) {
+case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]) {
 
-  def size(): IO[CollectionNotFound | StorageSystemError, Long] = lmdb.collectionSize(name)
+  def size(): IO[LmdbError, Long] = lmdb.collectionSize(name)
 
   def fetch(key: RecordKey): IO[FetchErrors, Option[T]] = lmdb.fetch(name, key)
 

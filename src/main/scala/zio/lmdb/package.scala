@@ -16,15 +16,15 @@
 
 package zio
 
-import zio.lmdb.StorageUserError.*
+import zio.lmdb.StorageUserError._
 
 package object lmdb {
   type CollectionName = String
   type RecordKey      = String
 
-  type FetchErrors    = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type UpsertErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type DeleteErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type CollectErrors  = CollectionNotFound | JsonFailure | StorageSystemError
+  type FetchErrors    = LmdbError
+  type UpsertErrors   = LmdbError
+  type DeleteErrors   = LmdbError
+  type CollectErrors  = LmdbError
 
 }

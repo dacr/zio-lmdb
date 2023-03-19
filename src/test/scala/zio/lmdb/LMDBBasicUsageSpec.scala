@@ -15,14 +15,14 @@
  */
 package zio.lmdb
 
-import zio.*
-import zio.test.*
-import zio.json.*
+import zio._
+import zio.test._
+import zio.json._
 import zio.nio.file.Files
 
 case class Record(name: String, age: Long)
 object Record {
-  given JsonCodec[Record] = DeriveJsonCodec.gen
+  implicit val jsonCodecRecord: JsonCodec[Record] = DeriveJsonCodec.gen
 }
 
 object LMDBBasicUsageSpec extends ZIOSpecDefault {

@@ -11,7 +11,7 @@ scmInfo := Some(
   )
 )
 
-scalaVersion := "3.2.2"
+scalaVersion := "2.13.10"
 
 lazy val versions = new {
   val zio     = "2.0.10"
