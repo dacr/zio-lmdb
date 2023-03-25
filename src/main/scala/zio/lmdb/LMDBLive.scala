@@ -15,23 +15,23 @@
  */
 package zio.lmdb
 
-import zio.*
-import zio.stm.*
-import zio.json.*
-import zio.stream.*
+import zio._
+import zio.stm._
+import zio.json._
+import zio.stream._
 
 import java.io.File
 import org.lmdbjava.{Cursor, Dbi, DbiFlags, Env, EnvFlags, KeyRange, Txn, Verifier}
-import org.lmdbjava.SeekOp.*
+import org.lmdbjava.SeekOp._
 import org.lmdbjava.CursorIterable.KeyVal
 
 import java.nio.charset.StandardCharsets
 import java.nio.ByteBuffer
 import java.time.OffsetDateTime
 import java.util.concurrent.TimeUnit
-import scala.jdk.CollectionConverters.*
-import zio.lmdb.StorageUserError.*
-import zio.lmdb.StorageSystemError.*
+import scala.jdk.CollectionConverters._
+import zio.lmdb.StorageUserError._
+import zio.lmdb.StorageSystemError._
 
 /** LMDB ZIO abstraction layer, provides standard atomic operations implementations
   * @param env
@@ -96,7 +96,7 @@ class LMDBLive(
     *   collection name
     * @return
     */
-  override def collectionGet[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[StorageSystemError | CollectionNotFound, LMDBCollection[T]] = {
+  override def collectionGet[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[GetErrors, LMDBCollection[T]] = {
     for {
       exists     <- collectionExists(name)
       collection <- ZIO.cond[CollectionNotFound, LMDBCollection[T]](exists, LMDBCollection[T](name, this), CollectionNotFound(name))
@@ -109,7 +109,7 @@ class LMDBLive(
     *   collection name
     * @return
     */
-  override def collectionSize(name: CollectionName): IO[StorageSystemError | CollectionNotFound, Long] = {
+  override def collectionSize(name: CollectionName): IO[SizeErrors, Long] = {
     for {
       collectionDbi <- getCollectionDbi(name)
       stats         <- withReadTransaction(name) { txn =>
@@ -124,7 +124,7 @@ class LMDBLive(
     * @param name
     * @return nothing
     */
-  override def collectionAllocate(name: CollectionName): IO[CollectionAlreadExists | StorageSystemError, Unit] = {
+  override def collectionAllocate(name: CollectionName): IO[CreateErrors, Unit] = {
     for {
       exists <- collectionExists(name)
       _      <- ZIO.cond[CollectionAlreadExists, Unit](!exists, (), CollectionAlreadExists(name))
@@ -136,7 +136,7 @@ class LMDBLive(
     * @param name
     * @return
     */
-  override def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[CollectionAlreadExists | StorageSystemError, LMDBCollection[T]] = {
+  override def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[CreateErrors, LMDBCollection[T]] = {
     collectionAllocate(name) *> ZIO.succeed(LMDBCollection[T](name, this))
   }
 
@@ -180,7 +180,7 @@ class LMDBLive(
     * @param colName
     * @return
     */
-  override def collectionClear(colName: CollectionName): IO[CollectionNotFound | StorageSystemError, Unit] = {
+  override def collectionClear(colName: CollectionName): IO[ClearErrors, Unit] = {
     def collectionClearLogic(colDbi: Dbi[ByteBuffer]): ZIO[Any, StorageSystemError, Unit] = {
       reentrantLock.withWriteLock(
         withWriteTransaction(colName) { txn =>
@@ -375,44 +375,44 @@ class LMDBLive(
     }
   }
 
-  def stream[T](dbName: String, keyFilter: String => Boolean = _ => true)(using JsonDecoder[T]): ZStream[Scope, CollectErrors, T] = {
-    def streamLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, CollectErrors, ZStream[Any, CollectErrors, T]] = for {
-      txn      <- ZIO.acquireRelease(
-                    ZIO
-                      .attemptBlocking(env.txnRead())
-                      .mapError(err => InternalError(s"Couldn't acquire read transaction on $dbName", Some(err)))
-                  )(txn =>
-                    ZIO
-                      .attemptBlocking(txn.close())
-                      .ignoreLogged
-                  )
-      iterable <- ZIO.acquireRelease(
-                    ZIO
-                      .attemptBlocking(colDbi.iterate(txn, KeyRange.all()))
-                      .mapError(err => InternalError(s"Couldn't acquire iterable on $dbName", Some(err)))
-                  )(cursor =>
-                    ZIO
-                      .attemptBlocking(cursor.close())
-                      .ignoreLogged
-                  )
-    } yield ZStream
-      .fromIterator(EncapsulatedIterator(iterable.iterator()))
-      .filter((key, value) => keyFilter(key))
-      .mapZIO((key, value) => ZIO.from(value.fromJson[T]).mapError(err => JsonFailure(err)))
-      .mapError[JsonFailure | InternalError] {
-        case err: Throwable   => InternalError(s"Couldn't stream from $dbName", Some(err))
-        case err: JsonFailure => err
-      }
-
-    val result =
-      for {
-        db     <- getCollectionDbi(dbName)
-        _      <- reentrantLock.readLock
-        stream <- streamLogic(db)
-      } yield stream
-
-    ZStream.unwrap(result)
-  }
+//  def stream[T](dbName: String, keyFilter: String => Boolean = _ => true)(using JsonDecoder[T]): ZStream[Scope, StreamErrors, T] = {
+//    def streamLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, StreamErrors, ZStream[Any, CollectErrors, T]] = for {
+//      txn      <- ZIO.acquireRelease(
+//                    ZIO
+//                      .attemptBlocking(env.txnRead())
+//                      .mapError(err => InternalError(s"Couldn't acquire read transaction on $dbName", Some(err)))
+//                  )(txn =>
+//                    ZIO
+//                      .attemptBlocking(txn.close())
+//                      .ignoreLogged
+//                  )
+//      iterable <- ZIO.acquireRelease(
+//                    ZIO
+//                      .attemptBlocking(colDbi.iterate(txn, KeyRange.all()))
+//                      .mapError(err => InternalError(s"Couldn't acquire iterable on $dbName", Some(err)))
+//                  )(cursor =>
+//                    ZIO
+//                      .attemptBlocking(cursor.close())
+//                      .ignoreLogged
+//                  )
+//    } yield ZStream
+//      .fromIterator(EncapsulatedIterator(iterable.iterator()))
+//      .filter((key, value) => keyFilter(key))
+//      .mapZIO((key, value) => ZIO.from(value.fromJson[T]).mapError(err => JsonFailure(err)))
+//      .mapError[JsonFailure | InternalError] {
+//        case err: Throwable   => InternalError(s"Couldn't stream from $dbName", Some(err))
+//        case err: JsonFailure => err
+//      }
+//
+//    val result =
+//      for {
+//        db     <- getCollectionDbi(dbName)
+//        _      <- reentrantLock.readLock
+//        stream <- streamLogic(db)
+//      } yield stream
+//
+//    ZStream.unwrap(result)
+//  }
 
 }
 

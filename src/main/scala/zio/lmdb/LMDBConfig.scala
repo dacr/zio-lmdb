@@ -17,7 +17,7 @@
 package zio.lmdb
 
 import java.io.File
-import zio.*
+import zio._
 
 case class LMDBConfig(
   databasePath: File,

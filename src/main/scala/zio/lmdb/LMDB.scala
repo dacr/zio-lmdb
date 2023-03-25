@@ -16,10 +16,10 @@
 
 package zio.lmdb
 
-import zio.*
-import zio.json.*
+import zio._
+import zio.json._
 import zio.stream.ZStream
-import zio.lmdb.StorageUserError.*
+import zio.lmdb.StorageUserError._
 import zio.lmdb.StorageSystemError
 
 trait LMDB {
@@ -29,15 +29,15 @@ trait LMDB {
 
   def collectionExists(name: CollectionName): IO[StorageSystemError, Boolean]
 
-  def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[CollectionAlreadExists | StorageSystemError, LMDBCollection[T]]
+  def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[CreateErrors, LMDBCollection[T]]
 
-  def collectionAllocate(name: CollectionName):IO[CollectionAlreadExists | StorageSystemError, Unit]
+  def collectionAllocate(name: CollectionName):IO[CreateErrors, Unit]
 
-  def collectionGet[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[CollectionNotFound | StorageSystemError, LMDBCollection[T]]
+  def collectionGet[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): IO[GetErrors, LMDBCollection[T]]
 
-  def collectionSize(name: CollectionName): IO[CollectionNotFound | StorageSystemError, Long]
+  def collectionSize(name: CollectionName): IO[SizeErrors, Long]
 
-  def collectionClear(name: CollectionName): IO[CollectionNotFound | StorageSystemError, Unit]
+  def collectionClear(name: CollectionName): IO[ClearErrors, Unit]
 
   def fetch[T](collectionName: CollectionName, key: RecordKey)(using JsonEncoder[T], JsonDecoder[T]): IO[FetchErrors, Option[T]]
 
@@ -49,7 +49,7 @@ trait LMDB {
 
   def collect[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true)(using JsonEncoder[T], JsonDecoder[T]): IO[CollectErrors, List[T]]
 
-  //def stream[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(using JsonEncoder[T], JsonDecoder[T]): ZStream[Scope, CollectErrors, T]
+//  def stream[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(using JsonEncoder[T], JsonDecoder[T]): ZStream[Scope, StreamErrors, T]
 }
 
 object LMDB {
@@ -60,15 +60,15 @@ object LMDB {
 
   def collectionExists(name: CollectionName): ZIO[LMDB, StorageSystemError, Boolean] = ZIO.serviceWithZIO(_.collectionExists(name))
 
-  def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): ZIO[LMDB, CollectionAlreadExists | StorageSystemError, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionCreate(name))
+  def collectionCreate[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): ZIO[LMDB, CreateErrors, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionCreate(name))
 
-  def collectionAllocate(name: CollectionName):ZIO[LMDB, CollectionAlreadExists | StorageSystemError, Unit] = ZIO.serviceWithZIO(_.collectionAllocate(name))
+  def collectionAllocate(name: CollectionName):ZIO[LMDB, CreateErrors, Unit] = ZIO.serviceWithZIO(_.collectionAllocate(name))
 
-  def collectionGet[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): ZIO[LMDB, CollectionNotFound | StorageSystemError, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionGet(name))
+  def collectionGet[T](name: CollectionName)(using JsonEncoder[T], JsonDecoder[T]): ZIO[LMDB, GetErrors, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionGet(name))
 
-  def collectionSize(name: CollectionName): ZIO[LMDB, CollectionNotFound | StorageSystemError, Long] = ZIO.serviceWithZIO(_.collectionSize(name))
+  def collectionSize(name: CollectionName): ZIO[LMDB, SizeErrors, Long] = ZIO.serviceWithZIO(_.collectionSize(name))
 
-  def collectionClear(name: CollectionName): ZIO[LMDB, CollectionNotFound | StorageSystemError, Unit] = ZIO.serviceWithZIO(_.collectionClear(name))
+  def collectionClear(name: CollectionName): ZIO[LMDB, ClearErrors, Unit] = ZIO.serviceWithZIO(_.collectionClear(name))
 
   def fetch[T](collectionName: CollectionName, key: RecordKey)(using JsonEncoder[T], JsonDecoder[T]): ZIO[LMDB, FetchErrors, Option[T]] = ZIO.serviceWithZIO(_.fetch(collectionName, key))
 
@@ -84,8 +84,8 @@ object LMDB {
   def collect[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true)(using JsonEncoder[T], JsonDecoder[T]): ZIO[LMDB, CollectErrors, List[T]] =
     ZIO.serviceWithZIO(_.collect[T](collectionName, keyFilter, valueFilter))
 
-  //def stream[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(using JsonEncoder[T], JsonDecoder[T]): ZStream[Scope & LMDB, CollectErrors, T] = // TODO implement stream in LMDB service
-  //  ZStream.serviceWithZIO(_.stream(collectionName, keyFilter))
+//  def stream[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(using JsonEncoder[T], JsonDecoder[T]): ZStream[Scope & LMDB, StreamErrors, T] =
+//    ZStream.serviceWithZIO(_.stream(collectionName, keyFilter))
 
   val live: ZLayer[Scope & LMDBConfig, Any, LMDB] = ZLayer(ZIO.service[LMDBConfig].flatMap(LMDBLive.setup)).orDie
 }

@@ -15,22 +15,24 @@
  */
 package zio.lmdb
 
-import zio.*
+import zio._
 import zio.json.{JsonDecoder, JsonEncoder}
-import zio.lmdb.StorageUserError.*
+import zio.lmdb.StorageUserError._
 import zio.lmdb.StorageSystemError
+import zio.stream._
 
-/**
- * A helper class to simplify user experience by avoiding repeating collection name and data types
- *
- * @param name collection name
- * @param JsonEncoder[T]
- * @param JsonDecoder[T]
- * @tparam T the data class type for collection content
- */
+/** A helper class to simplify user experience by avoiding repeating collection name and data types
+  *
+  * @param name
+  *   collection name
+  * @param JsonEncoder[T]
+  * @param JsonDecoder[T]
+  * @tparam T
+  *   the data class type for collection content
+  */
 case class LMDBCollection[T](name: String, lmdb: LMDB)(using JsonEncoder[T], JsonDecoder[T]) {
 
-  def size(): IO[CollectionNotFound | StorageSystemError, Long] = lmdb.collectionSize(name)
+  def size(): IO[SizeErrors, Long] = lmdb.collectionSize(name)
 
   def fetch(key: RecordKey): IO[FetchErrors, Option[T]] = lmdb.fetch(name, key)
 
@@ -46,6 +48,6 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(using JsonEncoder[T], Jso
   def collect(keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true): IO[CollectErrors, List[T]] =
     lmdb.collect[T](name, keyFilter, valueFilter)
 
-  // def stream(keyFilter: RecordKey => Boolean = _ => true): ZStream[Scope, DatabaseNotFound | LMDBError, T] = //TODO implement stream in LMDB service
-  //    lmdb.stream(colName, keyFilter)
+//  def stream(keyFilter: RecordKey => Boolean = _ => true): ZStream[Scope, StreamErrors, T] =
+//    lmdb.stream(name, keyFilter)
 }

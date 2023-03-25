@@ -22,9 +22,13 @@ package object lmdb {
   type CollectionName = String
   type RecordKey      = String
 
-  type FetchErrors    = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type UpsertErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type DeleteErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type CollectErrors  = CollectionNotFound | JsonFailure | StorageSystemError
-
+  type SizeErrors    = CollectionNotFound | StorageSystemError
+  type ClearErrors   = CollectionNotFound | StorageSystemError
+  type GetErrors     = CollectionNotFound | StorageSystemError
+  type CreateErrors  = CollectionAlreadExists | StorageSystemError
+  type FetchErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
+  type UpsertErrors  = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
+  type DeleteErrors  = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
+  type CollectErrors = CollectionNotFound | JsonFailure | StorageSystemError
+  type StreamErrors  = CollectionNotFound | StorageSystemError
 }
