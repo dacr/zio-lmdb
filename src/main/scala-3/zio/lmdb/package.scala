@@ -22,6 +22,7 @@ package object lmdb {
   type CollectionName = String
   type RecordKey      = String
 
+  type KeyErrors     = OverSizedKey | StorageSystemError
   type SizeErrors    = CollectionNotFound | StorageSystemError
   type ClearErrors   = CollectionNotFound | StorageSystemError
   type GetErrors     = CollectionNotFound | StorageSystemError
@@ -30,5 +31,5 @@ package object lmdb {
   type UpsertErrors  = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
   type DeleteErrors  = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
   type CollectErrors = CollectionNotFound | JsonFailure | StorageSystemError
-  type StreamErrors  = CollectionNotFound | StorageSystemError
+  type StreamErrors  = CollectionNotFound | JsonFailure | StorageSystemError
 }
