@@ -77,6 +77,11 @@ When LVMDB is used as persistence store with recent JVM it requires some JVM opt
 --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 ```
 
+## Contributors :)
+
+- [François Armand](https://github.com/fanf) : for scala 2.13 support initiative
+
+
 [ZIOLMDBManager]:    https://github.com/dacr/zio-lmdb
 [ZIOLMDBManagerImg]: https://img.shields.io/maven-central/v/fr.janalyse/zio-lmdb_3.svg
 [ZIOLMDBManagerLnk]: https://mvnrepository.com/artifact/fr.janalyse/zio-lmdb
