@@ -20,13 +20,15 @@ import java.io.File
 import zio._
 
 case class LMDBConfig(
-  databasePath: File,
-  mapSize: Long = 100_000_000_000L,
-  maxCollections: Int = 10_000,
-  maxReaders: Int = 100,
-  fileSystemSynchronized: Boolean = true
+  databaseName: String,
+  databasesHome: Option[String],
+  fileSystemSynchronized: Boolean,
+  maxReaders: Int,
+  mapSize: BigInt,
+  maxCollections: Int
 )
 
+/*
 object LMDBConfig {
 
   /** Create a LMDBConfig without pain using the database Path .lmdb/name within $HOME or current directory if HOME is unset
@@ -62,3 +64,4 @@ object LMDBConfig {
   }
 
 }
+*/

@@ -52,6 +52,31 @@ trait LMDB {
 
 object LMDB {
 
+  val config: Config[LMDBConfig] = (
+    Config.string("databaseName").withDefault("default") ++
+      Config.string("databasesHome").optional ++
+      Config.boolean("fileSystemSynchronized").withDefault(false) ++
+      Config.int("maxReaders").withDefault(100) ++
+      Config.bigInt("mapSize").withDefault(BigInt(100_000_000_000L)) ++
+      Config.int("maxCollections").withDefault(10_000)
+  ).map { case (databaseName, databasesHome, fileSystemSynchronized, maxReaders, mapSize, maxCollections) =>
+    LMDBConfig(
+      databaseName = databaseName,
+      databasesHome = databasesHome,
+      fileSystemSynchronized = fileSystemSynchronized,
+      maxReaders = maxReaders,
+      mapSize = mapSize,
+      maxCollections = maxCollections
+    )
+  }
+
+  val live: ZLayer[Scope, Any, LMDB] = ZLayer.fromZIO(
+    for {
+      config <- ZIO.config(LMDB.config)
+      lmdb   <- LMDBLive.setup(config)
+    } yield lmdb
+  )
+
   def platformCheck(): ZIO[LMDB, StorageSystemError, Unit] = ZIO.serviceWithZIO(_.platformCheck())
 
   def collectionsAvailable(): ZIO[LMDB, StorageSystemError, List[CollectionName]] = ZIO.serviceWithZIO(_.collectionsAvailable())
@@ -85,5 +110,4 @@ object LMDB {
 //  def stream[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Scope & LMDB, StreamErrors, T] =
 //    ZStream.serviceWithZIO(_.stream(collectionName, keyFilter))
 
-  val live: ZLayer[Scope & LMDBConfig, Any, LMDB] = ZLayer(ZIO.service[LMDBConfig].flatMap(LMDBLive.setup)).orDie
 }

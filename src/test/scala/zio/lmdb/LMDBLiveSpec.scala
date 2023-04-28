@@ -32,11 +32,8 @@ object LMDBLiveSpec extends ZIOSpecDefault {
 
   val lmdbLayer = ZLayer.scoped(
     for {
-      scope <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
-      config = LMDBConfig(
-                 databasePath = scope.toFile,
-                 fileSystemSynchronized = false // For tests no need to be synchronized with FS
-               )
+      path <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
+      config = LMDBConfig(databaseName = "test", databasesHome = Some(path.toString), fileSystemSynchronized = false, maxReaders = 100, mapSize = BigInt(100_000_000_000L), maxCollections = 10_000)
       lmdb  <- LMDBLive.setup(config)
     } yield lmdb
   )
@@ -211,5 +208,5 @@ object LMDBLiveSpec extends ZIOSpecDefault {
 //      )
 //    }
     // -----------------------------------------------------------------------------
-  ).provide(lmdbLayer.orDie) @@ withLiveClock @@ withLiveRandom
+  ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom
 }

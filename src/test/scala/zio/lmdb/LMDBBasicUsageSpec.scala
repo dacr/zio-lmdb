@@ -20,17 +20,22 @@ import zio.test._
 import zio.json._
 import zio.nio.file.Files
 
-case class Record(name: String, age: Long)
-object Record {
-  //given JsonCodec[Record] = DeriveJsonCodec.gen
-  implicit val jsonCodecRecord: JsonCodec[Record] = DeriveJsonCodec.gen
-}
+case class Record(name: String, age: Long) derives JsonCodec
 
 object LMDBBasicUsageSpec extends ZIOSpecDefault {
-  val lmdbTestConfigLayer = ZLayer.scoped(
+  val lmdbLayer = ZLayer.scoped(
     for {
-      scope <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
-    } yield LMDBConfig(databasePath = scope.toFile)
+      path  <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
+      config = LMDBConfig(
+                 databaseName = "test",
+                 databasesHome = Some(path.toString),
+                 fileSystemSynchronized = false,
+                 maxReaders = 100,
+                 mapSize = BigInt(100_000_000_000L),
+                 maxCollections = 10_000
+               )
+      lmdb  <- LMDBLive.setup(config)
+    } yield lmdb
   )
 
   override def spec = suite("LMDB for ZIO as a service")(
@@ -51,5 +56,5 @@ object LMDBBasicUsageSpec extends ZIOSpecDefault {
         gotNothing.isEmpty
       )
     )
-  ).provide(LMDB.live, lmdbTestConfigLayer.orDie, Scope.default)
+  ).provide(lmdbLayer)
 }
