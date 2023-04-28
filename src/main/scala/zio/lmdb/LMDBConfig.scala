@@ -28,40 +28,6 @@ case class LMDBConfig(
   maxCollections: Int
 )
 
-/*
 object LMDBConfig {
-
-  /** Create a LMDBConfig without pain using the database Path .lmdb/name within $HOME or current directory if HOME is unset
-    * @param databaseName
-    *   database name which will be used as the destination directory name for storage purposes
-    * @param fileSystemSynchronized
-    * @return
-    *   a LMDB config
-    */
-  def build(
-    databaseName: String = "default",
-    fileSystemSynchronized: Boolean = true
-  ): IO[Exception, LMDBConfig] = {
-    for {
-      home             <- System.envOrElse("HOME", ".")
-      lmdbDatabasesHome = new File(home, ".lmdb")
-      databasePath      = new File(lmdbDatabasesHome, databaseName)
-      _                <- ZIO.attemptBlockingIO(databasePath.mkdirs())
-      config            = LMDBConfig(databasePath, fileSystemSynchronized = fileSystemSynchronized)
-    } yield config
-  }
-
-  /** Build a lmdb config layer
-    *
-    * @param databaseName
-    *   database name which will be used as the destination directory name for storage purposes
-    * @param fileSystemSynchronized
-    * @return
-    *   a LMDB config layer
-    */
-  def buildLayer(databaseName: String = "default", fileSystemSynchronized: Boolean = true): ULayer[LMDBConfig] = {
-    ZLayer.fromZIO(build(databaseName, fileSystemSynchronized)).orDie
-  }
-
+  val default = LMDBConfig(databaseName = "default", databasesHome = None, fileSystemSynchronized = false, maxReaders = 100, mapSize = BigInt(100_000_000_000L), maxCollections = 10_000)
 }
-*/

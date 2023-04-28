@@ -26,14 +26,7 @@ object LMDBBasicUsageSpec extends ZIOSpecDefault {
   val lmdbLayer = ZLayer.scoped(
     for {
       path  <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
-      config = LMDBConfig(
-                 databaseName = "test",
-                 databasesHome = Some(path.toString),
-                 fileSystemSynchronized = false,
-                 maxReaders = 100,
-                 mapSize = BigInt(100_000_000_000L),
-                 maxCollections = 10_000
-               )
+      config = LMDBConfig.default.copy(databasesHome = Some(path.toString))
       lmdb  <- LMDBLive.setup(config)
     } yield lmdb
   )

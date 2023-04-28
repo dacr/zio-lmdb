@@ -53,12 +53,12 @@ trait LMDB {
 object LMDB {
 
   val config: Config[LMDBConfig] = (
-    Config.string("databaseName").withDefault("default") ++
-      Config.string("databasesHome").optional ++
-      Config.boolean("fileSystemSynchronized").withDefault(false) ++
-      Config.int("maxReaders").withDefault(100) ++
-      Config.bigInt("mapSize").withDefault(BigInt(100_000_000_000L)) ++
-      Config.int("maxCollections").withDefault(10_000)
+    Config.string("databaseName").withDefault(LMDBConfig.default.databaseName) ++
+      Config.string("databasesHome").optional.withDefault(LMDBConfig.default.databasesHome) ++
+      Config.boolean("fileSystemSynchronized").withDefault(LMDBConfig.default.fileSystemSynchronized) ++
+      Config.int("maxReaders").withDefault(LMDBConfig.default.maxReaders) ++
+      Config.bigInt("mapSize").withDefault(LMDBConfig.default.mapSize) ++
+      Config.int("maxCollections").withDefault(LMDBConfig.default.maxCollections)
   ).map { case (databaseName, databasesHome, fileSystemSynchronized, maxReaders, mapSize, maxCollections) =>
     LMDBConfig(
       databaseName = databaseName,
