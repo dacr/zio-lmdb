@@ -11,24 +11,25 @@ scmInfo := Some(
   )
 )
 
-scalaVersion := "3.2.2"
+scalaVersion       := "3.2.2"
 crossScalaVersions := Seq("2.13.10", "3.2.2")
 
-
 lazy val versions = new {
-  val zio     = "2.0.13"
-  val zionio  = "2.0.1"
-  val ziojson = "0.5.0"
-  val lmdb    = "0.8.3"
+  val zio       = "2.0.13"
+  val zionio    = "2.0.1"
+  val ziojson   = "0.5.0"
+  val zioconfig = "4.0.0-RC14"
+  val lmdb      = "0.8.3"
 }
 
 libraryDependencies ++= Seq(
   "dev.zio"     %% "zio"                 % versions.zio,
   "dev.zio"     %% "zio-streams"         % versions.zio,
   "dev.zio"     %% "zio-json"            % versions.ziojson,
+  "dev.zio"     %% "zio-config"          % versions.zioconfig,
   "org.lmdbjava" % "lmdbjava"            % versions.lmdb,
   "dev.zio"     %% "zio-test"            % versions.zio    % Test,
-  //"dev.zio"     %% "zio-test-junit"      % versions.zio    % Test,
+  // "dev.zio"     %% "zio-test-junit"      % versions.zio    % Test,
   "dev.zio"     %% "zio-test-sbt"        % versions.zio    % Test,
   "dev.zio"     %% "zio-test-scalacheck" % versions.zio    % Test,
   "dev.zio"     %% "zio-nio"             % versions.zionio % Test

@@ -29,6 +29,22 @@ For a better understanding, this library use a slightly different vocabulary fro
   - only one simultaneous write access is possible within the same database 
 
 
+## Configuration
+
+Configuration is based on the standard ZIO config mechanism, the default configuration provider uses environnment variables
+or java properties to resolve this library configuration parameters.
+
+ 
+| Configuration key   | Environment variable | Description                                                    | Default value    |
+|---------------------|----------------------|----------------------------------------------------------------|------------------|
+| lmdb.name           | LMDB_NAME            | Database name, which will be also used as the directory name   | default          |
+| lmdb.home           | LMDB_HOME            | Where to store the database directory                          | $HOME/.lmdb      |
+| lmdb.sync           | LMDB_SYNC            | Synchronize the file system with all database write operations | false            |
+| lmdb.maxReaders     | LMDB_MAXREADERS      | The maximum number of readers                                  | 100              |
+| lmdb.maxCollections | LMDB_MAXCOLLECTIONS  | The maximum number of collections which can be created         | 10_000           |
+| lmdb.mapSize        | LMDB_MAPSIZE         | The maximum size of the whole database including metadata      | 100_000_000_000L |
+
+
 ## Usages example
 
 ```scala
@@ -51,9 +67,16 @@ test("basic usage")(
 )
 ```
 
+To run the previous logic, you'll have to provide the LMDB layer, two layers are available :
+- `LMDB.live` : Fully configurable using standard zio-config
+- `LMDB.liveWithDatabaseName("chosen-database-name")` : to override/force the database name
+  (quite useful when writing scala scripts)
+
 Code snippets, runnable using scala-cli :
-- [ZIO LMDB feeding with French town postal codes](https://gist.github.com/6d24baf827ae0c590133e0f27f1ef20b)
-- [ZIO LMDB simple example](https://gist.github.com/dcb8a11f095ef0a2a95c24701e6eb804)
+- [ZIO LMDB simple example (scala-3)](https://gist.github.com/dacr/dcb8a11f095ef0a2a95c24701e6eb804)
+- [ZIO LMDB simple example (scala-2)](https://gist.github.com/dacr/9d2c4171d1b1e7a40a244ef456725d25)
+- [ZIO LMDB feeding with French town postal codes](https://gist.github.com/dacr/6d24baf827ae0c590133e0f27f1ef20b)
+- [ZIO LMDB using custom configuration provider](https://gist.github.com/dacr/790df1705c7ec19ae2fe4098dad8d762)
 
 ZIO-LMDB based Applications :
 - [zwords][ZWORDS-CODE] which can be played [zwords game][ZWORDS-LIVE]  
