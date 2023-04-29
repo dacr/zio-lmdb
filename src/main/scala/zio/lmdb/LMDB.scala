@@ -19,8 +19,12 @@ package zio.lmdb
 import zio._
 import zio.json._
 import zio.stream.ZStream
+import zio.config._
 
 trait LMDB {
+
+  def databasePath: String
+
   def platformCheck(): IO[StorageSystemError, Unit]
 
   def collectionsAvailable(): IO[StorageSystemError, List[CollectionName]]
@@ -52,27 +56,45 @@ trait LMDB {
 
 object LMDB {
 
-  val config: Config[LMDBConfig] = (
-    Config.string("databaseName").withDefault(LMDBConfig.default.databaseName) ++
-      Config.string("databasesHome").optional.withDefault(LMDBConfig.default.databasesHome) ++
-      Config.boolean("fileSystemSynchronized").withDefault(LMDBConfig.default.fileSystemSynchronized) ++
-      Config.int("maxReaders").withDefault(LMDBConfig.default.maxReaders) ++
-      Config.bigInt("mapSize").withDefault(LMDBConfig.default.mapSize) ++
-      Config.int("maxCollections").withDefault(LMDBConfig.default.maxCollections)
-  ).map { case (databaseName, databasesHome, fileSystemSynchronized, maxReaders, mapSize, maxCollections) =>
-    LMDBConfig(
-      databaseName = databaseName,
-      databasesHome = databasesHome,
-      fileSystemSynchronized = fileSystemSynchronized,
-      maxReaders = maxReaders,
-      mapSize = mapSize,
-      maxCollections = maxCollections
-    )
-  }
+  val config: Config[LMDBConfig] = ((Config.string("name").withDefault(LMDBConfig.default.databaseName)
+    ?? "Database name, which will be also used as the directory name") ++
+    (Config.string("home").optional.withDefault(LMDBConfig.default.databasesHome)
+      ?? "Where to store the database directory") ++
+    (Config.boolean("sync").withDefault(LMDBConfig.default.fileSystemSynchronized)
+      ?? "Synchronize the file system with all database write operations") ++
+    (Config.int("maxReaders").withDefault(LMDBConfig.default.maxReaders)
+      ?? "The maximum number of readers") ++
+    (Config.int("maxCollections").withDefault(LMDBConfig.default.maxCollections)
+      ?? "The maximum number of collections which can be created") ++
+    (Config.bigInt("mapSize").withDefault(LMDBConfig.default.mapSize)
+      ?? "The maximum size of the whole database including metadata"))
+    .to[LMDBConfig]
+    .nested("lmdb")
 
+  /**
+   * Default live implementation using the current configuration provider
+   */
   val live: ZLayer[Scope, Any, LMDB] = ZLayer.fromZIO(
     for {
       config <- ZIO.config(LMDB.config)
+      // doc     = generateDocs(LMDB.config).toTable.toGithubFlavouredMarkdown
+      // _      <- ZIO.logInfo(s"Configuration documentation:\n$doc")
+      _      <- ZIO.logInfo(s"Configuration : $config")
+      lmdb   <- LMDBLive.setup(config)
+    } yield lmdb
+  )
+
+  /**
+   * Default live implementation using the current configuration provider but overriding any configured database name with the provided one
+   * @param name database name to use
+   * @return
+   */
+  def liveWithDatabaseName(name: String): ZLayer[Scope, Any, LMDB] = ZLayer.fromZIO(
+    for {
+      config <- ZIO.config(LMDB.config).map(_.copy(databaseName = name))
+      // doc     = generateDocs(LMDB.config).toTable.toGithubFlavouredMarkdown
+      // _      <- Console.printLine(s"Configuration documentation:\n$doc")
+      _      <- ZIO.logInfo(s"Configuration : $config")
       lmdb   <- LMDBLive.setup(config)
     } yield lmdb
   )

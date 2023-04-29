@@ -20,7 +20,10 @@ import zio.test._
 import zio.json._
 import zio.nio.file.Files
 
-case class Record(name: String, age: Long) derives JsonCodec
+case class Record(name: String, age: Long)
+object Record {
+  implicit val codec: JsonCodec[Record] = DeriveJsonCodec.gen
+}
 
 object LMDBBasicUsageSpec extends ZIOSpecDefault {
   val lmdbLayer = ZLayer.scoped(

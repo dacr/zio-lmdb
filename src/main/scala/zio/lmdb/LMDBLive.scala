@@ -41,7 +41,8 @@ import zio.lmdb.StorageSystemError._
 class LMDBLive(
   env: Env[ByteBuffer],
   openedCollectionDbisRef: Ref[Map[String, Dbi[ByteBuffer]]],
-  reentrantLock: TReentrantLock
+  reentrantLock: TReentrantLock,
+  val databasePath: String
 ) extends LMDB {
   val charset = StandardCharsets.UTF_8
 
@@ -444,14 +445,15 @@ object LMDBLive {
     for {
       databasesHome        <- ZIO
                                 .from(config.databasesHome)
-                                .orElse(System.envOrElse("HOME", ".").map(home => home + File.pathSeparator + ".lmdb"))
-      databasePath          = File(databasesHome, config.databaseName)
+                                .orElse(System.envOrElse("HOME", ".").map(home => home + File.separator + ".lmdb"))
+      databasePath          = new File(databasesHome, config.databaseName)
+      _                    <- ZIO.logInfo(s"LMDB databasePath=$databasePath")
       _                    <- ZIO.attemptBlockingIO(databasePath.mkdirs())
       environment          <- ZIO.acquireRelease(
                                 ZIO.attemptBlocking(lmdbCreateEnv(config, databasePath))
                               )(env => ZIO.attemptBlocking(env.close).ignoreLogged)
       openedCollectionDbis <- Ref.make[Map[String, Dbi[ByteBuffer]]](Map.empty)
       reentrantLock        <- TReentrantLock.make.commit
-    } yield new LMDBLive(environment, openedCollectionDbis, reentrantLock)
+    } yield new LMDBLive(environment, openedCollectionDbis, reentrantLock, databasePath.toString)
   }
 }

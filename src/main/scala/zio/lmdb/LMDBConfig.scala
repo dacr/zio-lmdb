@@ -24,10 +24,18 @@ case class LMDBConfig(
   databasesHome: Option[String],
   fileSystemSynchronized: Boolean,
   maxReaders: Int,
-  mapSize: BigInt,
-  maxCollections: Int
+  maxCollections: Int,
+  mapSize: BigInt
 )
 
 object LMDBConfig {
-  val default = LMDBConfig(databaseName = "default", databasesHome = None, fileSystemSynchronized = false, maxReaders = 100, mapSize = BigInt(100_000_000_000L), maxCollections = 10_000)
+  val default =
+    LMDBConfig(
+      databaseName = "default",
+      databasesHome = None,
+      fileSystemSynchronized = false,
+      maxReaders = 100,
+      mapSize = BigInt(100_000_000_000L),
+      maxCollections = 10_000
+    )
 }
