@@ -77,6 +77,7 @@ Code snippets, runnable using scala-cli :
 - [ZIO LMDB simple example (scala-2)](https://gist.github.com/dacr/9d2c4171d1b1e7a40a244ef456725d25)
 - [ZIO LMDB feeding with French town postal codes](https://gist.github.com/dacr/6d24baf827ae0c590133e0f27f1ef20b)
 - [ZIO LMDB using custom configuration provider](https://gist.github.com/dacr/790df1705c7ec19ae2fe4098dad8d762)
+- [extract photos records from elasticsearch and save them into LMDB](https://gist.github.com/dacr/6ea121f251ad316a64657cbe78085ab7)
 
 ZIO-LMDB based Applications :
 - [zwords][ZWORDS-CODE] which can be played [zwords game][ZWORDS-LIVE]
