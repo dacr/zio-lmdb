@@ -79,7 +79,8 @@ Code snippets, runnable using scala-cli :
 - [ZIO LMDB using custom configuration provider](https://gist.github.com/dacr/790df1705c7ec19ae2fe4098dad8d762)
 
 ZIO-LMDB based Applications :
-- [zwords][ZWORDS-CODE] which can be played [zwords game][ZWORDS-LIVE]  
+- [zwords][ZWORDS-CODE] which can be played [zwords game][ZWORDS-LIVE]
+- [code-examples-manager][CEM] zio-lmdb integration is in progress...
 
 ## Operating lmdb databases
 
@@ -116,3 +117,4 @@ When LVMDB is used as persistence store with recent JVM it requires some JVM opt
 [UUID]: https://en.wikipedia.org/wiki/Universally_unique_identifier
 [ZWORDS-CODE]: https://github.com/dacr/zwords
 [ZWORDS-LIVE]: https://zwords.mapland.fr/
+[CEM]: https://github.com/dacr/code-examples-manager
