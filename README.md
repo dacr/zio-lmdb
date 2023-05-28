@@ -72,7 +72,7 @@ To run the previous logic, you'll have to provide the LMDB layer, two layers are
 - `LMDB.liveWithDatabaseName("chosen-database-name")` : to override/force the database name
   (quite useful when writing scala scripts)
 
-Code snippets, runnable using scala-cli :
+### Code snippets, runnable using scala-cli
 - [ZIO LMDB simple example (scala-3)](https://gist.github.com/dacr/dcb8a11f095ef0a2a95c24701e6eb804)
 - [ZIO LMDB simple example (scala-2)](https://gist.github.com/dacr/9d2c4171d1b1e7a40a244ef456725d25)
 - [ZIO LMDB feeding with French town postal codes](https://gist.github.com/dacr/6d24baf827ae0c590133e0f27f1ef20b)
@@ -80,7 +80,7 @@ Code snippets, runnable using scala-cli :
 - [Extract photos records from elasticsearch and save them into LMDB](https://gist.github.com/dacr/6ea121f251ad316a64657cbe78085ab7)
 - [Export code examples and executions results from lmdb to elastisearch](https://gist.github.com/dacr/f25da8222b2ac644c3195c5982b7367e)
 
-ZIO-LMDB based Applications :
+### ZIO-LMDB based Applications
 - [zwords][ZWORDS-CODE] which can be played [zwords game][ZWORDS-LIVE]
 - [code-examples-manager][CEM] lmdb used for caching and data sharing
 
