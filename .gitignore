@@ -8,6 +8,8 @@ project/target
 .bsp/
 .vscode/
 .idea/
+.scala-build/
+project/metals.sbt
 
 # application related
 lmdb-test-data/
