@@ -34,6 +34,8 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[
 
   def size(): IO[SizeErrors, Long] = lmdb.collectionSize(name)
 
+  def clear(): IO[ClearErrors, Unit] = lmdb.collectionClear(name)
+
   def fetch(key: RecordKey): IO[FetchErrors, Option[T]] = lmdb.fetch(name, key)
 
   def upsert(key: RecordKey, modifier: Option[T] => T): IO[UpsertErrors, UpsertState[T]] =
