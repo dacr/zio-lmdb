@@ -48,23 +48,38 @@ or java properties to resolve this library configuration parameters.
 ## Usages example
 
 ```scala
-test("basic usage")(
-  for {
-    collection        <- LMDB.collectionCreate[Record]("example")
-    record             = Record("John Doe", 42)
-    recordId          <- Random.nextUUID.map(_.toString)
-    updatedState      <- collection.upsert(recordId, previousRecord => record)
-    gotten            <- collection.fetch(recordId).some
-    deletedRecord     <- collection.delete(recordId)
-    gotNothing        <- collection.fetch(recordId)
-  } yield assertTrue(
-    updateStated.previous.isEmpty,
-    updateStated.current == record,
-    gotten == record,
-    deletedRecord.contains(record),
-    gotNothing.isEmpty
-  )
-)
+//> using scala  "3.3.0"
+//> using dep "fr.janalyse::zio-lmdb:1.1.0"
+//> using javaOpt "--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED"
+
+import zio.*, zio.lmdb.*, zio.json.*
+import java.io.File, java.util.UUID, java.time.OffsetDateTime
+
+case class Record(uuid: UUID,name: String,age: Int,addedOn: OffsetDateTime) derives JsonCodec
+
+object SimpleExample extends ZIOAppDefault {
+  override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-data-simple-example"), zio.Scope.default)
+
+  val collectionName = "examples"
+  val example        = for {
+    _         <- LMDB.collectionCreate[Record](collectionName).ignore
+    examples  <- LMDB.collectionGet[Record](collectionName)
+    recordId  <- Random.nextUUID
+    dateTime  <- Clock.currentDateTime
+    record     = Record(recordId, "John Doe", 42, dateTime)
+    _         <- examples.upsertOverwrite(recordId.toString, record)
+    gotten    <- examples.fetch(recordId.toString).some
+    collected <- examples.collect()
+    _         <- Console.printLine(s"collection $collectionName contains ${collected.size} records")
+    _         <- ZIO.foreach(collected)(record => Console.printLine(record))
+    lmdb      <- ZIO.service[LMDB]
+    _         <- Console.printLine("""LMDB standard tools can be used to manage the database content : sudo apt-get install lmdb-utils""")
+    _         <- Console.printLine(s"""To get some statistics     : mdb_stat -s $collectionName ${lmdb.databasePath}/""")
+    _         <- Console.printLine(s"""To dump collection content : mdb_dump -p -s $collectionName ${lmdb.databasePath}/""")
+  } yield ()
+}
+
+SimpleExample.main(Array.empty)
 ```
 
 To run the previous logic, you'll have to provide the LMDB layer, two layers are available :

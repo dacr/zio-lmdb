@@ -1,23 +1,24 @@
+# build tools related
+target/
+project/target
+
+# IDE related
+.metals/
+.bloop/
+.bsp/
+.vscode/
+.idea/
+
+# application related
+lmdb-test-data/
+
+# temporary files
 .DS_Store/
 *~
 .~*
-.idea/
-.bsp/
 nohup.out
 *.swp
 *.iml
-target/
-plot*.html
 test*.log
 *.tmp
 null
-
-project/target
-.metals/
-
-tmp-*.gif
-tmp-*.png
-
-private-application*.conf
-
-lmdb-test-data/
