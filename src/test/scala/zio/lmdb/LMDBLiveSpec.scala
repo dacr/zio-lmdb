@@ -111,19 +111,36 @@ object LMDBLiveSpec extends ZIOSpecDefault {
           gotten        <- col.fetch(id)
           _             <- col.upsertOverwrite(id, updatedValue)
           gottenUpdated <- col.fetch(id)
-          listed1       <- col.collect()
-          // listed2       <- ZIO.scoped(col.stream(colName).runCollect)
+          listed        <- col.collect()
           _             <- col.delete(id)
           isFailed      <- col.fetch(id).some.isFailure
         } yield assertTrue(
           gotten == Some(value),
           gottenUpdated == Some(updatedValue),
-          listed1.contains(updatedValue),
-          // listed2.contains(updatedValue),
+          listed.contains(updatedValue),
+          listed.size == 1,
           isFailed
         ).label(s"for key $id")
       }
     } @@ tag("slow") @@ samples(50),
+    // -----------------------------------------------------------------------------
+    test("clear collection content") {
+      for {
+        lmdb       <- ZIO.service[LMDBLive]
+        colName    <- randomCollectionName
+        col        <- lmdb.collectionCreate[Str](colName)
+        id1        <- randomUUID
+        id2        <- randomUUID
+        _          <- col.upsertOverwrite(id1, Str("value1"))
+        _          <- col.upsertOverwrite(id2, Str("value2"))
+        sizeBefore <- col.size()
+        _          <- col.clear()
+        sizeAfter  <- col.size()
+      } yield assertTrue(
+        sizeBefore == 2,
+        sizeAfter == 0
+      )
+    },
     // -----------------------------------------------------------------------------
     test("many overwrite updates") {
       for {

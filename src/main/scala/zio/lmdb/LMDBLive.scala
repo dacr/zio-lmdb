@@ -183,12 +183,17 @@ class LMDBLive(
     * @return
     */
   override def collectionClear(colName: CollectionName): IO[ClearErrors, Unit] = {
-    def collectionClearLogic(colDbi: Dbi[ByteBuffer]): ZIO[Any, StorageSystemError, Unit] = {
+    def collectionClearLogic(colDbi: Dbi[ByteBuffer]): ZIO[Any, ClearErrors, Unit] = {
       reentrantLock.withWriteLock(
         withWriteTransaction(colName) { txn =>
-          ZIO
-            .attemptBlocking(colDbi.drop(txn))
-            .mapError(err => InternalError(s"Couldn't clear $colName", Some(err)))
+          for {
+            _ <- ZIO
+                   .attemptBlocking(colDbi.drop(txn))
+                   .mapError(err => InternalError(s"Couldn't clear $colName", Some(err)))
+            _ <- ZIO
+                   .attemptBlocking(txn.commit())
+                   .mapError[ClearErrors](err => InternalError("Couldn't commit transaction", Some(err)))
+          } yield ()
         }
       )
     }
