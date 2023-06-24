@@ -2,7 +2,7 @@ organization := "fr.janalyse"
 name         := "zio-lmdb"
 homepage     := Some(new URL("https://github.com/dacr/zio-lmdb"))
 
-licenses += "Apache 2" -> url(s"https://www.apache.org/licenses/LICENSE-2.0.txt")
+licenses += "NON-AI-APACHE2" -> url(s"https://github.com/non-ai-licenses/non-ai-licenses/blob/main/NON-AI-APACHE2")
 
 scmInfo := Some(
   ScmInfo(

@@ -49,7 +49,7 @@ or java properties to resolve this library configuration parameters.
 
 ```scala
 //> using scala  "3.3.0"
-//> using dep "fr.janalyse::zio-lmdb:1.1.0"
+//> using dep "fr.janalyse::zio-lmdb:1.2.0"
 //> using javaOpt "--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED"
 
 import zio.*, zio.lmdb.*, zio.json.*

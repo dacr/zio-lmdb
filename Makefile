@@ -1,5 +1,7 @@
-all: test
+all: readme-test unit-tests
 
-test:
+unit-tests:
 	sbt test
+
+readme-test:
 	scala-cli README.md
