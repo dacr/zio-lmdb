@@ -40,10 +40,10 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[
 
   def contains(key: RecordKey): IO[ContainsErrors, Boolean] = lmdb.contains(name, key)
 
-  def upsert(key: RecordKey, modifier: Option[T] => T): IO[UpsertErrors, UpsertState[T]] =
+  def upsert(key: RecordKey, modifier: Option[T] => T): IO[UpsertErrors, Unit] =
     lmdb.upsert[T](name, key, modifier)
 
-  def upsertOverwrite(key: RecordKey, document: T): IO[UpsertErrors, UpsertState[T]] =
+  def upsertOverwrite(key: RecordKey, document: T): IO[UpsertErrors, Unit] =
     lmdb.upsertOverwrite[T](name, key, document)
 
   def delete(key: RecordKey): IO[DeleteErrors, Option[T]] =

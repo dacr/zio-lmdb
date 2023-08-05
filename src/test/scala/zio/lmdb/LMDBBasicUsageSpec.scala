@@ -40,14 +40,12 @@ object LMDBBasicUsageSpec extends ZIOSpecDefault {
         collection    <- LMDB.collectionCreate[Record]("example")
         record         = Record("John Doe", 42)
         recordId      <- Random.nextUUID.map(_.toString)
-        updatedState  <- collection.upsert(recordId, previousRecord => record)
+        _             <- collection.upsert(recordId, previousRecord => record)
         exists        <- collection.contains(recordId)
         gotten        <- collection.fetch(recordId).some
         deletedRecord <- collection.delete(recordId)
         gotNothing    <- collection.fetch(recordId)
       } yield assertTrue(
-        updatedState.previous.isEmpty,
-        updatedState.current == record,
         gotten == record,
         deletedRecord.contains(record),
         gotNothing.isEmpty,
