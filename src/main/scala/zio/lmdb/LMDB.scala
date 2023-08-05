@@ -43,6 +43,8 @@ trait LMDB {
 
   def fetch[T](collectionName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[T]]
 
+  def contains(collectionName: CollectionName, key: RecordKey): IO[ContainsErrors, Boolean]
+
   def upsertOverwrite[T](collectionName: CollectionName, key: RecordKey, document: T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, UpsertState[T]]
 
   def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, UpsertState[T]]
@@ -71,9 +73,8 @@ object LMDB {
     .to[LMDBConfig]
     .nested("lmdb")
 
-  /**
-   * Default live implementation using the current configuration provider
-   */
+  /** Default live implementation using the current configuration provider
+    */
   val live: ZLayer[Scope, Any, LMDB] = ZLayer.fromZIO(
     for {
       config <- ZIO.config(LMDB.config)
@@ -84,11 +85,11 @@ object LMDB {
     } yield lmdb
   )
 
-  /**
-   * Default live implementation using the current configuration provider but overriding any configured database name with the provided one
-   * @param name database name to use
-   * @return
-   */
+  /** Default live implementation using the current configuration provider but overriding any configured database name with the provided one
+    * @param name
+    *   database name to use
+    * @return
+    */
   def liveWithDatabaseName(name: String): ZLayer[Scope, Any, LMDB] = ZLayer.fromZIO(
     for {
       config <- ZIO.config(LMDB.config).map(_.copy(databaseName = name))
@@ -116,6 +117,8 @@ object LMDB {
   def collectionClear(name: CollectionName): ZIO[LMDB, ClearErrors, Unit] = ZIO.serviceWithZIO(_.collectionClear(name))
 
   def fetch[T](collectionName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, FetchErrors, Option[T]] = ZIO.serviceWithZIO(_.fetch(collectionName, key))
+
+  def contains(collectionName: CollectionName, key: RecordKey): ZIO[LMDB, ContainsErrors, Boolean] = ZIO.serviceWithZIO(_.contains(collectionName, key))
 
   def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, UpsertErrors, UpsertState[T]] =
     ZIO.serviceWithZIO(_.upsert[T](collectionName, key, modifier))

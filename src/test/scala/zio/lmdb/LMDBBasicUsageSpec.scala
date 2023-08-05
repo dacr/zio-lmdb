@@ -41,6 +41,7 @@ object LMDBBasicUsageSpec extends ZIOSpecDefault {
         record         = Record("John Doe", 42)
         recordId      <- Random.nextUUID.map(_.toString)
         updatedState  <- collection.upsert(recordId, previousRecord => record)
+        exists        <- collection.contains(recordId)
         gotten        <- collection.fetch(recordId).some
         deletedRecord <- collection.delete(recordId)
         gotNothing    <- collection.fetch(recordId)
@@ -49,7 +50,8 @@ object LMDBBasicUsageSpec extends ZIOSpecDefault {
         updatedState.current == record,
         gotten == record,
         deletedRecord.contains(record),
-        gotNothing.isEmpty
+        gotNothing.isEmpty,
+        exists
       )
     )
   ).provide(lmdbLayer)

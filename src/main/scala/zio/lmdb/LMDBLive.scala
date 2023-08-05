@@ -281,6 +281,23 @@ class LMDBLive(
     } yield result
   }
 
+  /** check if key exists in the collection
+    */
+  override def contains(colName: CollectionName, key: RecordKey): IO[ContainsErrors, Boolean] = {
+    def containsLogic(colDbi: Dbi[ByteBuffer]): ZIO[Any, ContainsErrors, Boolean] = {
+      withReadTransaction(colName) { txn =>
+        for {
+          key   <- makeKeyByteBuffer(key)
+          found <- ZIO.attemptBlocking(Option(colDbi.get(txn, key))).mapError[ContainsErrors](err => InternalError(s"Couldn't check $key on $colName", Some(err)))
+        } yield found.isDefined
+      }
+    }
+    for {
+      db     <- getCollectionDbi(colName)
+      result <- containsLogic(db)
+    } yield result
+  }
+
   /** overwrite or insert a document
     * @param key
     * @param document
@@ -312,7 +329,7 @@ class LMDBLive(
             valueBuffer    <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(jsonDocBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for json value", Some(err)))
             _              <- ZIO.attemptBlocking(valueBuffer.put(jsonDocBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
             _              <- ZIO.attemptBlocking(collectionDbi.put(txn, key, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $key into $colName", Some(err)))
-            _              <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit upsertOverwrite $key into $colName", Some(err)))
+            _              <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit upsert $key into $colName", Some(err)))
           } yield UpsertState(previous = mayBeDocBefore, current = docAfter)
         }
       )

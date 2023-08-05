@@ -99,6 +99,29 @@ object LMDBLiveSpec extends ZIOSpecDefault {
       } yield assertTrue(isFailed).label(s"for key $id")
     ),
     // -----------------------------------------------------------------------------
+    test("check key existence")(
+      for {
+        colName <- randomCollectionName
+        id      <- randomUUID
+        col     <- LMDB.collectionCreate[Str](colName)
+        _       <- col.upsertOverwrite(id, Str("some data"))
+        result  <- col.contains(id)
+      } yield assertTrue(
+        result == true
+      ).label(s"for key $id")
+    ),
+    // -----------------------------------------------------------------------------
+    test("check key non existence")(
+      for {
+        colName <- randomCollectionName
+        id      <- randomUUID
+        col     <- LMDB.collectionCreate[Str](colName)
+        result  <- col.contains(id)
+      } yield assertTrue(
+        result == false
+      ).label(s"for key $id")
+    ),
+    // -----------------------------------------------------------------------------
     test("basic CRUDL operations") {
       check(keygen, valuegen, valuegen) { (id, data1, data2) =>
         val value        = Str(data1)

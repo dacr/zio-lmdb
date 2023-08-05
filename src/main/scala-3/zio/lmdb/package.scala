@@ -28,6 +28,7 @@ package object lmdb {
   type GetErrors     = CollectionNotFound | StorageSystemError
   type CreateErrors  = CollectionAlreadExists | StorageSystemError
   type FetchErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
+  type ContainsErrors  = OverSizedKey | CollectionNotFound | StorageSystemError
   type UpsertErrors  = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
   type DeleteErrors  = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
   type CollectErrors = CollectionNotFound | JsonFailure | StorageSystemError

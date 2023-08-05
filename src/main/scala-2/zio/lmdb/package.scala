@@ -20,14 +20,15 @@ package object lmdb {
   type CollectionName = String
   type RecordKey      = String
 
-  type KeyErrors     = LmdbError
-  type SizeErrors    = LmdbError
-  type ClearErrors   = LmdbError
-  type GetErrors     = LmdbError
-  type CreateErrors  = LmdbError
-  type FetchErrors   = LmdbError
-  type UpsertErrors  = LmdbError
-  type DeleteErrors  = LmdbError
-  type CollectErrors = LmdbError
-  type StreamErrors  = LmdbError
+  type KeyErrors      = LmdbError
+  type SizeErrors     = LmdbError
+  type ClearErrors    = LmdbError
+  type GetErrors      = LmdbError
+  type CreateErrors   = LmdbError
+  type FetchErrors    = LmdbError
+  type ContainsErrors = LmdbError
+  type UpsertErrors   = LmdbError
+  type DeleteErrors   = LmdbError
+  type CollectErrors  = LmdbError
+  type StreamErrors   = LmdbError
 }

@@ -38,6 +38,8 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[
 
   def fetch(key: RecordKey): IO[FetchErrors, Option[T]] = lmdb.fetch(name, key)
 
+  def contains(key: RecordKey): IO[ContainsErrors, Boolean] = lmdb.contains(name, key)
+
   def upsert(key: RecordKey, modifier: Option[T] => T): IO[UpsertErrors, UpsertState[T]] =
     lmdb.upsert[T](name, key, modifier)
 
