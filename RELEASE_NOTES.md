@@ -2,7 +2,7 @@
 
 ## 1.3.0 - 2023-08-05
 
-- `UpsertOverwrite` now doesn't care about the json definition of the old value (#6)
+- `UpsertOverwrite` now doesn't care about the json definition of the previous stored value (#6)
 - Change `upsert` & `upsertOverwrite` return type (#12)
     - `Unit` instead of `UpsertState`
     - `UpsertState` data type has been removed
