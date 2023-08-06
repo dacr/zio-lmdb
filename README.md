@@ -49,7 +49,7 @@ or java properties to resolve this library configuration parameters.
 
 ```scala
 //> using scala  "3.3.0"
-//> using dep "fr.janalyse::zio-lmdb:1.2.0"
+//> using dep "fr.janalyse::zio-lmdb:1.3.0"
 //> using javaOpt "--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED"
 
 import zio.*, zio.lmdb.*, zio.json.*
@@ -87,17 +87,18 @@ To run the previous logic, you'll have to provide the LMDB layer, two layers are
 - `LMDB.liveWithDatabaseName("chosen-database-name")` : to override/force the database name
   (quite useful when writing scala scripts)
 
-### Code snippets, runnable using scala-cli
+### ZIO-LMDB based Applications
+- [sotohp - photos management][SOTOHP] which uses zio-lmdb intensively
+- [code-examples-manager - snippets/gists management][CEM] lmdb used for caching and data sharing
+- [zwords - wordle like game][ZWORDS-CODE] which can be played [zwords game][ZWORDS-LIVE]
+
+### Code snippets using ZIO-LMDB, runnable with [scala-cli][SCL]
 - [ZIO LMDB simple example (scala-3)](https://gist.github.com/dacr/dcb8a11f095ef0a2a95c24701e6eb804)
 - [ZIO LMDB simple example (scala-2)](https://gist.github.com/dacr/9d2c4171d1b1e7a40a244ef456725d25)
 - [ZIO LMDB feeding with French town postal codes](https://gist.github.com/dacr/6d24baf827ae0c590133e0f27f1ef20b)
 - [ZIO LMDB using custom configuration provider](https://gist.github.com/dacr/790df1705c7ec19ae2fe4098dad8d762)
 - [Extract photos records from elasticsearch and save them into LMDB](https://gist.github.com/dacr/6ea121f251ad316a64657cbe78085ab7)
 - [Export code examples and executions results from lmdb to elastisearch](https://gist.github.com/dacr/f25da8222b2ac644c3195c5982b7367e)
-
-### ZIO-LMDB based Applications
-- [zwords][ZWORDS-CODE] which can be played [zwords game][ZWORDS-LIVE]
-- [code-examples-manager][CEM] lmdb used for caching and data sharing
 
 ## Operating lmdb databases
 
@@ -135,3 +136,5 @@ When LVMDB is used as persistence store with recent JVM it requires some JVM opt
 [ZWORDS-CODE]: https://github.com/dacr/zwords
 [ZWORDS-LIVE]: https://zwords.mapland.fr/
 [CEM]: https://github.com/dacr/code-examples-manager
+[SOTOHP]: https://github.com/dacr/sotohp
+[SCL]: https://scala-cli.virtuslab.org/
