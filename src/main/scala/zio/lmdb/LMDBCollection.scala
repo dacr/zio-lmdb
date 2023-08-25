@@ -52,6 +52,6 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[
   def collect(keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true): IO[CollectErrors, List[T]] =
     lmdb.collect[T](name, keyFilter, valueFilter)
 
-//  def stream(keyFilter: RecordKey => Boolean = _ => true): ZStream[Scope, StreamErrors, T] =
-//    lmdb.stream(name, keyFilter)
+  def stream(keyFilter: RecordKey => Boolean = _ => true): ZStream[Any, StreamErrors, T] =
+    lmdb.stream(name, keyFilter)
 }

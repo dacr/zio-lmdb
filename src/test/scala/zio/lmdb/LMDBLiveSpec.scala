@@ -234,19 +234,19 @@ object LMDBLiveSpec extends ZIOSpecDefault {
         collected.size == count,
         gottenSize == count
       )
-    }
+    },
     // -----------------------------------------------------------------------------
-//    test("stream collection content") {
-//      var count = limit
-//      for {
-//        colName       <- randomCollectionName
-//        col           <- LMDB.collectionCreate(colName)
-//        _             <- ZIO.foreach(1.to(count))(num => col.upsertOverwrite(s"id#$num", Num(num)))
-//        returnedCount <- ZIO.scoped(col.stream().filter(_.value.intValue() % 2 == 0).runCount)
-//      } yield assertTrue(
-//        returnedCount.toInt == count / 2
-//      )
-//    }
+    test("stream collection content") {
+      var count = limit
+      for {
+        colName       <- randomCollectionName
+        col           <- LMDB.collectionCreate[Num](colName)
+        _             <- ZIO.foreach(1.to(count))(num => col.upsertOverwrite(s"id#$num", Num(num)))
+        returnedCount <- col.stream().filter(_.value.intValue() % 2 == 0).runCount
+      } yield assertTrue(
+        returnedCount.toInt == count / 2
+      )
+    }
     // -----------------------------------------------------------------------------
   ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom
 }

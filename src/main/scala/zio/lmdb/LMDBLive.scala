@@ -418,12 +418,12 @@ class LMDBLive(
     }
   }
 
-  def stream[T](dbName: String, keyFilter: String => Boolean = _ => true)(implicit jd: JsonDecoder[T]): ZStream[Scope, StreamErrors, T] = {
+  def stream[T](colName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Any, StreamErrors, T] = {
     def streamLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, T]] = for {
       txn      <- ZIO.acquireRelease(
                     ZIO
                       .attemptBlocking(env.txnRead())
-                      .mapError(err => InternalError(s"Couldn't acquire read transaction on $dbName", Some(err)))
+                      .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
                   )(txn =>
                     ZIO
                       .attemptBlocking(txn.close())
@@ -432,7 +432,7 @@ class LMDBLive(
       iterable <- ZIO.acquireRelease(
                     ZIO
                       .attemptBlocking(colDbi.iterate(txn, KeyRange.all()))
-                      .mapError(err => InternalError(s"Couldn't acquire iterable on $dbName", Some(err)))
+                      .mapError(err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
                   )(cursor =>
                     ZIO
                       .attemptBlocking(cursor.close())
@@ -443,18 +443,18 @@ class LMDBLive(
       .filter { case (key, value) => keyFilter(key) }
       .mapZIO { case (key, value) => ZIO.from(value.fromJson[T]).mapError(err => JsonFailure(err)) }
       .mapError {
-        case err: Throwable   => InternalError(s"Couldn't stream from $dbName", Some(err))
+        case err: Throwable   => InternalError(s"Couldn't stream from $colName", Some(err))
         case err: JsonFailure => err
       }
 
     val result =
       for {
-        db     <- getCollectionDbi(dbName)
+        db     <- getCollectionDbi(colName)
         _      <- reentrantLock.readLock
         stream <- streamLogic(db)
       } yield stream
 
-    ZStream.unwrap(result)
+    ZStream.unwrapScoped(result) // TODO not sure this is the good way ???
   }
 
 }
