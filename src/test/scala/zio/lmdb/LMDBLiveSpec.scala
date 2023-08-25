@@ -41,7 +41,7 @@ object LMDBLiveSpec extends ZIOSpecDefault {
   val keygen   = stringBounded(1, 510)(asciiChar)
   val valuegen = stringBounded(0, 1024)(asciiChar)
 
-  val limit = 10_000
+  val limit = 30_000
 
   val randomUUID = Random.nextUUID.map(_.toString)
 
@@ -203,8 +203,9 @@ object LMDBLiveSpec extends ZIOSpecDefault {
         case Some(num) => Num(num.value.intValue() + 1)
       }
 
-      val colCount = if (limit < 1000) 5 else 100
-      val max      = limit
+      val localLimit = 10_000
+      val colCount = if (localLimit < 1000) 5 else 100
+      val max      = localLimit
 
       for {
         id               <- randomUUID
@@ -237,7 +238,7 @@ object LMDBLiveSpec extends ZIOSpecDefault {
     },
     // -----------------------------------------------------------------------------
     test("stream collection content") {
-      var count = limit
+      val count = limit
       for {
         colName       <- randomCollectionName
         col           <- LMDB.collectionCreate[Num](colName)
