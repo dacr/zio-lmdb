@@ -1,5 +1,9 @@
 # ZIO-LMDB RELEASE NOTES
 
+## 1.4.0 - 2023-08-25
+
+- Add stream operations (#13)
+
 ## 1.3.0 - 2023-08-05
 
 - `UpsertOverwrite` now doesn't care about the json definition of the previous stored value (#6)
