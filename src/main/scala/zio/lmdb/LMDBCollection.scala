@@ -103,15 +103,23 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[
   def collect(keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true): IO[CollectErrors, List[T]] =
     lmdb.collect[T](name, keyFilter, valueFilter)
 
-  /** Stream collection content, use keyFilter to apply filtering before record deserialization.
+  /** Stream collection records, use keyFilter to apply filtering before record deserialization.
     *
     * @param keyFilter
     *   filter lambda to select only the keys you want, default is no filter
-    * @tparam T
-    *   the data type of the record which must be Json serializable
     * @return
     *   the stream of records
     */
   def stream(keyFilter: RecordKey => Boolean = _ => true): ZStream[Any, StreamErrors, T] =
     lmdb.stream(name, keyFilter)
+
+  /** stream collection Key/record tuples, use keyFilter to apply filtering before record deserialization.
+    *
+    * @param keyFilter
+    *   filter lambda to select only the keys you want, default is no filter
+    * @return
+    *   the tuple of key and record stream
+    */
+  def streamWithKeys(keyFilter: RecordKey => Boolean = _ => true): ZStream[Any, StreamErrors, (RecordKey, T)] =
+    lmdb.streamWithKeys(name, keyFilter)
 }
