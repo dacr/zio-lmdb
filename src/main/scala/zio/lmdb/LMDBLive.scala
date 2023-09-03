@@ -56,10 +56,6 @@ class LMDBLive(
       } yield key
   }
 
-  /** return an existing collection
-    * @param name
-    * @return
-    */
   private def getCollectionDbi(name: CollectionName): IO[CollectionNotFound, Dbi[ByteBuffer]] = {
     val alreadyHereLogic = for {
       openedCollectionDbis <- openedCollectionDbisRef.get
@@ -79,10 +75,6 @@ class LMDBLive(
       .mapError(err => CollectionNotFound(name))
   }
 
-  /** check if a collection exists
-    * @param name
-    * @return
-    */
   override def collectionExists(name: CollectionName): IO[StorageSystemError, Boolean] = {
     for {
       openedCollectionDbis <- openedCollectionDbisRef.get
@@ -91,12 +83,6 @@ class LMDBLive(
     } yield found
   }
 
-  /** Get a collection
-    *
-    * @param name
-    *   collection name
-    * @return
-    */
   override def collectionGet[T](name: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[GetErrors, LMDBCollection[T]] = {
     for {
       exists     <- collectionExists(name)
@@ -104,12 +90,6 @@ class LMDBLive(
     } yield collection
   }
 
-  /** get collection current size
-    *
-    * @param name
-    *   collection name
-    * @return
-    */
   override def collectionSize(name: CollectionName): IO[SizeErrors, Long] = {
     for {
       collectionDbi <- getCollectionDbi(name)
@@ -121,11 +101,6 @@ class LMDBLive(
     } yield stats.entries
   }
 
-  /** create the collection
-    * @param name
-    * @return
-    *   nothing
-    */
   override def collectionAllocate(name: CollectionName): IO[CreateErrors, Unit] = {
     for {
       exists <- collectionExists(name)
@@ -134,10 +109,6 @@ class LMDBLive(
     } yield ()
   }
 
-  /** create the collection and returns a collection handler
-    * @param name
-    * @return
-    */
   override def collectionCreate[T](name: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CreateErrors, LMDBCollection[T]] = {
     collectionAllocate(name) *> ZIO.succeed(LMDBCollection[T](name, this))
   }
@@ -178,10 +149,6 @@ class LMDBLive(
         .ignoreLogged
     )
 
-  /** Remove all the content of a collection
-    * @param colName
-    * @return
-    */
   override def collectionClear(colName: CollectionName): IO[ClearErrors, Unit] = {
     def collectionClearLogic(colDbi: Dbi[ByteBuffer]): ZIO[Any, ClearErrors, Unit] = {
       reentrantLock.withWriteLock(
@@ -203,8 +170,7 @@ class LMDBLive(
     } yield ()
   }
 
-  /** Check server current configuration compatibility
-    */
+  /** @inheritdoc */
   override def platformCheck(): IO[StorageSystemError, Unit] = reentrantLock.withWriteLock {
     ZIO
       .attemptBlockingIO(new Verifier(env).runFor(5, TimeUnit.SECONDS))
@@ -212,8 +178,6 @@ class LMDBLive(
       .unit
   }
 
-  /** list collections
-    */
   override def collectionsAvailable(): IO[StorageSystemError, List[CollectionName]] = {
     reentrantLock.withWriteLock( // See https://github.com/lmdbjava/lmdbjava/issues/195
       for {
@@ -230,10 +194,6 @@ class LMDBLive(
     )
   }
 
-  /** delete record
-    * @param key
-    * @return
-    */
   override def delete[T](colName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[DeleteErrors, Option[T]] = {
     def deleteLogic(colDbi: Dbi[ByteBuffer]): IO[DeleteErrors, Option[T]] = {
       reentrantLock.withWriteLock(
@@ -257,10 +217,6 @@ class LMDBLive(
     } yield status
   }
 
-  /** fetch a record
-    * @param key
-    * @return
-    */
   override def fetch[T](colName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[T]] = {
     def fetchLogic(colDbi: Dbi[ByteBuffer]): ZIO[Any, FetchErrors, Option[T]] = {
       withReadTransaction(colName) { txn =>
@@ -281,8 +237,6 @@ class LMDBLive(
     } yield result
   }
 
-  /** check if key exists in the collection
-    */
   override def contains(colName: CollectionName, key: RecordKey): IO[ContainsErrors, Boolean] = {
     def containsLogic(colDbi: Dbi[ByteBuffer]): ZIO[Any, ContainsErrors, Boolean] = {
       withReadTransaction(colName) { txn =>
@@ -298,12 +252,6 @@ class LMDBLive(
     } yield result
   }
 
-  /** overwrite or insert a document
-    * @param key
-    * @param document
-    * @tparam T
-    * @return
-    */
   override def upsertOverwrite[T](colName: CollectionName, key: RecordKey, document: T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, Unit] = {
     def upsertLogic(collectionDbi: Dbi[ByteBuffer]): IO[UpsertErrors, Unit] = {
       reentrantLock.withWriteLock(
@@ -327,11 +275,6 @@ class LMDBLive(
     } yield result
   }
 
-  /** atomic document update/insert throw a lambda
-    * @param key
-    * @param modifier
-    * @return
-    */
   override def upsert[T](colName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, Unit] = {
     def upsertLogic(collectionDbi: Dbi[ByteBuffer]): IO[UpsertErrors, Unit] = {
       reentrantLock.withWriteLock(
@@ -359,9 +302,6 @@ class LMDBLive(
     } yield result
   }
 
-  /** Dangerous collect method as it loads everything in memory, use keyFilter or valueFilter to limit loaded entries. Use stream method instead
-    * @return
-    */
   override def collect[T](colName: CollectionName, keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CollectErrors, List[T]] = {
     def collectLogic(collectionDbi: Dbi[ByteBuffer]): ZIO[Scope, CollectErrors, List[T]] = for {
       txn       <- ZIO.acquireRelease(
