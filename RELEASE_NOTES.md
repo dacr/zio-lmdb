@@ -1,6 +1,10 @@
 # ZIO-LMDB RELEASE NOTES
 
-## 1.4.2 - 2023-09-04
+## 1.4.3 - 2023-09-03
+
+- add streamWithKeys operation (#14)
+
+## 1.4.2 - 2023-09-03
 
 - Enhance scaladoc (#15)
 - Add missing LMDB.databasePath operation
