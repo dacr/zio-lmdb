@@ -204,8 +204,8 @@ object LMDBLiveSpec extends ZIOSpecDefault {
       }
 
       val localLimit = 10_000
-      val colCount = if (localLimit < 1000) 5 else 100
-      val max      = localLimit
+      val colCount   = if (localLimit < 1000) 5 else 100
+      val max        = localLimit
 
       for {
         id               <- randomUUID
@@ -240,12 +240,14 @@ object LMDBLiveSpec extends ZIOSpecDefault {
     test("stream collection content") {
       val count = limit
       for {
-        colName       <- randomCollectionName
-        col           <- LMDB.collectionCreate[Num](colName)
-        _             <- ZIO.foreach(1.to(count))(num => col.upsertOverwrite(s"id#$num", Num(num)))
-        returnedCount <- col.stream().filter(_.value.intValue() % 2 == 0).runCount
+        colName        <- randomCollectionName
+        col            <- LMDB.collectionCreate[Num](colName)
+        _              <- ZIO.foreach(1.to(count))(num => col.upsertOverwrite(s"id#$num", Num(num)))
+        returnedCount1 <- col.stream().filter(_.value.intValue() % 2 == 0).runCount
+        returnedCount2 <- col.streamWithKeys().filter { case (key, record) => record.value.intValue() % 2 == 0 }.runCount
       } yield assertTrue(
-        returnedCount.toInt == count / 2
+        returnedCount1.toInt == count / 2,
+        returnedCount2.toInt == count / 2
       )
     }
     // -----------------------------------------------------------------------------

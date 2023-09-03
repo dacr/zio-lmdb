@@ -54,6 +54,8 @@ trait LMDB {
   def collect[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CollectErrors, List[T]]
 
   def stream[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Any, StreamErrors, T]
+
+  def streamWithKeys[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Any, StreamErrors, (RecordKey, T)]
 }
 
 object LMDB {
@@ -254,7 +256,7 @@ object LMDB {
   def collect[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, CollectErrors, List[T]] =
     ZIO.serviceWithZIO(_.collect[T](collectionName, keyFilter, valueFilter))
 
-  /** Stream collection content, use keyFilter to apply filtering before record deserialization.
+  /** Stream collection records, use keyFilter to apply filtering before record deserialization.
     *
     * @param collectionName
     *   the collection name
@@ -268,4 +270,17 @@ object LMDB {
   def stream[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[LMDB, StreamErrors, T] =
     ZStream.serviceWithStream(_.stream(collectionName, keyFilter))
 
+  /** stream collection Key/record tuples, use keyFilter to apply filtering before record deserialization.
+    *
+    * @param collectionName
+    *   the collection name
+    * @param keyFilter
+    *   filter lambda to select only the keys you want, default is no filter
+    * @tparam T
+    *   the data type of the record which must be Json serializable
+    * @return
+    *   the tuple of key and record stream
+    */
+  def streamWithKeys[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[LMDB, StreamErrors, (RecordKey, T)] =
+    ZStream.serviceWithStream(_.streamWithKeys(collectionName, keyFilter))
 }

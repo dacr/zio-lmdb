@@ -164,6 +164,7 @@ class LMDBLive(
         }
       )
     }
+
     for {
       collectionDbi <- getCollectionDbi(colName)
       _             <- collectionClearLogic(collectionDbi)
@@ -211,6 +212,7 @@ class LMDBLive(
         }
       )
     }
+
     for {
       db     <- getCollectionDbi(colName)
       status <- deleteLogic(db)
@@ -231,6 +233,7 @@ class LMDBLive(
         } yield document
       }
     }
+
     for {
       db     <- getCollectionDbi(colName)
       result <- fetchLogic(db)
@@ -246,6 +249,7 @@ class LMDBLive(
         } yield found.isDefined
       }
     }
+
     for {
       db     <- getCollectionDbi(colName)
       result <- containsLogic(db)
@@ -269,6 +273,7 @@ class LMDBLive(
         }
       )
     }
+
     for {
       collectionDbi <- getCollectionDbi(colName)
       result        <- upsertLogic(collectionDbi)
@@ -296,6 +301,7 @@ class LMDBLive(
         }
       )
     }
+
     for {
       collectionDbi <- getCollectionDbi(colName)
       result        <- upsertLogic(collectionDbi)
@@ -382,6 +388,45 @@ class LMDBLive(
       .fromIterator(EncapsulatedIterator(iterable.iterator()))
       .filter { case (key, value) => keyFilter(key) }
       .mapZIO { case (key, value) => ZIO.from(value.fromJson[T]).mapError(err => JsonFailure(err)) }
+      .mapError {
+        case err: Throwable   => InternalError(s"Couldn't stream from $colName", Some(err))
+        case err: JsonFailure => err
+      }
+
+    val result =
+      for {
+        db     <- getCollectionDbi(colName)
+        _      <- reentrantLock.readLock
+        stream <- streamLogic(db)
+      } yield stream
+
+    ZStream.unwrapScoped(result) // TODO not sure this is the good way ???
+  }
+
+  def streamWithKeys[T](colName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Any, StreamErrors, (RecordKey, T)] = {
+    def streamLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, (RecordKey, T)]] = for {
+      txn      <- ZIO.acquireRelease(
+                    ZIO
+                      .attemptBlocking(env.txnRead())
+                      .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                  )(txn =>
+                    ZIO
+                      .attemptBlocking(txn.close())
+                      .ignoreLogged
+                  )
+      iterable <- ZIO.acquireRelease(
+                    ZIO
+                      .attemptBlocking(colDbi.iterate(txn, KeyRange.all()))
+                      .mapError(err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
+                  )(cursor =>
+                    ZIO
+                      .attemptBlocking(cursor.close())
+                      .ignoreLogged
+                  )
+    } yield ZStream
+      .fromIterator(EncapsulatedIterator(iterable.iterator()))
+      .filter { case (key, value) => keyFilter(key) }
+      .mapZIO { case (key, value) => ZIO.from(value.fromJson[T]).mapError(err => JsonFailure(err)).map(value => key -> value) }
       .mapError {
         case err: Throwable   => InternalError(s"Couldn't stream from $colName", Some(err))
         case err: JsonFailure => err
