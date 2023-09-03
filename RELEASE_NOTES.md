@@ -1,9 +1,13 @@
 # ZIO-LMDB RELEASE NOTES
 
-## 1.4.1 - 2023-09-04
+## 1.4.2 - 2023-09-04
 
 - Enhance scaladoc (#15)
 - Add missing LMDB.databasePath operation
+
+## 1.4.1 - 2023-08-25
+
+- Update dependencies
 
 ## 1.4.0 - 2023-08-25
 
