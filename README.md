@@ -1,4 +1,4 @@
-# Lightning Memory Database (LMDB) for ZIO [![][ZIOLMDBManagerImg]][ZIOLMDBManagerLnk]
+# Lightning Memory Database (LMDB) for ZIO [![][ZIOLMDBManagerImg]][ZIOLMDBManagerLnk] [![scaladoc][ScalaDocImg]][ScalaDoc]
 
 Why ZIO-lmdb ? Because I wanted a very simple **embedded** (in the same process) ACID database for small
 applications while keeping deployment, maintenance, upgrades as simple as possible.
@@ -49,7 +49,7 @@ or java properties to resolve this library configuration parameters.
 
 ```scala
 //> using scala  "3.3.0"
-//> using dep "fr.janalyse::zio-lmdb:1.3.0"
+//> using dep "fr.janalyse::zio-lmdb:1.4.3"
 //> using javaOpt "--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED"
 
 import zio.*, zio.lmdb.*, zio.json.*
@@ -138,3 +138,5 @@ When LVMDB is used as persistence store with recent JVM it requires some JVM opt
 [CEM]: https://github.com/dacr/code-examples-manager
 [SOTOHP]: https://github.com/dacr/sotohp
 [SCL]: https://scala-cli.virtuslab.org/
+[ScalaDocImg]: https://javadoc.io/badge2/fr.janalyse/zio-lmdb_3/javadoc.svg
+[ScalaDoc]: https://javadoc.io/doc/fr.janalyse/zio-lmdb_3/latest/zio/lmdb/LMDB$.html
