@@ -138,5 +138,5 @@ When LVMDB is used as persistence store with recent JVM it requires some JVM opt
 [CEM]: https://github.com/dacr/code-examples-manager
 [SOTOHP]: https://github.com/dacr/sotohp
 [SCL]: https://scala-cli.virtuslab.org/
-[ScalaDocImg]: https://javadoc.io/badge2/fr.janalyse/zio-lmdb_3/javadoc.svg
+[ScalaDocImg]: https://javadoc.io/badge2/fr.janalyse/zio-lmdb_3/scaladoc.svg
 [ScalaDoc]: https://javadoc.io/doc/fr.janalyse/zio-lmdb_3/latest/zio/lmdb/LMDB$.html
