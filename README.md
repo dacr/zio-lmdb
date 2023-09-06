@@ -1,4 +1,5 @@
-# Lightning Memory Database (LMDB) for ZIO [![][ZIOLMDBManagerImg]][ZIOLMDBManagerLnk] [![scaladoc][ScalaDocImg]][ScalaDoc]
+# Lightning Memory Database (LMDB) for ZIO
+[![][ZIOLMDBManagerImg]][ZIOLMDBManagerLnk] [![scaladoc][ScalaDocImg]][ScalaDoc]
 
 Why ZIO-lmdb ? Because I wanted a very simple **embedded** (in the same process) ACID database for small
 applications while keeping deployment, maintenance, upgrades as simple as possible.
