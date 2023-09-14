@@ -1,5 +1,9 @@
 # ZIO-LMDB RELEASE NOTES
 
+## 1.5.0 - 2023-xx-yy
+
+- add collection head, previous, next, last record operations (#18)
+
 ## 1.4.3 - 2023-09-03
 
 - add streamWithKeys operation (#14)

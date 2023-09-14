@@ -52,6 +52,38 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[
     */
   def fetch(key: RecordKey): IO[FetchErrors, Option[T]] = lmdb.fetch(name, key)
 
+  /** Get collection first record
+    *
+    * @return
+    *   some (key,record) tuple or none if the collection is empty
+    */
+  def head(): IO[FetchErrors, Option[(RecordKey, T)]] = lmdb.head(name)
+
+  /** Get the previous record for the given key
+    *
+    * @param beforeThatKey
+    *   the key of the reference record
+    * @return
+    *   some (key,record) tuple or none if the key is the first one
+    */
+  def previous(beforeThatKey: RecordKey): IO[FetchErrors, Option[(RecordKey, T)]] = lmdb.previous(name, beforeThatKey)
+
+  /** Get the next record for the given key
+    *
+    * @param afterThatKey
+    *   the key of the reference record
+    * @return
+    *   some (key,record) tuple or none if the key is the last one
+    */
+  def next(afterThatKey: RecordKey): IO[FetchErrors, Option[(RecordKey, T)]] = lmdb.next(name, afterThatKey)
+
+  /** Get collection last record
+    *
+    * @return
+    *   some (key,record) tuple or none if the collection is empty
+    */
+  def last(): IO[FetchErrors, Option[(RecordKey, T)]] = lmdb.last(name)
+
   /** Check if a collection contains the given key
     *
     * @param key

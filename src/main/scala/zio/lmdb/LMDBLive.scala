@@ -240,6 +240,79 @@ class LMDBLive(
     } yield result
   }
 
+  import org.lmdbjava.GetOp
+  import org.lmdbjava.SeekOp
+
+  private def seek[T](colName: CollectionName, recordKey: Option[RecordKey], seekOperation: SeekOp)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
+    // TODO TOO COMPLEX !!!!
+    def seekLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, FetchErrors, Option[(RecordKey, T)]] = for {
+      txn         <- ZIO.acquireRelease(
+                       ZIO
+                         .attemptBlocking(env.txnRead())
+                         .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                     )(txn =>
+                       ZIO
+                         .attemptBlocking(txn.close())
+                         .ignoreLogged
+                     )
+      cursor      <- ZIO.acquireRelease(
+                       ZIO
+                         .attemptBlocking(colDbi.openCursor(txn))
+                         .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
+                     )(cursor =>
+                       ZIO
+                         .attemptBlocking(cursor.close())
+                         .ignoreLogged
+                     )
+      key         <- ZIO.foreach(recordKey)(rk => makeKeyByteBuffer(rk))
+      _           <- ZIO.foreachDiscard(key) { k =>
+                       ZIO
+                         .attempt(cursor.get(k, GetOp.MDB_SET))
+                         .mapError[FetchErrors](err => InternalError(s"Couldn't set cursor at $recordKey for $colName", Some(err)))
+                     }
+      seekSuccess <- ZIO
+                       .attempt(cursor.seek(seekOperation))
+                       .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName", Some(err)))
+      seekedKey   <- ZIO
+                       .attempt(charset.decode(cursor.key()).toString)
+                       .when(seekSuccess)
+                       .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $colName", Some(err)))
+      valBuffer   <- ZIO
+                       .attempt(cursor.`val`())
+                       .when(seekSuccess)
+                       .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $colName", Some(err)))
+      seekedValue <- ZIO
+                       .foreach(valBuffer) { rawValue =>
+                         ZIO
+                           .fromEither(charset.decode(rawValue).fromJson[T])
+                           .mapError[FetchErrors](msg => JsonFailure(msg))
+                       }
+                       .when(seekSuccess)
+                       .map(_.flatten)
+    } yield seekedValue.flatMap(v => seekedKey.map(k => k -> v))
+
+    for {
+      db     <- getCollectionDbi(colName)
+      result <- ZIO.scoped(seekLogic(db))
+    } yield result
+  }
+
+  override def head[T](collectionName: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
+    seek(collectionName, None, SeekOp.MDB_FIRST)
+  }
+
+  override def previous[T](collectionName: CollectionName, beforeThatKey: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
+    seek(collectionName, Some(beforeThatKey), SeekOp.MDB_PREV)
+  }
+
+  override def next[T](collectionName: CollectionName, afterThatKey: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
+    seek(collectionName, Some(afterThatKey), SeekOp.MDB_NEXT)
+  }
+
+  override def last[T](collectionName: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
+    seek(collectionName, None, SeekOp.MDB_LAST)
+  }
+
   override def contains(colName: CollectionName, key: RecordKey): IO[ContainsErrors, Boolean] = {
     def containsLogic(colDbi: Dbi[ByteBuffer]): ZIO[Any, ContainsErrors, Boolean] = {
       withReadTransaction(colName) { txn =>

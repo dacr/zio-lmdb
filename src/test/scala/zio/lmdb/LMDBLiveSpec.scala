@@ -249,7 +249,40 @@ object LMDBLiveSpec extends ZIOSpecDefault {
         returnedCount1.toInt == count / 2,
         returnedCount2.toInt == count / 2
       )
-    }
+    },
     // -----------------------------------------------------------------------------
+    test("moves in empty collection") {
+      for {
+        colName    <- randomCollectionName
+        col        <- LMDB.collectionCreate[Num](colName)
+        headOption <- col.head()
+        lastOption <- col.last()
+      } yield assertTrue(
+        headOption.isEmpty,
+        lastOption.isEmpty
+      )
+    },
+    // -----------------------------------------------------------------------------
+    test("moves in collection") {
+      for {
+        colName <- randomCollectionName
+        col     <- LMDB.collectionCreate[Num](colName)
+        data     = List("bbb" -> 2, "aaa" -> 1, "ddd" -> 4, "ccc" -> 3)
+        _       <- ZIO.foreach(data)((key, value) => col.upsertOverwrite(key, Num(value)))
+        head    <- col.head()
+        last    <- col.last()
+        next    <- col.next("aaa")
+        prev    <- col.previous("ddd")
+        noNext  <- col.next("ddd")
+        noPrev  <- col.previous("aaa")
+      } yield assertTrue(
+        head.contains("aaa" -> Num(1)),
+        last.contains("ddd" -> Num(4)),
+        next.contains("bbb" -> Num(2)),
+        prev.contains("ccc" -> Num(3)),
+        noNext.isEmpty,
+        noPrev.isEmpty
+      )
+    }
   ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom
 }
