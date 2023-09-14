@@ -43,6 +43,14 @@ trait LMDB {
 
   def fetch[T](collectionName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[T]]
 
+  def head[T](collectionName: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]]
+
+  def previous[T](collectionName: CollectionName, beforeThatKey: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]]
+
+  def next[T](collectionName: CollectionName, afterThatKey: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]]
+
+  def last[T](collectionName: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]]
+
   def contains(collectionName: CollectionName, key: RecordKey): IO[ContainsErrors, Boolean]
 
   def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, Unit]
@@ -186,6 +194,54 @@ object LMDB {
     *   some record or none if no record has been found for the given key
     */
   def fetch[T](collectionName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, FetchErrors, Option[T]] = ZIO.serviceWithZIO(_.fetch(collectionName, key))
+
+  /** Get collection first record
+    *
+    * @param collectionName
+    *   the collection name
+    * @tparam T
+    *   the data type of the record which must be Json serializable
+    * @return
+    *   some (key,record) tuple or none if the collection is empty
+    */
+  def head[T](collectionName: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.head(collectionName))
+
+  /** Get the previous record for the given key
+    *
+    * @param collectionName
+    *   the collection name
+    * @param beforeThatKey
+    *   the key of the reference record
+    * @tparam T
+    *   the data type of the record which must be Json serializable
+    * @return
+    *   some (key,record) tuple or none if the key is the first one
+    */
+  def previous[T](collectionName: CollectionName, beforeThatKey: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.previous(collectionName, beforeThatKey))
+
+  /** Get the next record for the given key
+    *
+    * @param collectionName
+    *   the collection name
+    * @param afterThatKey
+    *   the key of the reference record
+    * @tparam T
+    *   the data type of the record which must be Json serializable
+    * @return
+    *   some (key,record) tuple or none if the key is the last one
+    */
+  def next[T](collectionName: CollectionName, afterThatKey: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.next(collectionName, afterThatKey))
+
+  /** Get collection last record
+    *
+    * @param collectionName
+    *   the collection name
+    * @tparam T
+    *   the data type of the record which must be Json serializable
+    * @return
+    *   some (key,record) tuple or none if the collection is empty
+    */
+  def last[T](collectionName: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.last(collectionName))
 
   /** Check if a collection contains the given key
     *
