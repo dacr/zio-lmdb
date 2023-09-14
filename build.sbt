@@ -11,13 +11,13 @@ scmInfo := Some(
   )
 )
 
-scalaVersion       := "3.3.0"
-crossScalaVersions := Seq("2.13.11", "3.3.0")
+scalaVersion       := "3.3.1"
+crossScalaVersions := Seq("2.13.12", "3.3.1")
 
 lazy val versions = new {
   val zio       = "2.0.16"
-  val zionio    = "2.0.1"
-  val ziojson   = "0.6.1"
+  val zionio    = "2.0.2"
+  val ziojson   = "0.6.2"
   val zioconfig = "4.0.0-RC16"
   val lmdb      = "0.8.3"
 }

@@ -3,6 +3,8 @@
 ## 1.5.0 - 2023-xx-yy
 
 - add collection head, previous, next, last record operations (#18)
+- update scala releases
+- update dependencies
 
 ## 1.4.3 - 2023-09-03
 
