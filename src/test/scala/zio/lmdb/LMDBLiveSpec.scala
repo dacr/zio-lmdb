@@ -268,7 +268,7 @@ object LMDBLiveSpec extends ZIOSpecDefault {
         colName <- randomCollectionName
         col     <- LMDB.collectionCreate[Num](colName)
         data     = List("bbb" -> 2, "aaa" -> 1, "ddd" -> 4, "ccc" -> 3)
-        _       <- ZIO.foreach(data)((key, value) => col.upsertOverwrite(key, Num(value)))
+        _       <- ZIO.foreach(data){ case (key, value) => col.upsertOverwrite(key, Num(value))}
         head    <- col.head()
         last    <- col.last()
         next    <- col.next("aaa")
