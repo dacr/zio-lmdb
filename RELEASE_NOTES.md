@@ -1,6 +1,6 @@
 # ZIO-LMDB RELEASE NOTES
 
-## 1.5.0 - 2023-xx-yy
+## 1.5.0 - 2023-09-24
 
 - add collection head, previous, next, last record operations (#18)
 - update scala releases
