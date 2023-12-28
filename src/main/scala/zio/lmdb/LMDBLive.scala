@@ -404,7 +404,7 @@ class LMDBLive(
       collected <- ZIO
                      .attempt {
                        Chunk
-                         .fromIterator(EncapsulatedIterator(iterable.iterator()))
+                         .fromIterator(KeyValueIterator(iterable.iterator()))
                          .filter { case (key, value) => keyFilter(key) }
                          .flatMap { case (key, value) => value.fromJson[T].toOption } // TODO error are hidden !!!
                          .filter(valueFilter)
@@ -427,8 +427,7 @@ class LMDBLive(
     decodedKey -> decodedValue
   }
 
-  // Encapsulation mandatory in order to make the stream work fine, without the behavior is very stange and not yet understood
-  case class EncapsulatedIterator(jiterator: java.util.Iterator[KeyVal[ByteBuffer]]) extends Iterator[(String, String)] {
+  case class KeyValueIterator(jiterator: java.util.Iterator[KeyVal[ByteBuffer]]) extends Iterator[(String, String)] {
     override def hasNext: Boolean = jiterator.hasNext()
 
     override def next(): (String, String) = {
@@ -458,7 +457,7 @@ class LMDBLive(
                       .ignoreLogged
                   )
     } yield ZStream
-      .fromIterator(EncapsulatedIterator(iterable.iterator()))
+      .fromIterator(KeyValueIterator(iterable.iterator()))
       .filter { case (key, value) => keyFilter(key) }
       .mapZIO { case (key, value) => ZIO.from(value.fromJson[T]).mapError(err => JsonFailure(err)) }
       .mapError {
@@ -497,7 +496,7 @@ class LMDBLive(
                       .ignoreLogged
                   )
     } yield ZStream
-      .fromIterator(EncapsulatedIterator(iterable.iterator()))
+      .fromIterator(KeyValueIterator(iterable.iterator()))
       .filter { case (key, value) => keyFilter(key) }
       .mapZIO { case (key, value) => ZIO.from(value.fromJson[T]).mapError(err => JsonFailure(err)).map(value => key -> value) }
       .mapError {
