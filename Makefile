@@ -1,5 +1,8 @@
 all: readme-test unit-tests
 
+dependency-check:
+	sbt dependencyUpdates
+
 unit-tests:
 	sbt test
 

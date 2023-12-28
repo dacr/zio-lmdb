@@ -28,15 +28,7 @@ import zio.test.TestAspect._
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-object LMDBLiveSpec extends ZIOSpecDefault {
-
-  val lmdbLayer = ZLayer.scoped(
-    for {
-      path  <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
-      config = LMDBConfig.default.copy(databasesHome = Some(path.toString))
-      lmdb  <- LMDBLive.setup(config)
-    } yield lmdb
-  )
+object LMDBLiveSpec extends ZIOSpecDefault with Commons {
 
   val keygen   = stringBounded(1, 510)(asciiChar)
   val valuegen = stringBounded(0, 1024)(asciiChar)

@@ -25,14 +25,9 @@ object Record {
   implicit val codec: JsonCodec[Record] = DeriveJsonCodec.gen
 }
 
-object LMDBBasicUsageSpec extends ZIOSpecDefault {
-  val lmdbLayer = ZLayer.scoped(
-    for {
-      path  <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
-      config = LMDBConfig.default.copy(databasesHome = Some(path.toString))
-      lmdb  <- LMDBLive.setup(config)
-    } yield lmdb
-  )
+object LMDBBasicUsageSpec extends ZIOSpecDefault with Commons {
+
+  override val bootstrap: ZLayer[Any, Any, TestEnvironment] = logger >>> testEnvironment
 
   override def spec = suite("LMDB for ZIO as a service")(
     test("basic usage")(

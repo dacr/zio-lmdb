@@ -15,11 +15,12 @@ scalaVersion       := "3.3.1"
 crossScalaVersions := Seq("2.13.12", "3.3.1")
 
 lazy val versions = new {
-  val zio       = "2.0.17"
-  val zionio    = "2.0.2"
-  val ziojson   = "0.6.2"
-  val zioconfig = "4.0.0-RC16"
-  val lmdb      = "0.8.3"
+  val zio        = "2.0.20"
+  val zionio     = "2.0.2"
+  val ziojson    = "0.6.2"
+  val zioconfig  = "4.0.0-RC16"
+  val ziologging = "2.1.13"
+  val lmdb       = "0.9.0"
 }
 
 libraryDependencies ++= Seq(
@@ -28,11 +29,12 @@ libraryDependencies ++= Seq(
   "dev.zio"     %% "zio-json"            % versions.ziojson,
   "dev.zio"     %% "zio-config"          % versions.zioconfig,
   "org.lmdbjava" % "lmdbjava"            % versions.lmdb,
-  "dev.zio"     %% "zio-test"            % versions.zio    % Test,
+  "dev.zio"     %% "zio-test"            % versions.zio        % Test,
+  "dev.zio"     %% "zio-logging"         % versions.ziologging % Test,
   // "dev.zio"     %% "zio-test-junit"      % versions.zio    % Test,
-  "dev.zio"     %% "zio-test-sbt"        % versions.zio    % Test,
-  "dev.zio"     %% "zio-test-scalacheck" % versions.zio    % Test,
-  "dev.zio"     %% "zio-nio"             % versions.zionio % Test
+  "dev.zio"     %% "zio-test-sbt"        % versions.zio        % Test,
+  "dev.zio"     %% "zio-test-scalacheck" % versions.zio        % Test,
+  "dev.zio"     %% "zio-nio"             % versions.zionio     % Test
 )
 
 testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
