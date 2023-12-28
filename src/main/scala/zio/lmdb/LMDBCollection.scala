@@ -126,32 +126,57 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[
   /** Collect collection content into the memory, use keyFilter or valueFilter to limit the amount of loaded entries.
     *
     * @param keyFilter
-    *   filter lambda to select only the keys you want, default is no filter
+    *   filter lambda to select only the keys you want, default is no filter, the value deserialization is done **after** the filtering step
     * @param valueFilter
     *   filter lambda to select only the record your want, default is no filter
+    * @param startAfter
+    *   start the stream after the given key, default is start from the beginning (when backward is false) or from end (when backward is true)
+    * @param backward
+    *   going in reverse key order, default is false
     * @return
     *   All matching records
     */
-  def collect(keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true): IO[CollectErrors, List[T]] =
-    lmdb.collect[T](name, keyFilter, valueFilter)
+  def collect(
+    keyFilter: RecordKey => Boolean = _ => true,
+    valueFilter: T => Boolean = (_: T) => true,
+    startAfter: Option[RecordKey] = None,
+    backward: Boolean = false
+  ): IO[CollectErrors, List[T]] =
+    lmdb.collect[T](name, keyFilter, valueFilter, startAfter, backward)
 
   /** Stream collection records, use keyFilter to apply filtering before record deserialization.
     *
     * @param keyFilter
-    *   filter lambda to select only the keys you want, default is no filter
+    *   filter lambda to select only the keys you want, default is no filter, the value deserialization is done **after** the filtering step
+    * @param startAfter
+    *   start the stream after the given key, default is start from the beginning (when backward is false) or from end (when backward is true)
+    * @param backward
+    *   going in reverse key order, default is false
     * @return
     *   the stream of records
     */
-  def stream(keyFilter: RecordKey => Boolean = _ => true): ZStream[Any, StreamErrors, T] =
-    lmdb.stream(name, keyFilter)
+  def stream(
+    keyFilter: RecordKey => Boolean = _ => true,
+    startAfter: Option[RecordKey] = None,
+    backward: Boolean = false
+  ): ZStream[Any, StreamErrors, T] =
+    lmdb.stream(name, keyFilter, startAfter, backward)
 
   /** stream collection Key/record tuples, use keyFilter to apply filtering before record deserialization.
     *
     * @param keyFilter
-    *   filter lambda to select only the keys you want, default is no filter
+    *   filter lambda to select only the keys you want, default is no filter, the value deserialization is done **after** the filtering step
+    * @param startAfter
+    *   start the stream after the given key, default is start from the beginning (when backward is false) or from end (when backward is true)
+    * @param backward
+    *   going in reverse key order, default is false
     * @return
     *   the tuple of key and record stream
     */
-  def streamWithKeys(keyFilter: RecordKey => Boolean = _ => true): ZStream[Any, StreamErrors, (RecordKey, T)] =
-    lmdb.streamWithKeys(name, keyFilter)
+  def streamWithKeys(
+    keyFilter: RecordKey => Boolean = _ => true,
+    startAfter: Option[RecordKey] = None,
+    backward: Boolean = false
+  ): ZStream[Any, StreamErrors, (RecordKey, T)] =
+    lmdb.streamWithKeys(name, keyFilter, startAfter, backward)
 }

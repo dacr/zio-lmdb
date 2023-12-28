@@ -254,6 +254,48 @@ object LMDBLiveSpec extends ZIOSpecDefault with Commons {
       )
     },
     // -----------------------------------------------------------------------------
+    test("going forward / backward in a collection using collect or stream") {
+      for {
+        colName                      <- randomCollectionName
+        col                          <- LMDB.collectionCreate[Num](colName)
+        keys                          = 'A'.to('Z').toList.map(_.toString)
+        values                        = keys.zipWithIndex.map { case (k, v) => Num(v) }
+        keyvalues                     = keys.zip(values)
+        _                            <- ZIO.foreachDiscard(keyvalues) { case (k, v) => col.upsertOverwrite(k, v) }
+        // ----------------------
+        backwards                    <- col.collect(startAfter = None, backward = true)
+        backwardsAfter               <- col.collect(startAfter = Some("D"), backward = true)
+        forwards                     <- col.collect(startAfter = None, backward = false)
+        forwardsAfter                <- col.collect(startAfter = Some("T"), backward = false)
+        // ----------------------
+        streamBackwards              <- col.stream(startAfter = None, backward = true).runCollect
+        streamBackwardsAfter         <- col.stream(startAfter = Some("D"), backward = true).runCollect
+        streamForwards               <- col.stream(startAfter = None, backward = false).runCollect
+        streamForwardsAfter          <- col.stream(startAfter = Some("T"), backward = false).runCollect
+        // ----------------------
+        streamWithKeysBackwards      <- col.streamWithKeys(startAfter = None, backward = true).runCollect
+        streamWithKeysBackwardsAfter <- col.streamWithKeys(startAfter = Some("D"), backward = true).runCollect
+        streamWithKeysForwards       <- col.streamWithKeys(startAfter = None, backward = false).runCollect
+        streamWithKeysForwardsAfter  <- col.streamWithKeys(startAfter = Some("T"), backward = false).runCollect
+      } yield assertTrue(
+        // ----------------------
+        backwards == values.reverse,
+        backwardsAfter == values.take(3).reverse,
+        forwards == values,
+        forwardsAfter == values.takeRight(6),
+        // ----------------------
+        streamBackwards == values.reverse,
+        streamBackwardsAfter == values.take(3).reverse,
+        streamForwards == values,
+        streamForwardsAfter == values.takeRight(6),
+        // ----------------------
+        streamWithKeysBackwards.toList == keyvalues.reverse,
+        streamWithKeysBackwardsAfter.toList == keyvalues.take(3).reverse,
+        streamWithKeysForwards.toList == keyvalues,
+        streamWithKeysForwardsAfter.toList == keyvalues.takeRight(6)
+      )
+    },
+    // -----------------------------------------------------------------------------
     test("moves in collection") {
       for {
         colName <- randomCollectionName

@@ -59,11 +59,27 @@ trait LMDB {
 
   def delete[T](collectionName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[DeleteErrors, Option[T]]
 
-  def collect[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CollectErrors, List[T]]
+  def collect[T](
+    collectionName: CollectionName,
+    keyFilter: RecordKey => Boolean = _ => true,
+    valueFilter: T => Boolean = (_: T) => true,
+    startAfter: Option[RecordKey] = None,
+    backward: Boolean = false
+  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CollectErrors, List[T]]
 
-  def stream[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Any, StreamErrors, T]
+  def stream[T](
+    collectionName: CollectionName,
+    keyFilter: RecordKey => Boolean = _ => true,
+    startAfter: Option[RecordKey] = None,
+    backward: Boolean = false
+  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Any, StreamErrors, T]
 
-  def streamWithKeys[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Any, StreamErrors, (RecordKey, T)]
+  def streamWithKeys[T](
+    collectionName: CollectionName,
+    keyFilter: RecordKey => Boolean = _ => true,
+    startAfter: Option[RecordKey] = None,
+    backward: Boolean = false
+  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Any, StreamErrors, (RecordKey, T)]
 }
 
 object LMDB {
@@ -301,42 +317,70 @@ object LMDB {
     * @param collectionName
     *   the collection name
     * @param keyFilter
-    *   filter lambda to select only the keys you want, default is no filter
+    *   filter lambda to select only the keys you want, default is no filter, the value deserialization is done **after** the filtering step
     * @param valueFilter
     *   filter lambda to select only the record your want, default is no filter
+    * @param startAfter
+    *   start the stream after the given key, default is start from the beginning (when backward is false) or from end (when backward is true)
+    * @param backward
+    *   going in reverse key order, default is false
     * @tparam T
     *   the data type of the record which must be Json serializable
     * @return
     *   All matching records
     */
-  def collect[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true, valueFilter: T => Boolean = (_: T) => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, CollectErrors, List[T]] =
-    ZIO.serviceWithZIO(_.collect[T](collectionName, keyFilter, valueFilter))
+  def collect[T](
+    collectionName: CollectionName,
+    keyFilter: RecordKey => Boolean = _ => true,
+    valueFilter: T => Boolean = (_: T) => true,
+    startAfter: Option[RecordKey] = None,
+    backward: Boolean = false
+  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, CollectErrors, List[T]] =
+    ZIO.serviceWithZIO(_.collect[T](collectionName, keyFilter, valueFilter, startAfter, backward))
 
   /** Stream collection records, use keyFilter to apply filtering before record deserialization.
     *
     * @param collectionName
     *   the collection name
     * @param keyFilter
-    *   filter lambda to select only the keys you want, default is no filter
+    *   filter lambda to select only the keys you want, default is no filter, the value deserialization is done **after** the filtering step
+    * @param startAfter
+    *   start the stream after the given key, default is start from the beginning (when backward is false) or from end (when backward is true)
+    * @param backward
+    *   going in reverse key order, default is false
     * @tparam T
     *   the data type of the record which must be Json serializable
     * @return
     *   the stream of records
     */
-  def stream[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[LMDB, StreamErrors, T] =
-    ZStream.serviceWithStream(_.stream(collectionName, keyFilter))
+  def stream[T](
+    collectionName: CollectionName,
+    keyFilter: RecordKey => Boolean = _ => true,
+    startAfter: Option[RecordKey] = None,
+    backward: Boolean = false
+  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[LMDB, StreamErrors, T] =
+    ZStream.serviceWithStream(_.stream(collectionName, keyFilter, startAfter, backward))
 
   /** stream collection Key/record tuples, use keyFilter to apply filtering before record deserialization.
     *
     * @param collectionName
     *   the collection name
     * @param keyFilter
-    *   filter lambda to select only the keys you want, default is no filter
+    *   filter lambda to select only the keys you want, default is no filter, the value deserialization is done **after** the filtering step
+    * @param startAfter
+    *   start the stream after the given key, default is start from the beginning (when backward is false) or from end (when backward is true)
+    * @param backward
+    *   going in reverse key order, default is false
     * @tparam T
     *   the data type of the record which must be Json serializable
     * @return
     *   the tuple of key and record stream
     */
-  def streamWithKeys[T](collectionName: CollectionName, keyFilter: RecordKey => Boolean = _ => true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[LMDB, StreamErrors, (RecordKey, T)] =
-    ZStream.serviceWithStream(_.streamWithKeys(collectionName, keyFilter))
+  def streamWithKeys[T](
+    collectionName: CollectionName,
+    keyFilter: RecordKey => Boolean = _ => true,
+    startAfter: Option[RecordKey] = None,
+    backward: Boolean = false
+  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[LMDB, StreamErrors, (RecordKey, T)] =
+    ZStream.serviceWithStream(_.streamWithKeys(collectionName, keyFilter, startAfter, backward))
 }
