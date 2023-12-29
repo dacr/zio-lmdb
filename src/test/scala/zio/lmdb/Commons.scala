@@ -16,4 +16,12 @@ trait Commons {
       lmdb  <- LMDBLive.setup(config)
     } yield lmdb
   )
+
+  val randomUUID = Random.nextUUID.map(_.toString)
+
+  val randomCollectionName = for {
+    uuid <- randomUUID
+    name  = s"collection-$uuid"
+  } yield name
+
 }

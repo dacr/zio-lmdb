@@ -25,22 +25,13 @@ import zio.test._
 import zio.test.Gen._
 import zio.test.TestAspect._
 
-import java.util.UUID
-import java.util.concurrent.TimeUnit
+object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
 
-object LMDBLiveSpec extends ZIOSpecDefault with Commons {
+  override val bootstrap: ZLayer[Any, Any, TestEnvironment] = logger >>> testEnvironment
 
   val keygen   = stringBounded(1, 510)(asciiChar)
   val valuegen = stringBounded(0, 1024)(asciiChar)
-
-  val limit = 30_000
-
-  val randomUUID = Random.nextUUID.map(_.toString)
-
-  val randomCollectionName = for {
-    uuid <- randomUUID
-    name  = s"collection-$uuid"
-  } yield name
+  val limit    = 30_000
 
   override def spec = suite("Lightening Memory Mapped Database abstraction layer spec")(
     // -----------------------------------------------------------------------------
@@ -284,10 +275,10 @@ object LMDBLiveSpec extends ZIOSpecDefault with Commons {
         forwards == values,
         forwardsAfter == values.takeRight(6),
         // ----------------------
-        streamBackwards == values.reverse,
-        streamBackwardsAfter == values.take(3).reverse,
-        streamForwards == values,
-        streamForwardsAfter == values.takeRight(6),
+        streamBackwards.toList == values.reverse,
+        streamBackwardsAfter.toList == values.take(3).reverse,
+        streamForwards.toList == values,
+        streamForwardsAfter.toList == values.takeRight(6),
         // ----------------------
         streamWithKeysBackwards.toList == keyvalues.reverse,
         streamWithKeysBackwardsAfter.toList == keyvalues.take(3).reverse,
@@ -317,5 +308,5 @@ object LMDBLiveSpec extends ZIOSpecDefault with Commons {
         noPrev.isEmpty
       )
     }
-  ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom
+  ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom @@ timed
 }

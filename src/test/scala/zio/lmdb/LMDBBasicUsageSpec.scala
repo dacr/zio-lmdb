@@ -17,6 +17,7 @@ package zio.lmdb
 
 import zio._
 import zio.test._
+import zio.test.TestAspect._
 import zio.json._
 import zio.nio.file.Files
 
@@ -47,5 +48,5 @@ object LMDBBasicUsageSpec extends ZIOSpecDefault with Commons {
         exists
       )
     )
-  ).provide(lmdbLayer)
+  ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom @@ timed
 }
