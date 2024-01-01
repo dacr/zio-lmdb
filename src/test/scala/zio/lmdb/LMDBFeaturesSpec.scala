@@ -43,6 +43,34 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
       )
     ), // @@ ignore, // AS IT HAS A GLOBAL IMPACT ON THE DATABASE IF IT HAS BEEN SHARED BETWEEN ALL TESTS !!
     // -----------------------------------------------------------------------------
+    test("create collection")(
+      for {
+        colName               <- randomCollectionName
+        createSuccess         <- LMDB.collectionCreate[String](colName).isSuccess
+        recreateFailure       <- LMDB.collectionCreate[String](colName, failIfExists = true).isFailure
+        createIfNeededSuccess <- LMDB.collectionCreate[String](colName, failIfExists = false).isSuccess
+      } yield assertTrue(
+        createSuccess,
+        recreateFailure,
+        createIfNeededSuccess
+      )
+    ),
+    // -----------------------------------------------------------------------------
+    test("delete collection")(
+      for {
+        colName                <- randomCollectionName
+        _                      <- LMDB.collectionCreate[String](colName)
+        collectionCreated      <- LMDB.collectionExists(colName)
+        _                      <- LMDB.collectionDrop(colName)
+        collectionStillExists  <- LMDB.collectionExists(colName)
+        collectionCreatedAgain <- LMDB.collectionCreate[String](colName, failIfExists = true).isSuccess
+      } yield assertTrue(
+        collectionCreated,
+        !collectionStillExists,
+        collectionCreatedAgain
+      )
+    ),
+    // -----------------------------------------------------------------------------
     test("create and list collections")(
       for {
         colName1  <- randomCollectionName

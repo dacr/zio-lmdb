@@ -109,8 +109,9 @@ class LMDBLive(
     } yield ()
   }
 
-  override def collectionCreate[T](name: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CreateErrors, LMDBCollection[T]] = {
-    collectionAllocate(name) *> ZIO.succeed(LMDBCollection[T](name, this))
+  override def collectionCreate[T](name: CollectionName, failIfExists: Boolean = true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CreateErrors, LMDBCollection[T]] = {
+    val allocateLogic = if (failIfExists) collectionAllocate(name) else collectionAllocate(name).ignore
+    allocateLogic *> ZIO.succeed(LMDBCollection[T](name, this))
   }
 
   private def collectionCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = reentrantLock.withWriteLock {
@@ -149,25 +150,38 @@ class LMDBLive(
         .ignoreLogged
     )
 
-  override def collectionClear(colName: CollectionName): IO[ClearErrors, Unit] = {
-    def collectionClearLogic(colDbi: Dbi[ByteBuffer]): ZIO[Any, ClearErrors, Unit] = {
-      reentrantLock.withWriteLock(
-        withWriteTransaction(colName) { txn =>
-          for {
-            _ <- ZIO
-                   .attemptBlocking(colDbi.drop(txn))
-                   .mapError(err => InternalError(s"Couldn't clear $colName", Some(err)))
-            _ <- ZIO
-                   .attemptBlocking(txn.commit())
-                   .mapError[ClearErrors](err => InternalError("Couldn't commit transaction", Some(err)))
-          } yield ()
-        }
-      )
-    }
+  private def collectionClearOrDropLogic(colDbi: Dbi[ByteBuffer], collectionName: CollectionName, dropDatabase: Boolean): ZIO[Any, ClearErrors, Unit] = {
+    reentrantLock.withWriteLock(
+      withWriteTransaction(collectionName) { txn =>
+        for {
+          _ <- ZIO
+                 .attemptBlocking(colDbi.drop(txn, dropDatabase))
+                 .mapError(err => InternalError(s"Couldn't ${if (dropDatabase) "drop" else "clear"} $collectionName", Some(err)))
+          _ <- ZIO
+                 .attemptBlocking(txn.commit())
+                 .mapError[ClearErrors](err => InternalError("Couldn't commit transaction", Some(err)))
+        } yield ()
+      }
+    )
+  }
 
+  override def collectionClear(colName: CollectionName): IO[ClearErrors, Unit] = {
     for {
       collectionDbi <- getCollectionDbi(colName)
-      _             <- collectionClearLogic(collectionDbi)
+      _             <- collectionClearOrDropLogic(collectionDbi, colName, false)
+    } yield ()
+  }
+
+  override def collectionDrop(colName: CollectionName): IO[DropErrors, Unit] = {
+    for {
+      collectionDbi <- getCollectionDbi(colName)
+      _             <- collectionClearOrDropLogic(collectionDbi, colName, true)
+      _             <- openedCollectionDbisRef.updateAndGet(_.removed(colName))
+      _             <- reentrantLock.withWriteLock(
+                         ZIO
+                           .attemptBlocking(collectionDbi.close()) // TODO check close documentation more precisely at it states : It is very rare that closing a database handle is useful.
+                           .mapError[DropErrors](err => InternalError("Couldn't close collection internal handler", Some(err)))
+                       )
     } yield ()
   }
 
@@ -488,8 +502,9 @@ class LMDBLive(
       .filter { case (key, value) => keyFilter(key) }
       .mapZIO { case (key, value) => ZIO.from(value.fromJson[T]).mapError(err => JsonFailure(err)) }
       .mapError {
-        case err: Throwable   => InternalError(s"Couldn't stream from $colName", Some(err))
         case err: JsonFailure => err
+        case err: Throwable   => InternalError(s"Couldn't stream from $colName", Some(err))
+        case err              => InternalError(s"Couldn't stream from $colName : ${err.toString}", None)
       }
 
     val result =
@@ -533,8 +548,9 @@ class LMDBLive(
       .filter { case (key, value) => keyFilter(key) }
       .mapZIO { case (key, value) => ZIO.from(value.fromJson[T]).mapError(err => JsonFailure(err)).map(value => key -> value) }
       .mapError {
-        case err: Throwable   => InternalError(s"Couldn't stream from $colName", Some(err))
         case err: JsonFailure => err
+        case err: Throwable   => InternalError(s"Couldn't stream from $colName", Some(err))
+        case err              => InternalError(s"Couldn't stream from $colName : ${err.toString}", None)
       }
 
     val result =

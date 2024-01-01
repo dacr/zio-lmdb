@@ -1,12 +1,15 @@
 # ZIO-LMDB RELEASE NOTES
 
-## 1.6.0 - 2023-XX-YY
+## 1.7.0 - 2024-01-01
 
 - upgrade to lmdb-java 1.9.0
 - update dependencies
+- add collectionDrop operation to delete a collection
+- add the failIfExists parameter to collectionCreate
+  - simplify API usage for various use cases
 - enhance collect / stream / streamWithKey (#19)
-  - forward or backward
-  - start after a given key
+  - in forward or backward key ordering
+  - start after/before a given key
 - do not display logs during unit test execution
 - add more unit tests
 

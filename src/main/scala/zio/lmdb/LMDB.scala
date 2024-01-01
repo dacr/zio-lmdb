@@ -31,7 +31,7 @@ trait LMDB {
 
   def collectionExists(name: CollectionName): IO[StorageSystemError, Boolean]
 
-  def collectionCreate[T](name: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CreateErrors, LMDBCollection[T]]
+  def collectionCreate[T](name: CollectionName, failIfExists: Boolean = true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CreateErrors, LMDBCollection[T]]
 
   def collectionAllocate(name: CollectionName): IO[CreateErrors, Unit]
 
@@ -40,6 +40,8 @@ trait LMDB {
   def collectionSize(name: CollectionName): IO[SizeErrors, Long]
 
   def collectionClear(name: CollectionName): IO[ClearErrors, Unit]
+
+  def collectionDrop(name: CollectionName): IO[DropErrors, Unit]
 
   def fetch[T](collectionName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[T]]
 
@@ -157,12 +159,14 @@ object LMDB {
     *
     * @param name
     *   the collection name
+    * @param failIfExists
+    *   raise an error if the collection already exists, default to true
     * @tparam T
     *   the data type of the records which must be Json serializable
     * @return
     *   the collection helper facade
     */
-  def collectionCreate[T](name: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, CreateErrors, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionCreate(name))
+  def collectionCreate[T](name: CollectionName, failIfExists: Boolean = true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, CreateErrors, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionCreate(name, failIfExists))
 
   /** Create a collection
     *
@@ -197,6 +201,13 @@ object LMDB {
     *   the collection name
     */
   def collectionClear(name: CollectionName): ZIO[LMDB, ClearErrors, Unit] = ZIO.serviceWithZIO(_.collectionClear(name))
+
+  /** Drop a collection
+    *
+    * @param name
+    *   the collection name
+    */
+  def collectionDrop(name: CollectionName): ZIO[LMDB, DropErrors, Unit] = ZIO.serviceWithZIO(_.collectionDrop(name))
 
   /** Get a collection record
     *

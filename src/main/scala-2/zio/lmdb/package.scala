@@ -23,6 +23,7 @@ package object lmdb {
   type KeyErrors      = LmdbError
   type SizeErrors     = LmdbError
   type ClearErrors    = LmdbError
+  type DropErrors     = LmdbError
   type GetErrors      = LmdbError
   type CreateErrors   = LmdbError
   type FetchErrors    = LmdbError

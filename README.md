@@ -50,7 +50,7 @@ or java properties to resolve this library configuration parameters.
 
 ```scala
 //> using scala  "3.3.1"
-//> using dep "fr.janalyse::zio-lmdb:1.5.0"
+//> using dep "fr.janalyse::zio-lmdb:1.6.0"
 //> using javaOpt "--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED"
 
 import zio.*, zio.lmdb.*, zio.json.*
@@ -63,8 +63,7 @@ object SimpleExample extends ZIOAppDefault {
 
   val collectionName = "examples"
   val example        = for {
-    _         <- LMDB.collectionCreate[Record](collectionName).ignore
-    examples  <- LMDB.collectionGet[Record](collectionName)
+    examples  <- LMDB.collectionCreate[Record](collectionName, failIfExists=false)
     recordId  <- Random.nextUUID
     dateTime  <- Clock.currentDateTime
     record     = Record(recordId, "John Doe", 42, dateTime)

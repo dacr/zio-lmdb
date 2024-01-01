@@ -22,15 +22,16 @@ package object lmdb {
   type CollectionName = String
   type RecordKey      = String
 
-  type KeyErrors     = OverSizedKey | StorageSystemError
-  type SizeErrors    = CollectionNotFound | StorageSystemError
-  type ClearErrors   = CollectionNotFound | StorageSystemError
-  type GetErrors     = CollectionNotFound | StorageSystemError
-  type CreateErrors  = CollectionAlreadExists | StorageSystemError
-  type FetchErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type ContainsErrors  = OverSizedKey | CollectionNotFound | StorageSystemError
-  type UpsertErrors  = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type DeleteErrors  = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type CollectErrors = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type StreamErrors  = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
+  type KeyErrors      = OverSizedKey | StorageSystemError
+  type SizeErrors     = CollectionNotFound | StorageSystemError
+  type ClearErrors    = CollectionNotFound | StorageSystemError
+  type DropErrors     = CollectionNotFound | StorageSystemError
+  type GetErrors      = CollectionNotFound | StorageSystemError
+  type CreateErrors   = CollectionAlreadExists | StorageSystemError
+  type FetchErrors    = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
+  type ContainsErrors = OverSizedKey | CollectionNotFound | StorageSystemError
+  type UpsertErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
+  type DeleteErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
+  type CollectErrors  = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
+  type StreamErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
 }
