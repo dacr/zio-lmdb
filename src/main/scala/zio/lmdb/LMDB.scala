@@ -66,7 +66,8 @@ trait LMDB {
     keyFilter: RecordKey => Boolean = _ => true,
     valueFilter: T => Boolean = (_: T) => true,
     startAfter: Option[RecordKey] = None,
-    backward: Boolean = false
+    backward: Boolean = false,
+    limit: Option[Int] = None
   )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CollectErrors, List[T]]
 
   def stream[T](
@@ -335,6 +336,8 @@ object LMDB {
     *   start the stream after the given key, default is start from the beginning (when backward is false) or from end (when backward is true)
     * @param backward
     *   going in reverse key order, default is false
+    * @param limit
+    *   maximum number of item you want to get
     * @tparam T
     *   the data type of the record which must be Json serializable
     * @return
@@ -345,9 +348,10 @@ object LMDB {
     keyFilter: RecordKey => Boolean = _ => true,
     valueFilter: T => Boolean = (_: T) => true,
     startAfter: Option[RecordKey] = None,
-    backward: Boolean = false
+    backward: Boolean = false,
+    limit: Option[Int] = None
   )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, CollectErrors, List[T]] =
-    ZIO.serviceWithZIO(_.collect[T](collectionName, keyFilter, valueFilter, startAfter, backward))
+    ZIO.serviceWithZIO(_.collect[T](collectionName, keyFilter, valueFilter, startAfter, backward, limit))
 
   /** Stream collection records, use keyFilter to apply filtering before record deserialization.
     *

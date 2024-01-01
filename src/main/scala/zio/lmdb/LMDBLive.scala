@@ -414,7 +414,8 @@ class LMDBLive(
     keyFilter: RecordKey => Boolean = _ => true,
     valueFilter: T => Boolean = (_: T) => true,
     startAfter: Option[RecordKey] = None,
-    backward: Boolean = false
+    backward: Boolean = false,
+    limit: Option[Int] = None
   )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CollectErrors, List[T]] = {
     def collectLogic(collectionDbi: Dbi[ByteBuffer]): ZIO[Scope, CollectErrors, List[T]] = for {
       txn          <- ZIO.acquireRelease(
@@ -438,12 +439,15 @@ class LMDBLive(
                       )
       collected    <- ZIO
                         .attempt {
-                          Chunk
-                            .fromIterator(KeyValueIterator(iterable.iterator()))
+                          def content = LazyList
+                            .from(KeyValueIterator(iterable.iterator()))
                             .filter { case (key, value) => keyFilter(key) }
                             .flatMap { case (key, value) => value.fromJson[T].toOption } // TODO error are hidden !!!
                             .filter(valueFilter)
-                            .toList
+                          limit match {
+                            case None    => content.toList
+                            case Some(l) => content.take(l).toList
+                          }
                         }
                         .mapError[CollectErrors](err => InternalError(s"Couldn't collect documents stored in $colName", Some(err)))
     } yield collected

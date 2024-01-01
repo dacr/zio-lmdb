@@ -133,6 +133,8 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[
     *   start the stream after the given key, default is start from the beginning (when backward is false) or from end (when backward is true)
     * @param backward
     *   going in reverse key order, default is false
+    * @param limit
+    *   maximum number of item you want to get
     * @return
     *   All matching records
     */
@@ -140,9 +142,10 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[
     keyFilter: RecordKey => Boolean = _ => true,
     valueFilter: T => Boolean = (_: T) => true,
     startAfter: Option[RecordKey] = None,
-    backward: Boolean = false
+    backward: Boolean = false,
+    limit: Option[Int] = None
   ): IO[CollectErrors, List[T]] =
-    lmdb.collect[T](name, keyFilter, valueFilter, startAfter, backward)
+    lmdb.collect[T](name, keyFilter, valueFilter, startAfter, backward, limit)
 
   /** Stream collection records, use keyFilter to apply filtering before record deserialization.
     *

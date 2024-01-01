@@ -1,5 +1,9 @@
 # ZIO-LMDB RELEASE NOTES
 
+## 1.7.1 - 2024-01-01
+
+- add limit parameter to collection collect operation
+
 ## 1.7.0 - 2024-01-01
 
 - upgrade to lmdb-java 1.9.0
