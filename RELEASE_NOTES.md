@@ -8,6 +8,7 @@
   - forward or backward
   - start after a given key
 - do not display logs during unit test execution
+- add more unit tests
 
 ## 1.5.0 - 2023-09-24
 
