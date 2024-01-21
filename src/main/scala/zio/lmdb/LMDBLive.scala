@@ -343,6 +343,38 @@ class LMDBLive(
     } yield result
   }
 
+  override def update[T](collectionName: CollectionName, key: RecordKey, modifier: T => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpdateErrors, Option[T]] = {
+    def updateLogic(collectionDbi: Dbi[ByteBuffer]): IO[UpdateErrors, Option[T]] = {
+      reentrantLock.withWriteLock(
+        withWriteTransaction(collectionName) { txn =>
+          for {
+            key            <- makeKeyByteBuffer(key)
+            found          <- ZIO.attemptBlocking(Option(collectionDbi.get(txn, key))).mapError(err => InternalError(s"Couldn't fetch $key for upsert on $collectionName", Some(err)))
+            mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
+            mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
+                                ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[UpdateErrors](msg => JsonFailure(msg))
+                              }
+            mayBeDocAfter   = mayBeDocBefore.map(modifier)
+            _              <- ZIO.foreachDiscard(mayBeDocAfter) { docAfter =>
+                                val jsonDocBytes = docAfter.toJson.getBytes(charset)
+                                for {
+                                  valueBuffer <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(jsonDocBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for json value", Some(err)))
+                                  _           <- ZIO.attemptBlocking(valueBuffer.put(jsonDocBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
+                                  _           <- ZIO.attemptBlocking(collectionDbi.put(txn, key, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $key into $collectionName", Some(err)))
+                                  _           <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit upsert $key into $collectionName", Some(err)))
+                                } yield ()
+                              }
+          } yield mayBeDocAfter
+        }
+      )
+    }
+
+    for {
+      collectionDbi <- getCollectionDbi(collectionName)
+      result        <- updateLogic(collectionDbi)
+    } yield result
+  }
+
   override def upsertOverwrite[T](colName: CollectionName, key: RecordKey, document: T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, Unit] = {
     def upsertLogic(collectionDbi: Dbi[ByteBuffer]): IO[UpsertErrors, Unit] = {
       reentrantLock.withWriteLock(
@@ -367,8 +399,8 @@ class LMDBLive(
     } yield result
   }
 
-  override def upsert[T](colName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, Unit] = {
-    def upsertLogic(collectionDbi: Dbi[ByteBuffer]): IO[UpsertErrors, Unit] = {
+  override def upsert[T](colName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, T] = {
+    def upsertLogic(collectionDbi: Dbi[ByteBuffer]): IO[UpsertErrors, T] = {
       reentrantLock.withWriteLock(
         withWriteTransaction(colName) { txn =>
           for {
@@ -384,7 +416,7 @@ class LMDBLive(
             _              <- ZIO.attemptBlocking(valueBuffer.put(jsonDocBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
             _              <- ZIO.attemptBlocking(collectionDbi.put(txn, key, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $key into $colName", Some(err)))
             _              <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit upsert $key into $colName", Some(err)))
-          } yield ()
+          } yield docAfter
         }
       )
     }

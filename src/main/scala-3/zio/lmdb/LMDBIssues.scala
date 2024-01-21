@@ -17,10 +17,10 @@
 package zio.lmdb
 
 enum StorageUserError {
-  case CollectionAlreadExists(name: CollectionName)            extends StorageUserError
-  case CollectionNotFound(name: CollectionName)                extends StorageUserError
-  case JsonFailure(issue: String)                              extends StorageUserError
-  case OverSizedKey(id: String, expandedSize: Int, limit: Int) extends StorageUserError
+  case CollectionAlreadExists(name: CollectionName)
+  case CollectionNotFound(name: CollectionName)
+  case JsonFailure(issue: String)
+  case OverSizedKey(id: String, expandedSize: Int, limit: Int)
 }
 
 enum StorageSystemError {

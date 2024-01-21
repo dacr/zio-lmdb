@@ -55,7 +55,9 @@ trait LMDB {
 
   def contains(collectionName: CollectionName, key: RecordKey): IO[ContainsErrors, Boolean]
 
-  def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, Unit]
+  def update[T](collectionName: CollectionName, key: RecordKey, modifier: T => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpdateErrors, Option[T]]
+
+  def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, T]
 
   def upsertOverwrite[T](collectionName: CollectionName, key: RecordKey, document: T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, Unit]
 
@@ -282,6 +284,24 @@ object LMDB {
     */
   def contains(collectionName: CollectionName, key: RecordKey): ZIO[LMDB, ContainsErrors, Boolean] = ZIO.serviceWithZIO(_.contains(collectionName, key))
 
+  /** update atomically a record in a collection.
+    *
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key for the record upsert
+    * @param modifier
+    *   the lambda used to update the record content
+    * @tparam T
+    *   the data type of the record which must be Json serializable
+    * @returns
+    *   the updated record if a record exists for the given key
+    */
+
+  def update[T](collectionName: CollectionName, key: RecordKey, modifier: T => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, UpdateErrors, Option[T]] = {
+    ZIO.serviceWithZIO(_.update[T](collectionName, key, modifier))
+  }
+
   /** update or insert atomically a record in a collection.
     *
     * @param collectionName
@@ -292,9 +312,12 @@ object LMDB {
     *   the lambda used to update the record content
     * @tparam T
     *   the data type of the record which must be Json serializable
+    * @returns
+    *   the updated or inserted record
     */
-  def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, UpsertErrors, Unit] =
+  def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, UpsertErrors, T] = {
     ZIO.serviceWithZIO(_.upsert[T](collectionName, key, modifier))
+  }
 
   /** Overwrite or insert a record in a collection. If the key is already being used for a record then the previous record will be overwritten by the new one.
     *

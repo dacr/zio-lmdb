@@ -1,5 +1,15 @@
 # ZIO-LMDB RELEASE NOTES
 
+## 1.8.0 - 2024-01-21
+
+- dependency updates
+- add update operation
+  - `def update(key: RecordKey, modifier: T => T): IO[UpdateErrors, Option[T]]`
+  - will return None if no record was found
+- change upsert method signature to return the updated/inserted record (instead of Unit previously)
+  - `def upsert(key: RecordKey, modifier: Option[T] => T): IO[UpsertErrors, T]`
+  - now the updated or inserted record is returned
+
 ## 1.7.1 - 2024-01-01
 
 - add limit parameter to collection collect operation

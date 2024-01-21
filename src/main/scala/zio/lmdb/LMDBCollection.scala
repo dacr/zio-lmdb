@@ -93,14 +93,27 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[
     */
   def contains(key: RecordKey): IO[ContainsErrors, Boolean] = lmdb.contains(name, key)
 
+  /** update atomically a record in a collection.
+   *
+   * @param key
+   *   the key for the record upsert
+   * @param modifier
+   *   the lambda used to update the record content
+   * @returns
+   *   the updated record if a record exists for the given key
+   */
+  def update(key: RecordKey, modifier: T => T): IO[UpdateErrors, Option[T]] = lmdb.update(name, key, modifier)
+
   /** update or insert atomically a record in a collection.
     *
     * @param key
     *   the key for the record upsert
     * @param modifier
     *   the lambda used to update the record content
+    * @returns
+    *   the updated or inserted record
     */
-  def upsert(key: RecordKey, modifier: Option[T] => T): IO[UpsertErrors, Unit] =
+  def upsert(key: RecordKey, modifier: Option[T] => T): IO[UpsertErrors, T] =
     lmdb.upsert[T](name, key, modifier)
 
   /** Overwrite or insert a record in a collection. If the key is already being used for a record then the previous record will be overwritten by the new one.

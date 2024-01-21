@@ -190,6 +190,23 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
     } @@ tag("slow"),
     // -----------------------------------------------------------------------------
     test("safe update in place") {
+      def modifier(from: Num): Num = Num(from.value.intValue() + 1)
+
+      for {
+        id            <- randomUUID
+        count          = limit
+        colName       <- randomCollectionName
+        col           <- LMDB.collectionCreate[Num](colName)
+        shouldBeEmpty <- col.update(id, modifier)
+        _             <- col.upsertOverwrite(id, Num(0))
+        _             <- ZIO.foreachDiscard(1.to(count))(i => col.update(id, modifier))
+        num           <- col.fetch(id)
+      } yield assertTrue(
+        shouldBeEmpty.isEmpty,
+        num.map(_.value.intValue()).contains(count)
+      )
+    }, // -----------------------------------------------------------------------------
+    test("safe upsert in place") {
       def modifier(from: Option[Num]): Num = from match {
         case None      => Num(1)
         case Some(num) => Num(num.value.intValue() + 1)
