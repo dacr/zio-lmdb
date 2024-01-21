@@ -28,6 +28,7 @@ package object lmdb {
   type CreateErrors   = LmdbError
   type FetchErrors    = LmdbError
   type ContainsErrors = LmdbError
+  type UpdateErrors   = LmdbError
   type UpsertErrors   = LmdbError
   type DeleteErrors   = LmdbError
   type CollectErrors  = LmdbError
