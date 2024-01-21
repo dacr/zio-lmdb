@@ -5,7 +5,10 @@ import zio.logging._
 import zio.nio.file.Files
 
 trait Commons {
-  val config: ConsoleLoggerConfig = ConsoleLoggerConfig(LogFormat.default, LogFilter.logLevel(LogLevel.None))
+  val config: ConsoleLoggerConfig = ConsoleLoggerConfig(
+    LogFormat.default,
+    LogFilter.LogLevelByNameConfig(LogLevel.None)
+  )
 
   val logger = Runtime.removeDefaultLoggers >>> consoleLogger(config)
 
