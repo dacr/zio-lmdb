@@ -15,11 +15,11 @@ scalaVersion       := "3.3.1"
 crossScalaVersions := Seq("2.13.12", "3.3.1")
 
 lazy val versions = new {
-  val zio        = "2.0.20"
+  val zio        = "2.0.21"
   val zionio     = "2.0.2"
   val ziojson    = "0.6.2"
-  val zioconfig  = "4.0.0"
-  val ziologging = "2.1.16"
+  val zioconfig  = "4.0.1"
+  val ziologging = "2.2.0"
   val lmdb       = "0.9.0"
 }
 
