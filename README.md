@@ -10,8 +10,9 @@ to enhance the developer experience.
 So ZIO-lmdb is an embedded key/value database, with an easy to use opinionated API, choices have been made
 to make the developer experience as simple as possible :
 - JSON based storage using zio-json,
-- safe update by using a lambda which will be called with the previous value if it exists and returns the new value,
-- identifiers are managed by the developer, just use [UUID][UUID] or [ULID][ZIO-ULID].
+- Safe update by using a lambda which will be called with the previous value if it exists and returns the new value,
+- Identifiers are managed by the developer, just use [UUID][UUID] or [ULID][ZIO-ULID].
+  - Remember that identifiers are automatically lexicographically sorted :)
 
 API is designed to not lie, all functions signatures describe precisely
 what you must expect from them, thanks to [ZIO][ZIO] and [Scala3][Scala3].  
@@ -50,20 +51,20 @@ or java properties to resolve this library configuration parameters.
 
 ```scala
 //> using scala  "3.3.1"
-//> using dep "fr.janalyse::zio-lmdb:1.6.0"
+//> using dep "fr.janalyse::zio-lmdb:1.8.0"
 //> using javaOpt "--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED"
 
 import zio.*, zio.lmdb.*, zio.json.*
 import java.io.File, java.util.UUID, java.time.OffsetDateTime
 
-case class Record(uuid: UUID,name: String,age: Int,addedOn: OffsetDateTime) derives JsonCodec
+case class Record(uuid: UUID, name: String, age: Int, addedOn: OffsetDateTime) derives JsonCodec
 
 object SimpleExample extends ZIOAppDefault {
-  override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-data-simple-example"), zio.Scope.default)
+  override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-data-simple-example"), Scope.default)
 
   val collectionName = "examples"
   val example        = for {
-    examples  <- LMDB.collectionCreate[Record](collectionName, failIfExists=false)
+    examples  <- LMDB.collectionCreate[Record](collectionName, failIfExists = false)
     recordId  <- Random.nextUUID
     dateTime  <- Clock.currentDateTime
     record     = Record(recordId, "John Doe", 42, dateTime)
