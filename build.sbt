@@ -19,7 +19,7 @@ lazy val versions = new {
   val zionio     = "2.0.2"
   val ziojson    = "0.6.2"
   val zioconfig  = "4.0.1"
-  val ziologging = "2.2.0"
+  val ziologging = "2.2.2"
   val lmdb       = "0.9.0"
 }
 
