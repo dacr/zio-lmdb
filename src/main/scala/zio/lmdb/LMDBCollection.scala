@@ -30,7 +30,7 @@ import zio.stream._
   * @tparam T
   *   the data class type for collection content
   */
-case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]) {
+case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec: LMDBCodec[T]) {
 
   /** Get how many items a collection contains
     *

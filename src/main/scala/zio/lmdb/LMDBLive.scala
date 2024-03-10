@@ -83,7 +83,7 @@ class LMDBLive(
     } yield found
   }
 
-  override def collectionGet[T](name: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[GetErrors, LMDBCollection[T]] = {
+  override def collectionGet[T](name: CollectionName)(implicit codec: LMDBCodec[T]): IO[GetErrors, LMDBCollection[T]] = {
     for {
       exists     <- collectionExists(name)
       collection <- ZIO.cond[CollectionNotFound, LMDBCollection[T]](exists, LMDBCollection[T](name, this), CollectionNotFound(name))
@@ -109,7 +109,7 @@ class LMDBLive(
     } yield ()
   }
 
-  override def collectionCreate[T](name: CollectionName, failIfExists: Boolean = true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CreateErrors, LMDBCollection[T]] = {
+  override def collectionCreate[T](name: CollectionName, failIfExists: Boolean = true)(implicit codec: LMDBCodec[T]): IO[CreateErrors, LMDBCollection[T]] = {
     val allocateLogic = if (failIfExists) collectionAllocate(name) else collectionAllocate(name).ignore
     allocateLogic *> ZIO.succeed(LMDBCollection[T](name, this))
   }
@@ -209,7 +209,20 @@ class LMDBLive(
     )
   }
 
-  override def delete[T](colName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[DeleteErrors, Option[T]] = {
+  private def decode[T](input:ByteBuffer)(implicit codec: LMDBCodec[T]):Either[String,T] = {
+    //charset.decode(input).fromJson[T]
+    input.flip()
+    val remaining = new Array[Byte](input.remaining)
+    input.get(remaining)
+    codec.decode(remaining)
+  }
+
+  private def encode[T](input:T)(implicit codec: LMDBCodec[T]):Array[Byte] = {
+    codec.encode(input)
+  }
+
+
+  override def delete[T](colName: CollectionName, key: RecordKey)(implicit codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
     def deleteLogic(colDbi: Dbi[ByteBuffer]): IO[DeleteErrors, Option[T]] = {
       reentrantLock.withWriteLock(
         withWriteTransaction(colName) { txn =>
@@ -218,7 +231,7 @@ class LMDBLive(
             found         <- ZIO.attemptBlocking(Option(colDbi.get(txn, key))).mapError[DeleteErrors](err => InternalError(s"Couldn't fetch $key for delete on $colName", Some(err)))
             mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
             mayBeDoc      <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                               ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[DeleteErrors](msg => JsonFailure(msg))
+                               ZIO.fromEither(decode(rawValue)).mapError[DeleteErrors](msg => JsonFailure(msg))
                              }
             keyFound      <- ZIO.attemptBlocking(colDbi.delete(txn, key)).mapError[DeleteErrors](err => InternalError(s"Couldn't delete $key from $colName", Some(err)))
             _             <- ZIO.attemptBlocking(txn.commit()).mapError[DeleteErrors](err => InternalError("Couldn't commit transaction", Some(err)))
@@ -233,7 +246,7 @@ class LMDBLive(
     } yield status
   }
 
-  override def fetch[T](colName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[T]] = {
+  override def fetch[T](colName: CollectionName, key: RecordKey)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[T]] = {
     def fetchLogic(colDbi: Dbi[ByteBuffer]): ZIO[Any, FetchErrors, Option[T]] = {
       withReadTransaction(colName) { txn =>
         for {
@@ -242,7 +255,7 @@ class LMDBLive(
           mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
           document      <- ZIO
                              .foreach(mayBeRawValue) { rawValue =>
-                               ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[FetchErrors](msg => JsonFailure(msg))
+                               ZIO.fromEither(decode(rawValue)).mapError[FetchErrors](msg => JsonFailure(msg))
                              }
         } yield document
       }
@@ -257,7 +270,7 @@ class LMDBLive(
   import org.lmdbjava.GetOp
   import org.lmdbjava.SeekOp
 
-  private def seek[T](colName: CollectionName, recordKey: Option[RecordKey], seekOperation: SeekOp)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
+  private def seek[T](colName: CollectionName, recordKey: Option[RecordKey], seekOperation: SeekOp)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
     // TODO TOO COMPLEX !!!!
     def seekLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, FetchErrors, Option[(RecordKey, T)]] = for {
       txn         <- ZIO.acquireRelease(
@@ -298,7 +311,7 @@ class LMDBLive(
       seekedValue <- ZIO
                        .foreach(valBuffer) { rawValue =>
                          ZIO
-                           .fromEither(charset.decode(rawValue).fromJson[T])
+                           .fromEither(decode(rawValue))
                            .mapError[FetchErrors](msg => JsonFailure(msg))
                        }
                        .when(seekSuccess)
@@ -311,19 +324,19 @@ class LMDBLive(
     } yield result
   }
 
-  override def head[T](collectionName: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
+  override def head[T](collectionName: CollectionName)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
     seek(collectionName, None, SeekOp.MDB_FIRST)
   }
 
-  override def previous[T](collectionName: CollectionName, beforeThatKey: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
+  override def previous[T](collectionName: CollectionName, beforeThatKey: RecordKey)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
     seek(collectionName, Some(beforeThatKey), SeekOp.MDB_PREV)
   }
 
-  override def next[T](collectionName: CollectionName, afterThatKey: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
+  override def next[T](collectionName: CollectionName, afterThatKey: RecordKey)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
     seek(collectionName, Some(afterThatKey), SeekOp.MDB_NEXT)
   }
 
-  override def last[T](collectionName: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
+  override def last[T](collectionName: CollectionName)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]] = {
     seek(collectionName, None, SeekOp.MDB_LAST)
   }
 
@@ -343,7 +356,7 @@ class LMDBLive(
     } yield result
   }
 
-  override def update[T](collectionName: CollectionName, key: RecordKey, modifier: T => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpdateErrors, Option[T]] = {
+  override def update[T](collectionName: CollectionName, key: RecordKey, modifier: T => T)(implicit codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
     def updateLogic(collectionDbi: Dbi[ByteBuffer]): IO[UpdateErrors, Option[T]] = {
       reentrantLock.withWriteLock(
         withWriteTransaction(collectionName) { txn =>
@@ -352,11 +365,11 @@ class LMDBLive(
             found          <- ZIO.attemptBlocking(Option(collectionDbi.get(txn, key))).mapError(err => InternalError(s"Couldn't fetch $key for upsert on $collectionName", Some(err)))
             mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
             mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                                ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[UpdateErrors](msg => JsonFailure(msg))
+                                ZIO.fromEither(decode(rawValue)).mapError[UpdateErrors](msg => JsonFailure(msg))
                               }
             mayBeDocAfter   = mayBeDocBefore.map(modifier)
             _              <- ZIO.foreachDiscard(mayBeDocAfter) { docAfter =>
-                                val jsonDocBytes = docAfter.toJson.getBytes(charset)
+                                val jsonDocBytes = encode(docAfter)
                                 for {
                                   valueBuffer <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(jsonDocBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for json value", Some(err)))
                                   _           <- ZIO.attemptBlocking(valueBuffer.put(jsonDocBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
@@ -375,7 +388,7 @@ class LMDBLive(
     } yield result
   }
 
-  override def upsertOverwrite[T](colName: CollectionName, key: RecordKey, document: T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, Unit] = {
+  override def upsertOverwrite[T](colName: CollectionName, key: RecordKey, document: T)(implicit codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
     def upsertLogic(collectionDbi: Dbi[ByteBuffer]): IO[UpsertErrors, Unit] = {
       reentrantLock.withWriteLock(
         withWriteTransaction(colName) { txn =>
@@ -383,7 +396,7 @@ class LMDBLive(
             key           <- makeKeyByteBuffer(key)
             found         <- ZIO.attemptBlocking(Option(collectionDbi.get(txn, key))).mapError(err => InternalError(s"Couldn't fetch $key for upsertOverwrite on $colName", Some(err)))
             mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
-            jsonDocBytes   = document.toJson.getBytes(charset)
+            jsonDocBytes   = encode(document)
             valueBuffer   <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(jsonDocBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for json value", Some(err)))
             _             <- ZIO.attemptBlocking(valueBuffer.put(jsonDocBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
             _             <- ZIO.attemptBlocking(collectionDbi.put(txn, key, valueBuffer)).mapError(err => InternalError(s"Couldn't upsertOverwrite $key into $colName", Some(err)))
@@ -399,7 +412,7 @@ class LMDBLive(
     } yield result
   }
 
-  override def upsert[T](colName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, T] = {
+  override def upsert[T](colName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
     def upsertLogic(collectionDbi: Dbi[ByteBuffer]): IO[UpsertErrors, T] = {
       reentrantLock.withWriteLock(
         withWriteTransaction(colName) { txn =>
@@ -408,10 +421,10 @@ class LMDBLive(
             found          <- ZIO.attemptBlocking(Option(collectionDbi.get(txn, key))).mapError(err => InternalError(s"Couldn't fetch $key for upsert on $colName", Some(err)))
             mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
             mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                                ZIO.fromEither(charset.decode(rawValue).fromJson[T]).mapError[UpsertErrors](msg => JsonFailure(msg))
+                                ZIO.fromEither(decode(rawValue)).mapError[UpsertErrors](msg => JsonFailure(msg))
                               }
             docAfter        = modifier(mayBeDocBefore)
-            jsonDocBytes    = docAfter.toJson.getBytes(charset)
+            jsonDocBytes    = encode(docAfter)
             valueBuffer    <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(jsonDocBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for json value", Some(err)))
             _              <- ZIO.attemptBlocking(valueBuffer.put(jsonDocBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
             _              <- ZIO.attemptBlocking(collectionDbi.put(txn, key, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $key into $colName", Some(err)))
@@ -448,7 +461,7 @@ class LMDBLive(
     startAfter: Option[RecordKey] = None,
     backward: Boolean = false,
     limit: Option[Int] = None
-  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CollectErrors, List[T]] = {
+  )(implicit codec: LMDBCodec[T]): IO[CollectErrors, List[T]] = {
     def collectLogic(collectionDbi: Dbi[ByteBuffer]): ZIO[Scope, CollectErrors, List[T]] = for {
       txn          <- ZIO.acquireRelease(
                         ZIO
@@ -474,7 +487,7 @@ class LMDBLive(
                           def content = LazyList
                             .from(KeyValueIterator(iterable.iterator()))
                             .filter { case (key, value) => keyFilter(key) }
-                            .flatMap { case (key, value) => value.fromJson[T].toOption } // TODO error are hidden !!!
+                            .flatMap { case (key, value) => value.toOption } // TODO error are hidden !!!
                             .filter(valueFilter)
                           limit match {
                             case None    => content.toList
@@ -490,18 +503,18 @@ class LMDBLive(
     } yield collected
   }
 
-  private def extractKeyVal(keyval: KeyVal[ByteBuffer]): (String, String) = {
-    val key          = keyval.key()
-    val value        = keyval.`val`()
-    val decodedKey   = charset.decode(key).toString
-    val decodedValue = charset.decode(value).toString
-    decodedKey -> decodedValue
-  }
-
-  case class KeyValueIterator(jiterator: java.util.Iterator[KeyVal[ByteBuffer]]) extends Iterator[(String, String)] {
+  case class KeyValueIterator[T](jiterator: java.util.Iterator[KeyVal[ByteBuffer]])(implicit codec: LMDBCodec[T]) extends Iterator[(RecordKey, Either[String, T])] {
     override def hasNext: Boolean = jiterator.hasNext()
 
-    override def next(): (String, String) = {
+    private def extractKeyVal(keyval: KeyVal[ByteBuffer]): (RecordKey, Either[String, T]) = {
+      val key = keyval.key()
+      val value = keyval.`val`()
+      val decodedKey = charset.decode(key).toString
+      val decodedValue = decode[T](value) // TODO this operation is called even when the key is filtered
+      decodedKey -> decodedValue
+    }
+
+    override def next(): (String, Either[String, T]) = {
       val (key, value) = extractKeyVal(jiterator.next())
       key -> value
     }
@@ -512,7 +525,7 @@ class LMDBLive(
     keyFilter: RecordKey => Boolean = _ => true,
     startAfter: Option[RecordKey] = None,
     backward: Boolean = false
-  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Any, StreamErrors, T] = {
+  )(implicit codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T] = {
     def streamLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, T]] = for {
       txn          <- ZIO.acquireRelease(
                         ZIO
@@ -536,7 +549,7 @@ class LMDBLive(
     } yield ZStream
       .fromIterator(KeyValueIterator(iterable.iterator()))
       .filter { case (key, value) => keyFilter(key) }
-      .mapZIO { case (key, value) => ZIO.from(value.fromJson[T]).mapError(err => JsonFailure(err)) }
+      .mapZIO { case (key, value) => ZIO.from(value).mapError(err => JsonFailure(err)) }
       .mapError {
         case err: JsonFailure => err
         case err: Throwable   => InternalError(s"Couldn't stream from $colName", Some(err))
@@ -558,7 +571,7 @@ class LMDBLive(
     keyFilter: RecordKey => Boolean = _ => true,
     startAfter: Option[RecordKey] = None,
     backward: Boolean = false
-  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Any, StreamErrors, (RecordKey, T)] = {
+  )(implicit codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (RecordKey, T)] = {
     def streamLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, (RecordKey, T)]] = for {
       txn          <- ZIO.acquireRelease(
                         ZIO
@@ -582,7 +595,7 @@ class LMDBLive(
     } yield ZStream
       .fromIterator(KeyValueIterator(iterable.iterator()))
       .filter { case (key, value) => keyFilter(key) }
-      .mapZIO { case (key, value) => ZIO.from(value.fromJson[T]).mapError(err => JsonFailure(err)).map(value => key -> value) }
+      .mapZIO { case (key, value) => ZIO.from(value).mapError(err => JsonFailure(err)).map(value => key -> value) }
       .mapError {
         case err: JsonFailure => err
         case err: Throwable   => InternalError(s"Couldn't stream from $colName", Some(err))

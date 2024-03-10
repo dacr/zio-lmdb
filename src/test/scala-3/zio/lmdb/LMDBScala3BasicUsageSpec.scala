@@ -21,7 +21,7 @@ import zio.test.TestAspect.*
 import zio.json.*
 import zio.nio.file.Files
 
-case class Someone(name: String, age: Long) derives JsonCodec
+case class Someone(name: String, age: Long) derives LMDBJsonCodec
 
 object LMDBScala3BasicUsageSpec extends ZIOSpecDefault with Commons {
 

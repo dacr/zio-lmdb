@@ -1,7 +1,7 @@
 package zio.lmdb
 
-trait LMDBCodec[D] {
+trait LMDBCodec[T] {
   type Bytes = Array[Byte]
-  def encode(that: D): Bytes
-  def decode(those: Bytes): Either[String, D]
+  def encode(that: T): Bytes
+  def decode(those: Bytes): Either[String, T]
 }
