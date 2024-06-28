@@ -1,5 +1,9 @@
 # ZIO-LMDB RELEASE NOTES
 
+## 1.8.1 - 2024-06-29
+
+- dependency updates
+
 ## 1.8.0 - 2024-01-21
 
 - dependency updates
