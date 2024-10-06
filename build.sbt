@@ -1,15 +1,8 @@
-organization := "fr.janalyse"
 name         := "zio-lmdb"
-homepage     := Some(new URL("https://github.com/dacr/zio-lmdb"))
+organization := "fr.janalyse"
+description  := "Lightning Memory Database (LMDB) for scala ZIO"
 
 licenses += "NON-AI-APACHE2" -> url(s"https://github.com/non-ai-licenses/non-ai-licenses/blob/main/NON-AI-APACHE2")
-
-scmInfo := Some(
-  ScmInfo(
-    url(s"https://github.com/dacr/zio-lmdb.git"),
-    s"git@github.com:dacr/zio-lmdb.git"
-  )
-)
 
 scalaVersion       := "3.5.1"
 crossScalaVersions := Seq("2.13.15", "3.5.1")
@@ -43,3 +36,14 @@ excludeDependencies += "org.scala-lang.modules" % "scala-collection-compat_2.13"
 
 ThisBuild / fork := true
 ThisBuild / javaOptions ++= Seq("--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED")
+
+homepage   := Some(new URL("https://github.com/dacr/zio-lmdb"))
+scmInfo    := Some(ScmInfo(url(s"https://github.com/dacr/zio-lmdb.git"), s"git@github.com:dacr/zio-lmdb.git"))
+developers := List(
+  Developer(
+    id = "dacr",
+    name = "David Crosson",
+    email = "crosson.david@gmail.com",
+    url = url("https://github.com/dacr")
+  )
+)
