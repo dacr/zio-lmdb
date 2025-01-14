@@ -4,15 +4,15 @@ description  := "Lightning Memory Database (LMDB) for scala ZIO"
 
 licenses += "NON-AI-APACHE2" -> url(s"https://github.com/non-ai-licenses/non-ai-licenses/blob/main/NON-AI-APACHE2")
 
-scalaVersion       := "3.5.1"
-crossScalaVersions := Seq("2.13.15", "3.5.1")
+scalaVersion       := "3.3.4" // FOR LIBS USE SCALA LTS
+crossScalaVersions := Seq("2.13.15", "3.3.4")
 
 lazy val versions = new {
-  val zio        = "2.1.9"
+  val zio        = "2.1.14"
   val zionio     = "2.0.2"
   val ziojson    = "0.7.3"
-  val zioconfig  = "4.0.2"
-  val ziologging = "2.3.1"
+  val zioconfig  = "4.0.4"
+  val ziologging = "2.4.0"
   val lmdb       = "0.9.0"
 }
 
@@ -24,7 +24,6 @@ libraryDependencies ++= Seq(
   "org.lmdbjava" % "lmdbjava"            % versions.lmdb,
   "dev.zio"     %% "zio-test"            % versions.zio        % Test,
   "dev.zio"     %% "zio-logging"         % versions.ziologging % Test,
-  // "dev.zio"     %% "zio-test-junit"      % versions.zio    % Test,
   "dev.zio"     %% "zio-test-sbt"        % versions.zio        % Test,
   "dev.zio"     %% "zio-test-scalacheck" % versions.zio        % Test,
   "dev.zio"     %% "zio-nio"             % versions.zionio     % Test
