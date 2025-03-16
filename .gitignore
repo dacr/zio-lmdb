@@ -25,3 +25,6 @@ test*.log
 *.tmp
 null
 .attach_pid*
+
+# Security purposes
+.envrc
