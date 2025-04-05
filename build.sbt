@@ -8,7 +8,7 @@ scalaVersion       := "3.3.5" // FOR LIBS USE SCALA LTS
 crossScalaVersions := Seq("2.13.16", "3.3.5")
 
 lazy val versions = new {
-  val zio        = "2.1.16"
+  val zio        = "2.1.17"
   val zionio     = "2.0.2"
   val ziojson    = "0.7.39"
   val zioconfig  = "4.0.4"
