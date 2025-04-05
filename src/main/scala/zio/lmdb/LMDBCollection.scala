@@ -16,7 +16,6 @@
 package zio.lmdb
 
 import zio._
-import zio.json.{JsonDecoder, JsonEncoder}
 import zio.lmdb.StorageUserError._
 import zio.lmdb.StorageSystemError
 import zio.stream._
@@ -30,7 +29,7 @@ import zio.stream._
   * @tparam T
   *   the data class type for collection content
   */
-case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]) {
+case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[T]) {
 
   /** Get how many items a collection contains
     *

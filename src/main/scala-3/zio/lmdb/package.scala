@@ -28,11 +28,11 @@ package object lmdb {
   type DropErrors     = CollectionNotFound | StorageSystemError
   type GetErrors      = CollectionNotFound | StorageSystemError
   type CreateErrors   = CollectionAlreadExists | StorageSystemError
-  type FetchErrors    = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
+  type FetchErrors    = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
   type ContainsErrors = OverSizedKey | CollectionNotFound | StorageSystemError
-  type UpdateErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type UpsertErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type DeleteErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type CollectErrors  = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
-  type StreamErrors   = OverSizedKey | CollectionNotFound | JsonFailure | StorageSystemError
+  type UpdateErrors   = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
+  type UpsertErrors   = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
+  type DeleteErrors   = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
+  type CollectErrors  = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
+  type StreamErrors   = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
 }

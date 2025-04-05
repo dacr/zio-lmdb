@@ -23,7 +23,7 @@ import zio.nio.file.Files
 
 case class Record(name: String, age: Long)
 object Record {
-  implicit val codec: JsonCodec[Record] = DeriveJsonCodec.gen
+  implicit val codec: LMDBCodec[Record] = DeriveLMDBJsonCodec.gen
 }
 
 object LMDBBasicUsageSpec extends ZIOSpecDefault with Commons {

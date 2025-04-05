@@ -29,7 +29,7 @@ case class Dummy(
 )
 
 object Dummy {
-  implicit val codec: JsonCodec[Dummy] = DeriveJsonCodec.gen
+  implicit val codec: LMDBCodec[Dummy] = DeriveLMDBJsonCodec.gen
 
   def random = for {
     uuid <- Random.nextUUID

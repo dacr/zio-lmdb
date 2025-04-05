@@ -19,7 +19,7 @@ package zio.lmdb
 enum StorageUserError {
   case CollectionAlreadExists(name: CollectionName)
   case CollectionNotFound(name: CollectionName)
-  case JsonFailure(issue: String)
+  case CodecFailure(issue: String)
   case OverSizedKey(id: String, expandedSize: Int, limit: Int)
 }
 

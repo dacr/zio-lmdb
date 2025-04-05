@@ -16,7 +16,6 @@
 package zio.lmdb
 
 import zio._
-import zio.json._
 import zio.json.ast.Json
 import zio.json.ast.Json._
 import zio.nio.file._
@@ -24,6 +23,8 @@ import zio.stream.{ZSink, ZStream}
 import zio.test._
 import zio.test.Gen._
 import zio.test.TestAspect._
+
+import LMDBCodecsJson._
 
 object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
 
@@ -254,7 +255,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
       val value = Num(42)
       for {
         colName    <- randomCollectionName
-        col        <- LMDB.collectionCreate(colName)
+        col        <- LMDB.collectionCreate[Num](colName)
         _          <- ZIO.foreachDiscard(1.to(count))(num => col.upsertOverwrite(s"id#$num", value))
         gottenSize <- col.size()
         collected  <- col.collect()

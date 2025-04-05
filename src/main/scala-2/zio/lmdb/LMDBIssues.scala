@@ -21,7 +21,7 @@ trait StorageUserError extends LmdbError
 object StorageUserError {
   case class CollectionAlreadExists(name: CollectionName)            extends StorageUserError
   case class CollectionNotFound(name: CollectionName)                extends StorageUserError
-  case class JsonFailure(issue: String)                              extends StorageUserError
+  case class CodecFailure(issue: String)                             extends StorageUserError
   case class OverSizedKey(id: String, expandedSize: Int, limit: Int) extends StorageUserError
 }
 

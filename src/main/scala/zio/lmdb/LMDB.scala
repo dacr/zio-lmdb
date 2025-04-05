@@ -17,7 +17,6 @@
 package zio.lmdb
 
 import zio._
-import zio.json._
 import zio.stream.ZStream
 import zio.config._
 
@@ -31,11 +30,11 @@ trait LMDB {
 
   def collectionExists(name: CollectionName): IO[StorageSystemError, Boolean]
 
-  def collectionCreate[T](name: CollectionName, failIfExists: Boolean = true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CreateErrors, LMDBCollection[T]]
+  def collectionCreate[T](name: CollectionName, failIfExists: Boolean = true)(implicit codec: LMDBCodec[T]): IO[CreateErrors, LMDBCollection[T]]
 
   def collectionAllocate(name: CollectionName): IO[CreateErrors, Unit]
 
-  def collectionGet[T](name: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[GetErrors, LMDBCollection[T]]
+  def collectionGet[T](name: CollectionName)(implicit codec: LMDBCodec[T]): IO[GetErrors, LMDBCollection[T]]
 
   def collectionSize(name: CollectionName): IO[SizeErrors, Long]
 
@@ -43,25 +42,25 @@ trait LMDB {
 
   def collectionDrop(name: CollectionName): IO[DropErrors, Unit]
 
-  def fetch[T](collectionName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[T]]
+  def fetch[T](collectionName: CollectionName, key: RecordKey)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[T]]
 
-  def head[T](collectionName: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]]
+  def head[T](collectionName: CollectionName)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]]
 
-  def previous[T](collectionName: CollectionName, beforeThatKey: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]]
+  def previous[T](collectionName: CollectionName, beforeThatKey: RecordKey)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]]
 
-  def next[T](collectionName: CollectionName, afterThatKey: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]]
+  def next[T](collectionName: CollectionName, afterThatKey: RecordKey)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]]
 
-  def last[T](collectionName: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[FetchErrors, Option[(RecordKey, T)]]
+  def last[T](collectionName: CollectionName)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]]
 
   def contains(collectionName: CollectionName, key: RecordKey): IO[ContainsErrors, Boolean]
 
-  def update[T](collectionName: CollectionName, key: RecordKey, modifier: T => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpdateErrors, Option[T]]
+  def update[T](collectionName: CollectionName, key: RecordKey, modifier: T => T)(implicit codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]]
 
-  def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, T]
+  def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit codec: LMDBCodec[T]): IO[UpsertErrors, T]
 
-  def upsertOverwrite[T](collectionName: CollectionName, key: RecordKey, document: T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[UpsertErrors, Unit]
+  def upsertOverwrite[T](collectionName: CollectionName, key: RecordKey, document: T)(implicit codec: LMDBCodec[T]): IO[UpsertErrors, Unit]
 
-  def delete[T](collectionName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[DeleteErrors, Option[T]]
+  def delete[T](collectionName: CollectionName, key: RecordKey)(implicit codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]]
 
   def collect[T](
     collectionName: CollectionName,
@@ -70,21 +69,21 @@ trait LMDB {
     startAfter: Option[RecordKey] = None,
     backward: Boolean = false,
     limit: Option[Int] = None
-  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): IO[CollectErrors, List[T]]
+  )(implicit codec: LMDBCodec[T]): IO[CollectErrors, List[T]]
 
   def stream[T](
     collectionName: CollectionName,
     keyFilter: RecordKey => Boolean = _ => true,
     startAfter: Option[RecordKey] = None,
     backward: Boolean = false
-  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Any, StreamErrors, T]
+  )(implicit codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T]
 
   def streamWithKeys[T](
     collectionName: CollectionName,
     keyFilter: RecordKey => Boolean = _ => true,
     startAfter: Option[RecordKey] = None,
     backward: Boolean = false
-  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[Any, StreamErrors, (RecordKey, T)]
+  )(implicit codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (RecordKey, T)]
 }
 
 object LMDB {
@@ -169,7 +168,7 @@ object LMDB {
     * @return
     *   the collection helper facade
     */
-  def collectionCreate[T](name: CollectionName, failIfExists: Boolean = true)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, CreateErrors, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionCreate(name, failIfExists))
+  def collectionCreate[T](name: CollectionName, failIfExists: Boolean = true)(implicit codec: LMDBCodec[T]): ZIO[LMDB, CreateErrors, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionCreate(name, failIfExists))
 
   /** Create a collection
     *
@@ -185,7 +184,7 @@ object LMDB {
     * @return
     *   the collection helper facade
     */
-  def collectionGet[T](name: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, GetErrors, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionGet(name))
+  def collectionGet[T](name: CollectionName)(implicit codec: LMDBCodec[T]): ZIO[LMDB, GetErrors, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionGet(name))
 
   /** Get how many items a collection contains
     *
@@ -223,7 +222,7 @@ object LMDB {
     * @return
     *   some record or none if no record has been found for the given key
     */
-  def fetch[T](collectionName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, FetchErrors, Option[T]] = ZIO.serviceWithZIO(_.fetch(collectionName, key))
+  def fetch[T](collectionName: CollectionName, key: RecordKey)(implicit codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[T]] = ZIO.serviceWithZIO(_.fetch(collectionName, key))
 
   /** Get collection first record
     *
@@ -234,7 +233,7 @@ object LMDB {
     * @return
     *   some (key,record) tuple or none if the collection is empty
     */
-  def head[T](collectionName: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.head(collectionName))
+  def head[T](collectionName: CollectionName)(implicit codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.head(collectionName))
 
   /** Get the previous record for the given key
     *
@@ -247,7 +246,7 @@ object LMDB {
     * @return
     *   some (key,record) tuple or none if the key is the first one
     */
-  def previous[T](collectionName: CollectionName, beforeThatKey: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.previous(collectionName, beforeThatKey))
+  def previous[T](collectionName: CollectionName, beforeThatKey: RecordKey)(implicit codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.previous(collectionName, beforeThatKey))
 
   /** Get the next record for the given key
     *
@@ -260,7 +259,7 @@ object LMDB {
     * @return
     *   some (key,record) tuple or none if the key is the last one
     */
-  def next[T](collectionName: CollectionName, afterThatKey: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.next(collectionName, afterThatKey))
+  def next[T](collectionName: CollectionName, afterThatKey: RecordKey)(implicit codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.next(collectionName, afterThatKey))
 
   /** Get collection last record
     *
@@ -271,7 +270,7 @@ object LMDB {
     * @return
     *   some (key,record) tuple or none if the collection is empty
     */
-  def last[T](collectionName: CollectionName)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.last(collectionName))
+  def last[T](collectionName: CollectionName)(implicit codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.last(collectionName))
 
   /** Check if a collection contains the given key
     *
@@ -298,7 +297,7 @@ object LMDB {
     *   the updated record if a record exists for the given key
     */
 
-  def update[T](collectionName: CollectionName, key: RecordKey, modifier: T => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, UpdateErrors, Option[T]] = {
+  def update[T](collectionName: CollectionName, key: RecordKey, modifier: T => T)(implicit codec: LMDBCodec[T]): ZIO[LMDB, UpdateErrors, Option[T]] = {
     ZIO.serviceWithZIO(_.update[T](collectionName, key, modifier))
   }
 
@@ -315,7 +314,7 @@ object LMDB {
     * @returns
     *   the updated or inserted record
     */
-  def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, UpsertErrors, T] = {
+  def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit codec: LMDBCodec[T]): ZIO[LMDB, UpsertErrors, T] = {
     ZIO.serviceWithZIO(_.upsert[T](collectionName, key, modifier))
   }
 
@@ -330,7 +329,7 @@ object LMDB {
     * @tparam T
     *   the data type of the record which must be Json serializable
     */
-  def upsertOverwrite[T](collectionName: CollectionName, key: RecordKey, document: T)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, UpsertErrors, Unit] =
+  def upsertOverwrite[T](collectionName: CollectionName, key: RecordKey, document: T)(implicit codec: LMDBCodec[T]): ZIO[LMDB, UpsertErrors, Unit] =
     ZIO.serviceWithZIO(_.upsertOverwrite[T](collectionName, key, document))
 
   /** Delete a record in a collection
@@ -344,7 +343,7 @@ object LMDB {
     * @return
     *   the deleted content
     */
-  def delete[T](collectionName: CollectionName, key: RecordKey)(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, DeleteErrors, Option[T]] =
+  def delete[T](collectionName: CollectionName, key: RecordKey)(implicit codec: LMDBCodec[T]): ZIO[LMDB, DeleteErrors, Option[T]] =
     ZIO.serviceWithZIO(_.delete[T](collectionName, key))
 
   /** Collect collection content into the memory, use keyFilter or valueFilter to limit the amount of loaded entries.
@@ -373,7 +372,7 @@ object LMDB {
     startAfter: Option[RecordKey] = None,
     backward: Boolean = false,
     limit: Option[Int] = None
-  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZIO[LMDB, CollectErrors, List[T]] =
+  )(implicit codec: LMDBCodec[T]): ZIO[LMDB, CollectErrors, List[T]] =
     ZIO.serviceWithZIO(_.collect[T](collectionName, keyFilter, valueFilter, startAfter, backward, limit))
 
   /** Stream collection records, use keyFilter to apply filtering before record deserialization.
@@ -396,7 +395,7 @@ object LMDB {
     keyFilter: RecordKey => Boolean = _ => true,
     startAfter: Option[RecordKey] = None,
     backward: Boolean = false
-  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[LMDB, StreamErrors, T] =
+  )(implicit codec: LMDBCodec[T]): ZStream[LMDB, StreamErrors, T] =
     ZStream.serviceWithStream(_.stream(collectionName, keyFilter, startAfter, backward))
 
   /** stream collection Key/record tuples, use keyFilter to apply filtering before record deserialization.
@@ -419,6 +418,6 @@ object LMDB {
     keyFilter: RecordKey => Boolean = _ => true,
     startAfter: Option[RecordKey] = None,
     backward: Boolean = false
-  )(implicit je: JsonEncoder[T], jd: JsonDecoder[T]): ZStream[LMDB, StreamErrors, (RecordKey, T)] =
+  )(implicit codec: LMDBCodec[T]): ZStream[LMDB, StreamErrors, (RecordKey, T)] =
     ZStream.serviceWithStream(_.streamWithKeys(collectionName, keyFilter, startAfter, backward))
 }
