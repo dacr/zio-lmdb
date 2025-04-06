@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 David Crosson
+ * Copyright 2025 David Crosson
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,16 +15,16 @@
  */
 package zio.lmdb
 
-import zio._
+import zio.*
 import zio.json.ast.Json
-import zio.json.ast.Json._
-import zio.nio.file._
+import zio.json.ast.Json.*
+import zio.nio.file.*
 import zio.stream.{ZSink, ZStream}
-import zio.test._
-import zio.test.Gen._
-import zio.test.TestAspect._
+import zio.test.*
+import zio.test.Gen.*
+import zio.test.TestAspect.*
 
-import LMDBCodecsJson._
+import zio.lmdb.json.*
 
 object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
 

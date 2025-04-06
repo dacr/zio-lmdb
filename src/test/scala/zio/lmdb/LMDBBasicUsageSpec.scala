@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 David Crosson
+ * Copyright 2025 David Crosson
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,16 +15,14 @@
  */
 package zio.lmdb
 
-import zio._
-import zio.test._
-import zio.test.TestAspect._
-import zio.json._
+import zio.*
+import zio.test.*
+import zio.test.TestAspect.*
+import zio.json.*
 import zio.nio.file.Files
+import zio.lmdb.json.*
 
 case class Record(name: String, age: Long) derives LMDBCodecJson
-//object Record {
-//  implicit val codec: LMDBCodec[Record] = DeriveLMDBJsonCodec.gen
-//}
 
 object LMDBBasicUsageSpec extends ZIOSpecDefault with Commons {
 

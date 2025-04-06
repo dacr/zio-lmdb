@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 David Crosson
+ * Copyright 2025 David Crosson
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,11 @@
  */
 package zio.lmdb
 
-import zio._
-import zio.json._
-import zio.test.TestAspect._
-import zio.test._
+import zio.*
+import zio.json.*
+import zio.test.TestAspect.*
+import zio.test.*
+import zio.lmdb.json.*
 
 import java.util.UUID
 
