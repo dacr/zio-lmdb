@@ -9,7 +9,8 @@ to enhance the developer experience.
 
 So ZIO-lmdb is an embedded key/value database, with an easy to use opinionated API, choices have been made
 to make the developer experience as simple as possible :
-- JSON based storage using zio-json,
+- JSON based default storage using zio-json,
+  - *Custom serialization is supported*
 - Safe update by using a lambda which will be called with the previous value if it exists and returns the new value,
 - Identifiers are managed by the developer, just use [UUID][UUID] or [ULID][ZIO-ULID].
   - Remember that identifiers are automatically lexicographically sorted :)
@@ -95,7 +96,6 @@ To run the previous logic, you'll have to provide the LMDB layer, two layers are
 
 ### Code snippets using ZIO-LMDB, runnable with [scala-cli][SCL]
 - [ZIO LMDB simple example (scala-3)](https://gist.github.com/dacr/dcb8a11f095ef0a2a95c24701e6eb804)
-- [ZIO LMDB simple example (scala-2)](https://gist.github.com/dacr/9d2c4171d1b1e7a40a244ef456725d25)
 - [ZIO LMDB feeding with French town postal codes](https://gist.github.com/dacr/6d24baf827ae0c590133e0f27f1ef20b)
 - [ZIO LMDB using custom configuration provider](https://gist.github.com/dacr/790df1705c7ec19ae2fe4098dad8d762)
 - [Extract photos records from elasticsearch and save them into LMDB](https://gist.github.com/dacr/6ea121f251ad316a64657cbe78085ab7)
