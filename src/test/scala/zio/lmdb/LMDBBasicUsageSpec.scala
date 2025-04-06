@@ -21,10 +21,10 @@ import zio.test.TestAspect._
 import zio.json._
 import zio.nio.file.Files
 
-case class Record(name: String, age: Long)
-object Record {
-  implicit val codec: LMDBCodec[Record] = DeriveLMDBJsonCodec.gen
-}
+case class Record(name: String, age: Long) derives LMDBCodecJson
+//object Record {
+//  implicit val codec: LMDBCodec[Record] = DeriveLMDBJsonCodec.gen
+//}
 
 object LMDBBasicUsageSpec extends ZIOSpecDefault with Commons {
 

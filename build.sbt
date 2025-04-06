@@ -5,7 +5,6 @@ description  := "Lightning Memory Database (LMDB) for scala ZIO"
 licenses += "NON-AI-APACHE2" -> url(s"https://github.com/non-ai-licenses/non-ai-licenses/blob/main/NON-AI-APACHE2")
 
 scalaVersion       := "3.3.5" // FOR LIBS USE SCALA LTS
-crossScalaVersions := Seq("2.13.16", "3.3.5")
 
 lazy val versions = new {
   val zio        = "2.1.17"
@@ -30,8 +29,6 @@ libraryDependencies ++= Seq(
 )
 
 testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
-
-excludeDependencies += "org.scala-lang.modules" % "scala-collection-compat_2.13"
 
 ThisBuild / fork := true
 ThisBuild / javaOptions ++= Seq("--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED")

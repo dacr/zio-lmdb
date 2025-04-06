@@ -50,14 +50,14 @@ or java properties to resolve this library configuration parameters.
 ## Usages example
 
 ```scala
-//> using scala  "3.3.1"
-//> using dep "fr.janalyse::zio-lmdb:1.8.0"
+//> using scala  "3.6.4"
+//> using dep "fr.janalyse::zio-lmdb:2.0.0"
 //> using javaOpt "--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED"
 
 import zio.*, zio.lmdb.*, zio.json.*
 import java.io.File, java.util.UUID, java.time.OffsetDateTime
 
-case class Record(uuid: UUID, name: String, age: Int, addedOn: OffsetDateTime) derives JsonCodec
+case class Record(uuid: UUID, name: String, age: Int, addedOn: OffsetDateTime) derives LMDBCodecJson
 
 object SimpleExample extends ZIOAppDefault {
   override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-data-simple-example"), Scope.default)
