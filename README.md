@@ -55,7 +55,7 @@ or java properties to resolve this library configuration parameters.
 //> using dep "fr.janalyse::zio-lmdb:2.0.0"
 //> using javaOpt "--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED"
 
-import zio.*, zio.lmdb.*, zio.json.*
+import zio.*, zio.json.*,zio.lmdb.*,zio.lmdb.json.*
 import java.io.File, java.util.UUID, java.time.OffsetDateTime
 
 case class Record(uuid: UUID, name: String, age: Int, addedOn: OffsetDateTime) derives LMDBCodecJson
