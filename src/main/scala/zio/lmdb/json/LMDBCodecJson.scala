@@ -15,26 +15,30 @@
  */
 package zio.lmdb.json
 
-import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonEncoder}
+import zio.json.internal.{RetractReader, Write}
+import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonCodec, JsonDecoder, JsonEncoder, JsonError}
 import zio.lmdb.LMDBCodec
 
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import scala.deriving.Mirror
 
-trait LMDBCodecJson[T] extends LMDBCodec[T] {
-}
+trait LMDBCodecJson[T] extends LMDBCodec[T] with JsonEncoder[T] with JsonDecoder[T]
 
 object LMDBCodecJson {
 
-  inline def derived[T](using m:Mirror.Of[T]): LMDBCodecJson[T] = {
+  inline def derived[T](using m: Mirror.Of[T]): LMDBCodecJson[T] = {
     val encoder = DeriveJsonEncoder.gen[T]
     val decoder = DeriveJsonDecoder.gen[T]
     val charset = StandardCharsets.UTF_8
 
     new LMDBCodecJson[T] {
+      override def unsafeEncode(a: T, indent: Option[Int], out: Write): Unit  = encoder.unsafeEncode(a, indent, out)
+      override def unsafeDecode(trace: List[JsonError], in: RetractReader): T = decoder.unsafeDecode(trace, in)
+
       def encode(t: T): Array[Byte]                    = encoder.encodeJson(t).toString.getBytes
       def decode(bytes: ByteBuffer): Either[String, T] = decoder.decodeJson(charset.decode(bytes))
+
     }
   }
 

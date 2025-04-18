@@ -52,8 +52,8 @@ or java properties to resolve this library configuration parameters.
 
 ```scala
 //> using scala  "3.6.4"
-//> using dep "fr.janalyse::zio-lmdb:2.0.0"
-//> using javaOpt "--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED"
+//> using dep "fr.janalyse::zio-lmdb:2.0.1"
+//> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 
 import zio.*, zio.json.*,zio.lmdb.*,zio.lmdb.json.*
 import java.io.File, java.util.UUID, java.time.OffsetDateTime
