@@ -24,7 +24,7 @@ For a better understanding, this library uses slightly different vocabulary from
   - The place where the database file is stored on your file system
   - A set of configurations for this database (expected maximum size, expected collection number)
 - **Collection** : (*LMDB talk about Database*) 
-  - A sorted Map (B-Tree) where your data is stored
+  - A sorted Map ([B+ Tree][btree]) where your data is stored
   - One database contains multiple collection
 - **Transaction** : (*the same for LMDB*)
   - for global coherency within the same database
@@ -139,3 +139,4 @@ When LVMDB is used as a persistence store with recent JVM, it requires some JVM 
 [SCL]: https://scala-cli.virtuslab.org/
 [ScalaDocImg]: https://javadoc.io/badge2/fr.janalyse/zio-lmdb_3/scaladoc.svg
 [ScalaDoc]: https://javadoc.io/doc/fr.janalyse/zio-lmdb_3/latest/zio/lmdb/LMDB$.html
+[btree]: https://en.wikipedia.org/wiki/B%2B_tree
