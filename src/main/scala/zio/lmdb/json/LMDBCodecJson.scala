@@ -28,7 +28,7 @@ trait LMDBCodecJson[T] extends LMDBCodec[T] with JsonEncoder[T] with JsonDecoder
 object LMDBCodecJson {
 
   private def createCodec[T](encoder: JsonEncoder[T], decoder: JsonDecoder[T]): LMDBCodecJson[T] = {
-    val charset = StandardCharsets.UTF_8
+    val charset = StandardCharsets.UTF_8  // TODO enhance charset support
 
     new LMDBCodecJson[T] {
       override def unsafeEncode(a: T, indent: Option[Int], out: Write): Unit  = encoder.unsafeEncode(a, indent, out)

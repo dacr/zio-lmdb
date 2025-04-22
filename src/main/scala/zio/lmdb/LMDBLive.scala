@@ -43,7 +43,7 @@ class LMDBLive(
   reentrantLock: TReentrantLock,
   val databasePath: String
 ) extends LMDB {
-  val charset = StandardCharsets.UTF_8
+  private val charset = StandardCharsets.UTF_8 // TODO enhance charset support
 
   private def makeKeyByteBuffer(id: String): IO[KeyErrors, ByteBuffer] = {
     val keyBytes = id.getBytes(charset)
