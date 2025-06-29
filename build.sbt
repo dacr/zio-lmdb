@@ -4,12 +4,12 @@ description  := "Lightning Memory Database (LMDB) for scala ZIO"
 
 licenses += "NON-AI-APACHE2" -> url(s"https://github.com/non-ai-licenses/non-ai-licenses/blob/main/NON-AI-APACHE2")
 
-scalaVersion       := "3.3.5" // FOR LIBS USE SCALA LTS
+scalaVersion       := "3.3.6" // FOR LIBS USE SCALA LTS
 
 lazy val versions = new {
-  val zio        = "2.1.17"
+  val zio        = "2.1.19"
   val zionio     = "2.0.2"
-  val ziojson    = "0.7.42"
+  val ziojson    = "0.7.44"
   val zioconfig  = "4.0.4"
   val ziologging = "2.5.0"
   val lmdb       = "0.9.1"
