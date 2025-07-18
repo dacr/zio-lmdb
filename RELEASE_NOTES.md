@@ -1,5 +1,13 @@
 # ZIO-LMDB RELEASE NOTES
 
+## 2.1 - 2025-07-18
+
+- add support for customizable key types within the API
+- introduce LMDBKodec type class for key serialization/deserialization
+- refactor API to use generic key type parameter instead of String only
+- maintain backward compatibility with String keys
+- enhance type safety and flexibility for key handling
+
 ## 2.0 - 2025-04-07
 
 - support custom serialization layer using type class
