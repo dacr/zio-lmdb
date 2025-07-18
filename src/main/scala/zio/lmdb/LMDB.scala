@@ -30,11 +30,11 @@ trait LMDB {
 
   def collectionExists(name: CollectionName): IO[StorageSystemError, Boolean]
 
-  def collectionCreate[T](name: CollectionName, failIfExists: Boolean = true)(implicit codec: LMDBCodec[T]): IO[CreateErrors, LMDBCollection[T]]
+  def collectionCreate[K,T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[CreateErrors, LMDBCollection[K,T]]
 
   def collectionAllocate(name: CollectionName): IO[CreateErrors, Unit]
 
-  def collectionGet[T](name: CollectionName)(implicit codec: LMDBCodec[T]): IO[GetErrors, LMDBCollection[T]]
+  def collectionGet[K,T](name: CollectionName)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[GetErrors, LMDBCollection[K,T]]
 
   def collectionSize(name: CollectionName): IO[SizeErrors, Long]
 
@@ -42,48 +42,48 @@ trait LMDB {
 
   def collectionDrop(name: CollectionName): IO[DropErrors, Unit]
 
-  def fetch[T](collectionName: CollectionName, key: RecordKey)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[T]]
+  def fetch[K,T](collectionName: CollectionName, key: K)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]]
 
-  def head[T](collectionName: CollectionName)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]]
+  def head[K,T](collectionName: CollectionName)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
-  def previous[T](collectionName: CollectionName, beforeThatKey: RecordKey)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]]
+  def previous[K,T](collectionName: CollectionName, beforeThatKey: K)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
-  def next[T](collectionName: CollectionName, afterThatKey: RecordKey)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]]
+  def next[K,T](collectionName: CollectionName, afterThatKey: K)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
-  def last[T](collectionName: CollectionName)(implicit codec: LMDBCodec[T]): IO[FetchErrors, Option[(RecordKey, T)]]
+  def last[K,T](collectionName: CollectionName)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
-  def contains(collectionName: CollectionName, key: RecordKey): IO[ContainsErrors, Boolean]
+  def contains[K](collectionName: CollectionName, key: K)(implicit kodec:LMDBKodec[K]): IO[ContainsErrors, Boolean]
 
-  def update[T](collectionName: CollectionName, key: RecordKey, modifier: T => T)(implicit codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]]
+  def update[K,T](collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]]
 
-  def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit codec: LMDBCodec[T]): IO[UpsertErrors, T]
+  def upsert[K,T](collectionName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T]
 
-  def upsertOverwrite[T](collectionName: CollectionName, key: RecordKey, document: T)(implicit codec: LMDBCodec[T]): IO[UpsertErrors, Unit]
+  def upsertOverwrite[K,T](collectionName: CollectionName, key: K, document: T)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit]
 
-  def delete[T](collectionName: CollectionName, key: RecordKey)(implicit codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]]
+  def delete[K,T](collectionName: CollectionName, key: K)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]]
 
-  def collect[T](
+  def collect[K,T](
     collectionName: CollectionName,
-    keyFilter: RecordKey => Boolean = _ => true,
+    keyFilter: K => Boolean = (_:K) => true,
     valueFilter: T => Boolean = (_: T) => true,
-    startAfter: Option[RecordKey] = None,
+    startAfter: Option[K] = None,
     backward: Boolean = false,
     limit: Option[Int] = None
-  )(implicit codec: LMDBCodec[T]): IO[CollectErrors, List[T]]
+  )(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]]
 
-  def stream[T](
+  def stream[K,T](
     collectionName: CollectionName,
-    keyFilter: RecordKey => Boolean = _ => true,
-    startAfter: Option[RecordKey] = None,
+    keyFilter: K => Boolean = (_:K) => true,
+    startAfter: Option[K] = None,
     backward: Boolean = false
-  )(implicit codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T]
+  )(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T]
 
-  def streamWithKeys[T](
+  def streamWithKeys[K,T](
     collectionName: CollectionName,
-    keyFilter: RecordKey => Boolean = _ => true,
-    startAfter: Option[RecordKey] = None,
+    keyFilter: K => Boolean = (_:K) => true,
+    startAfter: Option[K] = None,
     backward: Boolean = false
-  )(implicit codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (RecordKey, T)]
+  )(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)]
 }
 
 object LMDB {
@@ -164,11 +164,11 @@ object LMDB {
     * @param failIfExists
     *   raise an error if the collection already exists, default to true
     * @tparam T
-    *   the data type of the records which must be Json serializable
+    *   the data type of the records which must be LMDB serializable
     * @return
     *   the collection helper facade
     */
-  def collectionCreate[T](name: CollectionName, failIfExists: Boolean = true)(implicit codec: LMDBCodec[T]): ZIO[LMDB, CreateErrors, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionCreate(name, failIfExists))
+  def collectionCreate[K,T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, CreateErrors, LMDBCollection[K,T]] = ZIO.serviceWithZIO(_.collectionCreate(name, failIfExists))
 
   /** Create a collection
     *
@@ -184,14 +184,14 @@ object LMDB {
     * @return
     *   the collection helper facade
     */
-  def collectionGet[T](name: CollectionName)(implicit codec: LMDBCodec[T]): ZIO[LMDB, GetErrors, LMDBCollection[T]] = ZIO.serviceWithZIO(_.collectionGet(name))
+  def collectionGet[K,T](name: CollectionName)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, GetErrors, LMDBCollection[K,T]] = ZIO.serviceWithZIO(_.collectionGet(name))
 
   /** Get how many items a collection contains
     *
     * @param name
     *   the collection name
     * @tparam T
-    *   the data type of the records which must be Json serializable
+    *   the data type of the records which must be LMDB serializable
     * @return
     *   the collection size
     */
@@ -222,7 +222,7 @@ object LMDB {
     * @return
     *   some record or none if no record has been found for the given key
     */
-  def fetch[T](collectionName: CollectionName, key: RecordKey)(implicit codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[T]] = ZIO.serviceWithZIO(_.fetch(collectionName, key))
+  def fetch[K,T](collectionName: CollectionName, key: K)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[T]] = ZIO.serviceWithZIO(_.fetch(collectionName, key))
 
   /** Get collection first record
     *
@@ -233,7 +233,7 @@ object LMDB {
     * @return
     *   some (key,record) tuple or none if the collection is empty
     */
-  def head[T](collectionName: CollectionName)(implicit codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.head(collectionName))
+  def head[K,T](collectionName: CollectionName)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(K, T)]] = ZIO.serviceWithZIO(_.head(collectionName))
 
   /** Get the previous record for the given key
     *
@@ -246,7 +246,7 @@ object LMDB {
     * @return
     *   some (key,record) tuple or none if the key is the first one
     */
-  def previous[T](collectionName: CollectionName, beforeThatKey: RecordKey)(implicit codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.previous(collectionName, beforeThatKey))
+  def previous[K,T](collectionName: CollectionName, beforeThatKey: K)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(K, T)]] = ZIO.serviceWithZIO(_.previous(collectionName, beforeThatKey))
 
   /** Get the next record for the given key
     *
@@ -259,7 +259,7 @@ object LMDB {
     * @return
     *   some (key,record) tuple or none if the key is the last one
     */
-  def next[T](collectionName: CollectionName, afterThatKey: RecordKey)(implicit codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.next(collectionName, afterThatKey))
+  def next[K,T](collectionName: CollectionName, afterThatKey: K)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(K, T)]] = ZIO.serviceWithZIO(_.next(collectionName, afterThatKey))
 
   /** Get collection last record
     *
@@ -270,7 +270,7 @@ object LMDB {
     * @return
     *   some (key,record) tuple or none if the collection is empty
     */
-  def last[T](collectionName: CollectionName)(implicit codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(RecordKey, T)]] = ZIO.serviceWithZIO(_.last(collectionName))
+  def last[K,T](collectionName: CollectionName)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(K, T)]] = ZIO.serviceWithZIO(_.last(collectionName))
 
   /** Check if a collection contains the given key
     *
@@ -281,9 +281,9 @@ object LMDB {
     * @return
     *   true if the key is used by the given collection
     */
-  def contains(collectionName: CollectionName, key: RecordKey): ZIO[LMDB, ContainsErrors, Boolean] = ZIO.serviceWithZIO(_.contains(collectionName, key))
+  def contains[K](collectionName: CollectionName, key: K)(implicit kodec:LMDBKodec[K]): ZIO[LMDB, ContainsErrors, Boolean] = ZIO.serviceWithZIO(_.contains(collectionName, key))
 
-  /** update atomically a record in a collection.
+  /** atomically update a record in a collection.
     *
     * @param collectionName
     *   the collection name
@@ -292,13 +292,13 @@ object LMDB {
     * @param modifier
     *   the lambda used to update the record content
     * @tparam T
-    *   the data type of the record which must be Json serializable
-    * @returns
+    *   the data type of the record which must be LMDB serializable
+    * @return
     *   the updated record if a record exists for the given key
     */
 
-  def update[T](collectionName: CollectionName, key: RecordKey, modifier: T => T)(implicit codec: LMDBCodec[T]): ZIO[LMDB, UpdateErrors, Option[T]] = {
-    ZIO.serviceWithZIO(_.update[T](collectionName, key, modifier))
+  def update[K,T](collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, UpdateErrors, Option[T]] = {
+    ZIO.serviceWithZIO(_.update[K,T](collectionName, key, modifier))
   }
 
   /** update or insert atomically a record in a collection.
@@ -311,11 +311,11 @@ object LMDB {
     *   the lambda used to update the record content
     * @tparam T
     *   the data type of the record which must be Json serializable
-    * @returns
+    * @return
     *   the updated or inserted record
     */
-  def upsert[T](collectionName: CollectionName, key: RecordKey, modifier: Option[T] => T)(implicit codec: LMDBCodec[T]): ZIO[LMDB, UpsertErrors, T] = {
-    ZIO.serviceWithZIO(_.upsert[T](collectionName, key, modifier))
+  def upsert[K,T](collectionName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, UpsertErrors, T] = {
+    ZIO.serviceWithZIO(_.upsert[K,T](collectionName, key, modifier))
   }
 
   /** Overwrite or insert a record in a collection. If the key is already being used for a record then the previous record will be overwritten by the new one.
@@ -329,8 +329,8 @@ object LMDB {
     * @tparam T
     *   the data type of the record which must be Json serializable
     */
-  def upsertOverwrite[T](collectionName: CollectionName, key: RecordKey, document: T)(implicit codec: LMDBCodec[T]): ZIO[LMDB, UpsertErrors, Unit] =
-    ZIO.serviceWithZIO(_.upsertOverwrite[T](collectionName, key, document))
+  def upsertOverwrite[K,T](collectionName: CollectionName, key: K, document: T)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, UpsertErrors, Unit] =
+    ZIO.serviceWithZIO(_.upsertOverwrite[K,T](collectionName, key, document))
 
   /** Delete a record in a collection
     *
@@ -343,8 +343,8 @@ object LMDB {
     * @return
     *   the deleted content
     */
-  def delete[T](collectionName: CollectionName, key: RecordKey)(implicit codec: LMDBCodec[T]): ZIO[LMDB, DeleteErrors, Option[T]] =
-    ZIO.serviceWithZIO(_.delete[T](collectionName, key))
+  def delete[K,T](collectionName: CollectionName, key: K)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, DeleteErrors, Option[T]] =
+    ZIO.serviceWithZIO(_.delete[K,T](collectionName, key))
 
   /** Collect collection content into the memory, use keyFilter or valueFilter to limit the amount of loaded entries.
     *
@@ -365,15 +365,15 @@ object LMDB {
     * @return
     *   All matching records
     */
-  def collect[T](
+  def collect[K,T](
     collectionName: CollectionName,
-    keyFilter: RecordKey => Boolean = _ => true,
+    keyFilter: K => Boolean = (_:K) => true,
     valueFilter: T => Boolean = (_: T) => true,
-    startAfter: Option[RecordKey] = None,
+    startAfter: Option[K] = None,
     backward: Boolean = false,
     limit: Option[Int] = None
-  )(implicit codec: LMDBCodec[T]): ZIO[LMDB, CollectErrors, List[T]] =
-    ZIO.serviceWithZIO(_.collect[T](collectionName, keyFilter, valueFilter, startAfter, backward, limit))
+  )(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, CollectErrors, List[T]] =
+    ZIO.serviceWithZIO(_.collect[K,T](collectionName, keyFilter, valueFilter, startAfter, backward, limit))
 
   /** Stream collection records, use keyFilter to apply filtering before record deserialization.
     *
@@ -390,12 +390,12 @@ object LMDB {
     * @return
     *   the stream of records
     */
-  def stream[T](
+  def stream[K,T](
     collectionName: CollectionName,
-    keyFilter: RecordKey => Boolean = _ => true,
-    startAfter: Option[RecordKey] = None,
+    keyFilter: K => Boolean = (_:K) => true,
+    startAfter: Option[K] = None,
     backward: Boolean = false
-  )(implicit codec: LMDBCodec[T]): ZStream[LMDB, StreamErrors, T] =
+  )(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZStream[LMDB, StreamErrors, T] =
     ZStream.serviceWithStream(_.stream(collectionName, keyFilter, startAfter, backward))
 
   /** stream collection Key/record tuples, use keyFilter to apply filtering before record deserialization.
@@ -413,11 +413,11 @@ object LMDB {
     * @return
     *   the tuple of key and record stream
     */
-  def streamWithKeys[T](
+  def streamWithKeys[K,T](
     collectionName: CollectionName,
-    keyFilter: RecordKey => Boolean = _ => true,
-    startAfter: Option[RecordKey] = None,
+    keyFilter: K => Boolean = (_:K) => true,
+    startAfter: Option[K] = None,
     backward: Boolean = false
-  )(implicit codec: LMDBCodec[T]): ZStream[LMDB, StreamErrors, (RecordKey, T)] =
+  )(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZStream[LMDB, StreamErrors, (K, T)] =
     ZStream.serviceWithStream(_.streamWithKeys(collectionName, keyFilter, startAfter, backward))
 }

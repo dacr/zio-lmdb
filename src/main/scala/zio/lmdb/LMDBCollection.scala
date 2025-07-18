@@ -24,12 +24,11 @@ import zio.stream._
   *
   * @param name
   *   collection name
-  * @param JsonEncoder[T]
-  * @param JsonDecoder[T]
+  * @param codec
   * @tparam T
   *   the data class type for collection content
   */
-case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[T]) {
+case class LMDBCollection[K,T](name: String, lmdb: LMDB)(implicit kodec:LMDBKodec[K], codec:LMDBCodec[T]) {
 
   /** Get how many items a collection contains
     *
@@ -49,14 +48,14 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[
     * @return
     *   some record or none if no record has been found for the given key
     */
-  def fetch(key: RecordKey): IO[FetchErrors, Option[T]] = lmdb.fetch(name, key)
+  def fetch(key: K): IO[FetchErrors, Option[T]] = lmdb.fetch(name, key)
 
   /** Get collection first record
     *
     * @return
     *   some (key,record) tuple or none if the collection is empty
     */
-  def head(): IO[FetchErrors, Option[(RecordKey, T)]] = lmdb.head(name)
+  def head(): IO[FetchErrors, Option[(K, T)]] = lmdb.head(name)
 
   /** Get the previous record for the given key
     *
@@ -65,7 +64,7 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[
     * @return
     *   some (key,record) tuple or none if the key is the first one
     */
-  def previous(beforeThatKey: RecordKey): IO[FetchErrors, Option[(RecordKey, T)]] = lmdb.previous(name, beforeThatKey)
+  def previous(beforeThatKey: K): IO[FetchErrors, Option[(K, T)]] = lmdb.previous(name, beforeThatKey)
 
   /** Get the next record for the given key
     *
@@ -74,14 +73,14 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[
     * @return
     *   some (key,record) tuple or none if the key is the last one
     */
-  def next(afterThatKey: RecordKey): IO[FetchErrors, Option[(RecordKey, T)]] = lmdb.next(name, afterThatKey)
+  def next(afterThatKey: K): IO[FetchErrors, Option[(K, T)]] = lmdb.next(name, afterThatKey)
 
   /** Get collection last record
     *
     * @return
     *   some (key,record) tuple or none if the collection is empty
     */
-  def last(): IO[FetchErrors, Option[(RecordKey, T)]] = lmdb.last(name)
+  def last(): IO[FetchErrors, Option[(K, T)]] = lmdb.last(name)
 
   /** Check if a collection contains the given key
     *
@@ -90,7 +89,7 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[
     * @return
     *   true if the key is used by the given collection
     */
-  def contains(key: RecordKey): IO[ContainsErrors, Boolean] = lmdb.contains(name, key)
+  def contains(key: K): IO[ContainsErrors, Boolean] = lmdb.contains(name, key)
 
   /** update atomically a record in a collection.
    *
@@ -101,7 +100,7 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[
    * @returns
    *   the updated record if a record exists for the given key
    */
-  def update(key: RecordKey, modifier: T => T): IO[UpdateErrors, Option[T]] = lmdb.update(name, key, modifier)
+  def update(key: K, modifier: T => T): IO[UpdateErrors, Option[T]] = lmdb.update(name, key, modifier)
 
   /** update or insert atomically a record in a collection.
     *
@@ -112,8 +111,8 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[
     * @returns
     *   the updated or inserted record
     */
-  def upsert(key: RecordKey, modifier: Option[T] => T): IO[UpsertErrors, T] =
-    lmdb.upsert[T](name, key, modifier)
+  def upsert(key: K, modifier: Option[T] => T): IO[UpsertErrors, T] =
+    lmdb.upsert[K,T](name, key, modifier)
 
   /** Overwrite or insert a record in a collection. If the key is already being used for a record then the previous record will be overwritten by the new one.
     *
@@ -122,8 +121,8 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[
     * @param document
     *   the record content to upsert
     */
-  def upsertOverwrite(key: RecordKey, document: T): IO[UpsertErrors, Unit] =
-    lmdb.upsertOverwrite[T](name, key, document)
+  def upsertOverwrite(key: K, document: T): IO[UpsertErrors, Unit] =
+    lmdb.upsertOverwrite[K,T](name, key, document)
 
   /** Delete a record in a collection
     *
@@ -132,8 +131,8 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[
     * @return
     *   the deleted content
     */
-  def delete(key: RecordKey): IO[DeleteErrors, Option[T]] =
-    lmdb.delete[T](name, key)
+  def delete(key: K): IO[DeleteErrors, Option[T]] =
+    lmdb.delete[K,T](name, key)
 
   /** Collect collection content into the memory, use keyFilter or valueFilter to limit the amount of loaded entries.
     *
@@ -151,13 +150,13 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[
     *   All matching records
     */
   def collect(
-    keyFilter: RecordKey => Boolean = _ => true,
+    keyFilter: K => Boolean = _ => true,
     valueFilter: T => Boolean = (_: T) => true,
-    startAfter: Option[RecordKey] = None,
+    startAfter: Option[K] = None,
     backward: Boolean = false,
     limit: Option[Int] = None
   ): IO[CollectErrors, List[T]] =
-    lmdb.collect[T](name, keyFilter, valueFilter, startAfter, backward, limit)
+    lmdb.collect[K,T](name, keyFilter, valueFilter, startAfter, backward, limit)
 
   /** Stream collection records, use keyFilter to apply filtering before record deserialization.
     *
@@ -171,8 +170,8 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[
     *   the stream of records
     */
   def stream(
-    keyFilter: RecordKey => Boolean = _ => true,
-    startAfter: Option[RecordKey] = None,
+    keyFilter: K => Boolean = _ => true,
+    startAfter: Option[K] = None,
     backward: Boolean = false
   ): ZStream[Any, StreamErrors, T] =
     lmdb.stream(name, keyFilter, startAfter, backward)
@@ -189,9 +188,9 @@ case class LMDBCollection[T](name: String, lmdb: LMDB)(implicit codec:LMDBCodec[
     *   the tuple of key and record stream
     */
   def streamWithKeys(
-    keyFilter: RecordKey => Boolean = _ => true,
-    startAfter: Option[RecordKey] = None,
+    keyFilter: K => Boolean = _ => true,
+    startAfter: Option[K] = None,
     backward: Boolean = false
-  ): ZStream[Any, StreamErrors, (RecordKey, T)] =
+  ): ZStream[Any, StreamErrors, (K, T)] =
     lmdb.streamWithKeys(name, keyFilter, startAfter, backward)
 }

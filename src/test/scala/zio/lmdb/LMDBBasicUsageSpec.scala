@@ -31,7 +31,7 @@ object LMDBBasicUsageSpec extends ZIOSpecDefault with Commons {
   override def spec = suite("LMDB for ZIO as a service")(
     test("basic usage")(
       for {
-        collection    <- LMDB.collectionCreate[Record]("example")
+        collection    <- LMDB.collectionCreate[String, Record]("example")
         record         = Record("John Doe", 42)
         recordId      <- Random.nextUUID.map(_.toString)
         _             <- collection.upsert(recordId, previousRecord => record)

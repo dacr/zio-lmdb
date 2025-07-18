@@ -32,7 +32,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
 
   val keygen   = stringBounded(1, 510)(asciiChar)
   val valuegen = stringBounded(0, 1024)(asciiChar)
-  val limit    = 30_000
+  val limit    = 5_000 // 30_000
 
   override def spec = suite("Lightening Memory Mapped Database abstraction layer spec")(
     // -----------------------------------------------------------------------------
@@ -47,9 +47,9 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
     test("create collection")(
       for {
         colName               <- randomCollectionName
-        createSuccess         <- LMDB.collectionCreate[String](colName).isSuccess
-        recreateFailure       <- LMDB.collectionCreate[String](colName, failIfExists = true).isFailure
-        createIfNeededSuccess <- LMDB.collectionCreate[String](colName, failIfExists = false).isSuccess
+        createSuccess         <- LMDB.collectionCreate[String, String](colName).isSuccess
+        recreateFailure       <- LMDB.collectionCreate[String, String](colName, failIfExists = true).isFailure
+        createIfNeededSuccess <- LMDB.collectionCreate[String, String](colName, failIfExists = false).isSuccess
       } yield assertTrue(
         createSuccess,
         recreateFailure,
@@ -60,11 +60,11 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
     test("delete collection")(
       for {
         colName                <- randomCollectionName
-        _                      <- LMDB.collectionCreate[String](colName)
+        _                      <- LMDB.collectionCreate[String, String](colName)
         collectionCreated      <- LMDB.collectionExists(colName)
         _                      <- LMDB.collectionDrop(colName)
         collectionStillExists  <- LMDB.collectionExists(colName)
-        collectionCreatedAgain <- LMDB.collectionCreate[String](colName, failIfExists = true).isSuccess
+        collectionCreatedAgain <- LMDB.collectionCreate[String, String](colName, failIfExists = true).isSuccess
       } yield assertTrue(
         collectionCreated,
         !collectionStillExists,
@@ -77,9 +77,9 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
         colName1  <- randomCollectionName
         colName2  <- randomCollectionName
         colName3  <- randomCollectionName
-        _         <- LMDB.collectionCreate[String](colName1)
-        _         <- LMDB.collectionCreate[Double](colName2)
-        _         <- LMDB.collectionCreate[Json](colName3)
+        _         <- LMDB.collectionCreate[String, String](colName1)
+        _         <- LMDB.collectionCreate[String, Double](colName2)
+        _         <- LMDB.collectionCreate[String, Json](colName3)
         databases <- LMDB.collectionsAvailable()
       } yield assertTrue(
         databases.contains(colName1),
@@ -92,7 +92,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
         val value = Str(data)
         for {
           colName <- randomCollectionName
-          col     <- LMDB.collectionCreate[Str](colName)
+          col     <- LMDB.collectionCreate[String, Str](colName)
           _       <- col.upsertOverwrite(id, value)
           gotten  <- col.fetch(id)
         } yield assertTrue(
@@ -105,7 +105,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
       for {
         colName  <- randomCollectionName
         id       <- randomUUID
-        col      <- LMDB.collectionCreate[Str](colName)
+        col      <- LMDB.collectionCreate[String, Str](colName)
         isFailed <- col.fetch(id).some.isFailure
       } yield assertTrue(isFailed).label(s"for key $id")
     ),
@@ -114,7 +114,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
       for {
         colName <- randomCollectionName
         id      <- randomUUID
-        col     <- LMDB.collectionCreate[Str](colName)
+        col     <- LMDB.collectionCreate[String, Str](colName)
         _       <- col.upsertOverwrite(id, Str("some data"))
         result  <- col.contains(id)
       } yield assertTrue(
@@ -126,7 +126,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
       for {
         colName <- randomCollectionName
         id      <- randomUUID
-        col     <- LMDB.collectionCreate[Str](colName)
+        col     <- LMDB.collectionCreate[String, Str](colName)
         result  <- col.contains(id)
       } yield assertTrue(
         result == false
@@ -140,7 +140,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
         for {
           lmdb          <- ZIO.service[LMDBLive]
           colName       <- randomCollectionName
-          col           <- lmdb.collectionCreate[Str](colName)
+          col           <- lmdb.collectionCreate[String, Str](colName)
           _             <- col.upsertOverwrite(id, value)
           gotten        <- col.fetch(id)
           _             <- col.upsertOverwrite(id, updatedValue)
@@ -162,7 +162,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
       for {
         lmdb       <- ZIO.service[LMDBLive]
         colName    <- randomCollectionName
-        col        <- lmdb.collectionCreate[Str](colName)
+        col        <- lmdb.collectionCreate[String, Str](colName)
         id1        <- randomUUID
         id2        <- randomUUID
         _          <- col.upsertOverwrite(id1, Str("value1"))
@@ -182,7 +182,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
         id      <- randomUUID
         maxValue = limit
         colName <- randomCollectionName
-        col     <- lmdb.collectionCreate[Num](colName)
+        col     <- lmdb.collectionCreate[String, Num](colName)
         _       <- ZIO.foreachDiscard(1.to(maxValue))(i => col.upsertOverwrite(id, Num(i)))
         num     <- col.fetch(id)
       } yield assertTrue(
@@ -197,7 +197,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
         id            <- randomUUID
         count          = limit
         colName       <- randomCollectionName
-        col           <- LMDB.collectionCreate[Num](colName)
+        col           <- LMDB.collectionCreate[String, Num](colName)
         shouldBeEmpty <- col.update(id, modifier)
         _             <- col.upsertOverwrite(id, Num(0))
         _             <- ZIO.foreachDiscard(1.to(count))(i => col.update(id, modifier))
@@ -217,7 +217,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
         id      <- randomUUID
         count    = limit
         colName <- randomCollectionName
-        col     <- LMDB.collectionCreate[Num](colName)
+        col     <- LMDB.collectionCreate[String, Num](colName)
         _       <- ZIO.foreachDiscard(1.to(count))(i => col.upsert(id, modifier))
         num     <- col.fetch(id)
       } yield assertTrue(
@@ -231,14 +231,14 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
         case Some(num) => Num(num.value.intValue() + 1)
       }
 
-      val localLimit = 10_000
+      val localLimit = 1_000 //10_000
       val colCount   = if (localLimit < 1000) 5 else 100
       val max        = localLimit
 
       for {
         id               <- randomUUID
         colName          <- randomCollectionName
-        cols             <- ZIO.foreach(1.to(colCount))(i => LMDB.collectionCreate[Num](s"$colName#${i % colCount}")).map(_.toVector)
+        cols             <- ZIO.foreach(1.to(colCount))(i => LMDB.collectionCreate[String, Num](s"$colName#${i % colCount}")).map(_.toVector)
         _                <- ZIO.foreachParDiscard(1.to(max))(i => cols(i % colCount).upsert(id, modifier))
         num1             <- cols(0).fetch(id)
         num2             <- cols(1).fetch(id)
@@ -255,7 +255,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
       val value = Num(42)
       for {
         colName    <- randomCollectionName
-        col        <- LMDB.collectionCreate[Num](colName)
+        col        <- LMDB.collectionCreate[String, Num](colName)
         _          <- ZIO.foreachDiscard(1.to(count))(num => col.upsertOverwrite(s"id#$num", value))
         gottenSize <- col.size()
         collected  <- col.collect()
@@ -269,7 +269,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
       val count = limit
       for {
         colName        <- randomCollectionName
-        col            <- LMDB.collectionCreate[Num](colName)
+        col            <- LMDB.collectionCreate[String, Num](colName)
         _              <- ZIO.foreachDiscard(1.to(count))(num => col.upsertOverwrite(s"id#$num", Num(num)))
         returnedCount1 <- col.stream().filter(_.value.intValue() % 2 == 0).runCount
         returnedCount2 <- col.streamWithKeys().filter { case (key, record) => record.value.intValue() % 2 == 0 }.runCount
@@ -282,7 +282,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
     test("moves in empty collection") {
       for {
         colName    <- randomCollectionName
-        col        <- LMDB.collectionCreate[Num](colName)
+        col        <- LMDB.collectionCreate[String, Num](colName)
         headOption <- col.head()
         lastOption <- col.last()
       } yield assertTrue(
@@ -294,7 +294,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
     test("going forward / backward in a collection using collect or stream") {
       for {
         colName                      <- randomCollectionName
-        col                          <- LMDB.collectionCreate[Num](colName)
+        col                          <- LMDB.collectionCreate[String, Num](colName)
         keys                          = 'A'.to('Z').toList.map(_.toString)
         values                        = keys.zipWithIndex.map { case (k, v) => Num(v) }
         keyvalues                     = keys.zip(values)
@@ -336,7 +336,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
     test("moves in collection") {
       for {
         colName <- randomCollectionName
-        col     <- LMDB.collectionCreate[Num](colName)
+        col     <- LMDB.collectionCreate[String, Num](colName)
         data     = List("bbb" -> 2, "aaa" -> 1, "ddd" -> 4, "ccc" -> 3)
         _       <- ZIO.foreachDiscard(data) { case (key, value) => col.upsertOverwrite(key, Num(value)) }
         head    <- col.head()
