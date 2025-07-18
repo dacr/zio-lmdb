@@ -32,7 +32,7 @@ object LMDBDataClassSpec extends ZIOSpecDefault with Commons {
   override def spec = suite("Json serialization codec")(
     test("support product type")(
       for {
-        collection    <- LMDB.collectionCreate[Login]("logins")
+        collection    <- LMDB.collectionCreate[String,Login]("logins")
         user           = User("John", "Doe", Some(42))
         record         = Login("joe", user)
         recordId      <- Random.nextUUID.map(_.toString)

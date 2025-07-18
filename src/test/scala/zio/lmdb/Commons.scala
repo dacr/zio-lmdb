@@ -35,9 +35,9 @@ trait Commons {
     } yield lmdb
   )
 
-  val randomUUID = Random.nextUUID.map(_.toString)
+  val randomUUID: UIO[RecordKey] = Random.nextUUID.map(_.toString)
 
-  val randomCollectionName = for {
+  val randomCollectionName: UIO[String] = for {
     uuid <- randomUUID
     name  = s"collection-$uuid"
   } yield name

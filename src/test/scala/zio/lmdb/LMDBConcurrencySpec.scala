@@ -53,7 +53,7 @@ object LMDBConcurrencySpec extends ZIOSpecDefault with Commons {
         val strategy = ExecutionStrategy.ParallelN(parallelism)
         for {
           collections <- ZIO.foreachExec(1.to(collectionLimit))(strategy) { n =>
-                           LMDB.collectionCreate[Dummy](s"concurrent-collection-$n")
+                           LMDB.collectionCreate[String, Dummy](s"concurrent-collection-$n")
                          }
           _           <- ZIO.foreachExec(collections)(strategy) { collection =>
                            ZIO.foreachExec(1.to(recordsLimit))(strategy) { n =>

@@ -17,7 +17,13 @@ package zio.lmdb
 
 import java.nio.ByteBuffer
 
+/**
+ * Trait representing a codec for encoding and decoding values of type `T`
+ * to and from a binary format using LMDB.
+ *
+ * @tparam T The type of the values to be encoded and decoded.
+ */
 trait LMDBCodec[T] {
-  def encode(t: T): Array[Byte]
-  def decode(bytes: ByteBuffer): Either[String, T]
+  def encode(value: T): Array[Byte]
+  def decode(valueBytes: ByteBuffer): Either[String, T]
 }

@@ -6,12 +6,14 @@ licenses += "NON-AI-APACHE2" -> url(s"https://github.com/non-ai-licenses/non-ai-
 
 scalaVersion       := "3.3.6" // FOR LIBS USE SCALA LTS
 
+//scalacOptions := Seq("-language:strictEquality")
+
 lazy val versions = new {
   val zio        = "2.1.19"
   val zionio     = "2.0.2"
   val ziojson    = "0.7.44"
   val zioconfig  = "4.0.4"
-  val ziologging = "2.5.0"
+  val ziologging = "2.5.1"
   val lmdb       = "0.9.1"
 }
 
