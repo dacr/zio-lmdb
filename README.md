@@ -49,8 +49,8 @@ or java properties to resolve this library configuration parameters.
 ## Usages example
 
 ```scala
-//> using scala  3.6.4
-//> using dep fr.janalyse::zio-lmdb:2.0.1
+//> using scala  3.7.1
+//> using dep fr.janalyse::zio-lmdb:2.1.0
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 
 import zio.*, zio.json.*,zio.lmdb.*,zio.lmdb.json.*
@@ -63,7 +63,7 @@ object SimpleExample extends ZIOAppDefault {
 
   val collectionName = "examples"
   val example        = for {
-    examples  <- LMDB.collectionCreate[Record](collectionName, failIfExists = false)
+    examples  <- LMDB.collectionCreate[String, Record](collectionName, failIfExists = false)
     recordId  <- Random.nextUUID
     dateTime  <- Clock.currentDateTime
     record     = Record(recordId, "John Doe", 42, dateTime)
