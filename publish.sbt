@@ -4,7 +4,8 @@ Test / publishArtifact := false
 releaseCrossBuild      := true
 versionScheme          := Some("semver-spec")
 
-ThisBuild / sonatypeCredentialHost := xerial.sbt.Sonatype.sonatypeCentralHost
+// -----------------------------------------------------------------------------
+ThisBuild / sonatypeCredentialHost := Sonatype.sonatypeCentralHost
 
 ThisBuild / publishTo := {
   val centralSnapshots = "https://central.sonatype.com/repository/maven-snapshots/"
@@ -17,12 +18,15 @@ ThisBuild / credentials ++= (for {
   password <- sys.env.get("SONATYPE_PASSWORD")
 } yield Credentials("Sonatype Nexus Repository Manager", "central.sonatype.org", username, password))
 
+// -----------------------------------------------------------------------------
 releasePublishArtifactsAction := PgpKeys.publishSigned.value
 
+// -----------------------------------------------------------------------------
 releaseTagComment        := s"Releasing ${(ThisBuild / version).value}"
 releaseCommitMessage     := s"Setting version to ${(ThisBuild / version).value}"
 releaseNextCommitMessage := s"[ci skip] Setting version to ${(ThisBuild / version).value}"
 
+// -----------------------------------------------------------------------------
 import ReleaseTransformations.*
 releaseProcess := Seq[ReleaseStep](
   checkSnapshotDependencies,
@@ -33,7 +37,9 @@ releaseProcess := Seq[ReleaseStep](
   commitReleaseVersion,
   tagRelease,
   publishArtifacts,
-  releaseStepCommand("sonatypeRelease"),
+  releaseStepCommand("publishSigned"),
+  releaseStepCommand("sonaRelease"),
+  //releaseStepCommand("sonatypeRelease"),
   // releaseStepCommand("sonatypeReleaseAll"),
   setNextVersion,
   commitNextVersion,
