@@ -473,7 +473,7 @@ class LMDBLive(
                             LazyList
                               .from(KeyValueIterator[K, T](iterable.iterator()))
                               .map(kv => kv.key.flatMap(key => kv.value.map(value => (key, value))))
-                              .collect { case either if either.isLeft || either.exists((k, v) => keyFilter(k)) => either.map((k, v) => v) }
+                              .collect { case either if either.isLeft || either.exists((k, v) => keyFilter(k) && valueFilter(v)) => either.map((k, v) => v) }
                           limit match {
                             case None    => content.toList
                             case Some(l) => content.take(l).toList
