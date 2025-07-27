@@ -231,7 +231,7 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
         case Some(num) => Num(num.value.intValue() + 1)
       }
 
-      val localLimit = 1_000 //10_000
+      val localLimit = 1_000 // 10_000
       val colCount   = if (localLimit < 1000) 5 else 100
       val max        = localLimit
 
@@ -254,14 +254,16 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
       val count = limit
       val value = Num(42)
       for {
-        colName    <- randomCollectionName
-        col        <- LMDB.collectionCreate[String, Num](colName)
-        _          <- ZIO.foreachDiscard(1.to(count))(num => col.upsertOverwrite(s"id#$num", value))
-        gottenSize <- col.size()
-        collected  <- col.collect()
+        colName                <- randomCollectionName
+        col                    <- LMDB.collectionCreate[String, Num](colName)
+        _                      <- ZIO.foreachDiscard(1.to(count))(num => col.upsertOverwrite(s"id#$num", Num(num)))
+        gottenSize             <- col.size()
+        collected              <- col.collect()
+        collectedValueFiltered <- col.collect(valueFilter = v => v.value.intValue() <= count / 2)
       } yield assertTrue(
+        gottenSize == count,
         collected.size == count,
-        gottenSize == count
+        collectedValueFiltered.size == count / 2
       )
     },
     // -----------------------------------------------------------------------------
