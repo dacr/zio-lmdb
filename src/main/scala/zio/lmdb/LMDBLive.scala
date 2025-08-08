@@ -23,6 +23,8 @@ import java.io.File
 import org.lmdbjava.{Cursor, Dbi, DbiFlags, Env, EnvFlags, KeyRange, Txn, Verifier}
 import org.lmdbjava.SeekOp._
 import org.lmdbjava.CursorIterable.KeyVal
+import org.lmdbjava.GetOp
+import org.lmdbjava.SeekOp
 
 import java.nio.charset.StandardCharsets
 import java.nio.ByteBuffer
@@ -252,8 +254,58 @@ class LMDBLive(
     } yield result
   }
 
-  import org.lmdbjava.GetOp
-  import org.lmdbjava.SeekOp
+  override def fetchAt[K, T](colName: CollectionName, index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
+    def walkLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, FetchErrors, Option[(K, T)]] = for {
+      txn                <- ZIO.acquireRelease(
+                              ZIO
+                                .attemptBlocking(env.txnRead())
+                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                            )(txn =>
+                              ZIO
+                                .attemptBlocking(txn.close())
+                                .ignoreLogged
+                            )
+      cursor             <- ZIO.acquireRelease(
+                              ZIO
+                                .attemptBlocking(colDbi.openCursor(txn))
+                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
+                            )(cursor =>
+                              ZIO
+                                .attemptBlocking(cursor.close())
+                                .ignoreLogged
+                            )
+      seekFirstSuccess   <- ZIO
+                              .attempt(cursor.seek(SeekOp.MDB_FIRST))
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName", Some(err)))
+      seekAllNextSuccess <- ZIO
+                              .attempt(cursor.seek(SeekOp.MDB_NEXT))
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName", Some(err)))
+                              .repeatN(index.toInt) // TODO review and optimize (support long, start from first or from last
+                              .when(seekFirstSuccess)
+      seeksSuccess        = seekAllNextSuccess.contains(true) || (index == 0 && seekFirstSuccess)
+      seekedKey          <- ZIO
+                              .fromEither(kodec.decode(cursor.key()))
+                              .when(seeksSuccess)
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $colName", None))
+      valBuffer          <- ZIO
+                              .attempt(cursor.`val`())
+                              .when(seeksSuccess)
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $colName", Some(err)))
+      seekedValue        <- ZIO
+                              .foreach(valBuffer) { rawValue =>
+                                ZIO
+                                  .fromEither(codec.decode(rawValue))
+                                  .mapError[FetchErrors](msg => CodecFailure(msg))
+                              }
+                              .when(seeksSuccess)
+                              .map(_.flatten)
+
+    } yield seekedValue.flatMap(v => seekedKey.map(k => k -> v))
+    for {
+      db     <- getCollectionDbi(colName)
+      result <- ZIO.scoped(walkLogic(db))
+    } yield result
+  }
 
   private def seek[K, T](colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
     // TODO TOO COMPLEX !!!!
@@ -478,7 +530,7 @@ class LMDBLive(
                             case None    => content.toList
                             case Some(l) => content.take(l).toList
                           }
-                        }{ r => ZIO.from(r)}
+                        } { r => ZIO.from(r) }
                         .mapError[CollectErrors](err => InternalError(s"Couldn't collect documents stored in $colName : $err", None))
     } yield collected
 

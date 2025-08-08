@@ -44,6 +44,8 @@ trait LMDB {
 
   def fetch[K,T](collectionName: CollectionName, key: K)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]]
 
+  def fetchAt[K,T](collectionName: CollectionName, index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K,T)]]
+
   def head[K,T](collectionName: CollectionName)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
   def previous[K,T](collectionName: CollectionName, beforeThatKey: K)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
@@ -223,6 +225,17 @@ object LMDB {
     *   some record or none if no record has been found for the given key
     */
   def fetch[K,T](collectionName: CollectionName, key: K)(implicit kodec:LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[T]] = ZIO.serviceWithZIO(_.fetch(collectionName, key))
+
+  /**
+   * Fetches an optional value of type `T` from the specified collection at the given index. This is non optimal
+   * feature that requires walking through available records using the default ordering until the given index is reached.
+   *
+   * @param collectionName the name of the collection from which the value will be fetched
+   * @param index          the index within the collection to fetch the value
+   * @param codec          an implicit codec used to encode and decode the value of type `T`
+   * @return a ZIO effect that, when executed, may produce either a FetchErrors error or an Option containing the fetched value of type `T`
+   */
+  def fetchAt[K,T](collectionName: CollectionName, index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(K,T)]] = ZIO.serviceWithZIO(_.fetchAt(collectionName, index))
 
   /** Get collection first record
     *

@@ -91,12 +91,14 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
       check(keygen, string) { (id, data) =>
         val value = Str(data)
         for {
-          colName <- randomCollectionName
-          col     <- LMDB.collectionCreate[String, Str](colName)
-          _       <- col.upsertOverwrite(id, value)
-          gotten  <- col.fetch(id)
+          colName  <- randomCollectionName
+          col      <- LMDB.collectionCreate[String, Str](colName)
+          _        <- col.upsertOverwrite(id, value)
+          gotten   <- col.fetch(id)
+          gottenAt <- col.fetchAt(0).some
         } yield assertTrue(
-          gotten == Some(value)
+          gotten.contains(value),
+          gotten.contains(gottenAt._2)
         ).label(s"for key $id")
       }
     ) @@ samples(100),
