@@ -59,7 +59,7 @@ case class LMDBCollection[K, T](name: String, lmdb: LMDB)(implicit kodec: LMDBKo
     * @return
     *   a ZIO effect that, when executed, may produce either a FetchErrors error or an Option containing the fetched value of type `T`
     */
-  def fetchAt(index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(K, T)]] = lmdb.fetchAt[K,T](name, index)
+  def fetchAt(index: Long): ZIO[LMDB, FetchErrors, Option[(K, T)]] = lmdb.fetchAt(name, index)
 
   /** Get collection first record
     *
