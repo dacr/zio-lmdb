@@ -9,10 +9,10 @@ scalaVersion       := "3.3.6" // FOR LIBS USE SCALA LTS
 //scalacOptions := Seq("-language:strictEquality")
 
 lazy val versions = new {
-  val zio        = "2.1.19"
+  val zio        = "2.1.21"
   val zionio     = "2.0.2"
   val ziojson    = "0.7.44"
-  val zioconfig  = "4.0.4"
+  val zioconfig  = "4.0.5"
   val ziologging = "2.5.1"
   val lmdb       = "0.9.1"
 }
