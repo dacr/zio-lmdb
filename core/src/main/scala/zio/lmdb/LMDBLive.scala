@@ -669,6 +669,23 @@ class LMDBLive(
     ZStream.unwrapScoped(result) // TODO not sure this is the good way ???
   }
 
+  override def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = ???
+
+  override def indexGet[FROM_KEY, TO_KEY](name: IndexName): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = ???
+
+  override def indexExists(name: IndexName): IO[IndexErrors, Boolean] = ???
+
+  override def indexDrop(name: IndexName): IO[IndexErrors, Unit] = ???
+
+  override def indexes(): IO[IndexErrors, List[IndexName]] = ???
+
+  override def index[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Unit] = ???
+
+  override def indexContains[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = ???
+
+  override def unindex[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = ???
+
+  override def indexed[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZStream[Any, IndexErrors, TO_KEY] = ???
 }
 
 object LMDBLive {

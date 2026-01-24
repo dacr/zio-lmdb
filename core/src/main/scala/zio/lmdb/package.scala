@@ -21,6 +21,7 @@ import zio.lmdb.StorageUserError.*
 package object lmdb {
   type CollectionName = String
   type RecordKey      = String
+  type IndexName      = String
 
   type KeyErrors      = OverSizedKey | StorageSystemError
   type SizeErrors     = CollectionNotFound | StorageSystemError
@@ -35,4 +36,5 @@ package object lmdb {
   type DeleteErrors   = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
   type CollectErrors  = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
   type StreamErrors   = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
+  type IndexErrors    = StorageSystemError
 }

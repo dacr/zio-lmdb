@@ -17,6 +17,8 @@ package zio.lmdb
 
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.util.UUID
+import scala.util.{Try, Success, Failure}
 
 /**
  * A codec abstraction for encoding and decoding keys of type `K` into
@@ -28,10 +30,11 @@ import java.nio.charset.StandardCharsets
  */
 trait LMDBKodec[K] {
   def encode(key: K): Array[Byte]
-  def decode(keyBytes: ByteBuffer): Either[String, K]
+  def decode(keyBytes: ByteBuffer): Either[String, K] // TODO Replace String by Throwable
 }
 
 object LMDBKodec {
+
   given LMDBKodec[String] = new LMDBKodec[String] {
     private val charset = StandardCharsets.UTF_8 // TODO enhance charset support
 
@@ -40,4 +43,18 @@ object LMDBKodec {
     override def decode(keyBytes: ByteBuffer): Either[String, String] =
       Right(charset.decode(keyBytes).toString)
   }
+
+  given LMDBKodec[UUID] = new LMDBKodec[UUID] {
+    private val charset = StandardCharsets.UTF_8
+
+    override def encode(key: UUID): Array[Byte] = key.toString.getBytes(charset)
+
+    override def decode(keyBytes: ByteBuffer): Either[String, UUID] =
+      Try(UUID.fromString(charset.decode(keyBytes).toString)) match {
+        case Success(value) => Right(value)
+        case Failure(exception)=> Left(exception.getMessage)
+      }
+  }
+
+
 }
