@@ -90,6 +90,24 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
              
         res <- LMDB.fetch[String, String](col2, "k1")
       } yield assertTrue(res.contains("v1"))
+    },
+    test("LMDBCollection transaction methods") {
+      for {
+        collectionName <- Random.nextUUID.map(_.toString)
+        collection     <- LMDB.collectionCreate[String, String](collectionName)
+        
+        _ <- collection.readWrite { txn =>
+               for {
+                 _ <- txn.upsert("key1", _ => "val1")
+                 v <- txn.fetch("key1")
+                 _ <- ZIO.fromOption(v).map(_ => ()) // ensure value is visible
+                 _ <- txn.upsert("key2", _ => v.getOrElse("default"))
+               } yield ()
+             }
+             
+        v1 <- collection.fetch("key1")
+        v2 <- collection.fetch("key2")
+      } yield assertTrue(v1.contains("val1"), v2.contains("val1"))
     }
   ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom @@ timed
 }

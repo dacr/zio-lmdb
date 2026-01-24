@@ -204,4 +204,60 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit kodec
     backward: Boolean = false
   ): ZStream[Any, StreamErrors, (K, T)] =
     lmdb.streamWithKeys(name, keyFilter, startAfter, backward)
+
+  def readOnly[R, E, A](f: LMDBCollectionReadOps[K, T] => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A] =
+    lmdb.readOnly { ops =>
+      f(LMDBCollectionReadOps(this, ops))
+    }
+
+  def readWrite[R, E, A](f: LMDBCollectionWriteOps[K, T] => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A] =
+    lmdb.readWrite { ops =>
+      f(LMDBCollectionWriteOps(this, ops))
+    }
+}
+
+case class LMDBCollectionReadOps[K, T](
+  collection: LMDBCollection[K, T],
+  ops: LMDBReadOps
+)(implicit val keyCodec: LMDBKodec[K], val valueCodec: LMDBCodec[T]) {
+
+  def exists(): IO[StorageSystemError, Boolean] = ops.collectionExists(collection.name)
+  def size(): IO[SizeErrors, Long]              = ops.collectionSize(collection.name)
+
+  def fetch(key: K): IO[FetchErrors, Option[T]] = ops.fetch(collection.name, key)
+  def fetchAt(index: Long): IO[FetchErrors, Option[(K, T)]] = ops.fetchAt(collection.name, index)
+
+  def head(): IO[FetchErrors, Option[(K, T)]] = ops.head(collection.name)
+  def previous(beforeThatKey: K): IO[FetchErrors, Option[(K, T)]] = ops.previous(collection.name, beforeThatKey)
+  def next(afterThatKey: K): IO[FetchErrors, Option[(K, T)]] = ops.next(collection.name, afterThatKey)
+  def last(): IO[FetchErrors, Option[(K, T)]] = ops.last(collection.name)
+
+  def contains(key: K): IO[ContainsErrors, Boolean] = ops.contains(collection.name, key)
+
+  def collect(
+    keyFilter: K => Boolean = _ => true,
+    valueFilter: T => Boolean = (_: T) => true,
+    startAfter: Option[K] = None,
+    backward: Boolean = false,
+    limit: Option[Int] = None
+  ): IO[CollectErrors, List[T]] =
+    ops.collect(collection.name, keyFilter, valueFilter, startAfter, backward, limit)
+}
+
+case class LMDBCollectionWriteOps[K, T](
+  collection: LMDBCollection[K, T],
+  ops: LMDBWriteOps
+)(implicit val keyCodec: LMDBKodec[K], val valueCodec: LMDBCodec[T]) {
+
+  // Delegate read operations
+  private val readOps = LMDBCollectionReadOps(collection, ops)
+  export readOps.{collection as _, ops as _, keyCodec as _, valueCodec as _, _}
+
+  def clear(): IO[ClearErrors, Unit] = ops.collectionClear(collection.name)
+
+  def update(key: K, modifier: T => T): IO[UpdateErrors, Option[T]] = ops.update(collection.name, key, modifier)
+  def upsert(key: K, modifier: Option[T] => T): IO[UpsertErrors, T] = ops.upsert(collection.name, key, modifier)
+  def upsertOverwrite(key: K, document: T): IO[UpsertErrors, Unit] = ops.upsertOverwrite(collection.name, key, document)
+
+  def delete(key: K): IO[DeleteErrors, Option[T]] = ops.delete(collection.name, key)
 }
