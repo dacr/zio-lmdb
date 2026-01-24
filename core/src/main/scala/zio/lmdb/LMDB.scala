@@ -87,8 +87,8 @@ trait LMDB {
     backward: Boolean = false
   )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)]
 
-  def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
-  def indexGet[FROM_KEY, TO_KEY](name: IndexName): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
+  def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
+  def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
   def indexExists(name: IndexName): IO[IndexErrors, Boolean]
   def indexDrop(name: IndexName): IO[IndexErrors, Unit]
   def indexes(): IO[IndexErrors, List[IndexName]]
@@ -465,4 +465,46 @@ object LMDB {
     backward: Boolean = false
   )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZStream[LMDB, StreamErrors, (K, T)] =
     ZStream.serviceWithStream(_.streamWithKeys(collectionName, keyFilter, startAfter, backward))
+
+  def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZIO[LMDB, IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] =
+    ZIO.serviceWithZIO(_.indexCreate(name, failIfExists))
+
+  def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZIO[LMDB, IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] =
+    ZIO.serviceWithZIO(_.indexGet(name))
+
+  def indexExists(name: IndexName): ZIO[LMDB, IndexErrors, Boolean] =
+    ZIO.serviceWithZIO(_.indexExists(name))
+
+  def indexDrop(name: IndexName): ZIO[LMDB, IndexErrors, Unit] =
+    ZIO.serviceWithZIO(_.indexDrop(name))
+
+  def indexes(): ZIO[LMDB, IndexErrors, List[IndexName]] =
+    ZIO.serviceWithZIO(_.indexes())
+
+  def index[FROM_KEY, TO_KEY](
+    name: IndexName,
+    key: FROM_KEY,
+    targetKey: TO_KEY
+  )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZIO[LMDB, IndexErrors, Unit] =
+    ZIO.serviceWithZIO(_.index(name, key, targetKey))
+
+  def indexContains[FROM_KEY, TO_KEY](
+    name: IndexName,
+    key: FROM_KEY,
+    targetKey: TO_KEY
+  )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZIO[LMDB, IndexErrors, Boolean] =
+    ZIO.serviceWithZIO(_.indexContains(name, key, targetKey))
+
+  def unindex[FROM_KEY, TO_KEY](
+    name: IndexName,
+    key: FROM_KEY,
+    targetKey: TO_KEY
+  )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZIO[LMDB, IndexErrors, Boolean] =
+    ZIO.serviceWithZIO(_.unindex(name, key, targetKey))
+
+  def indexed[FROM_KEY, TO_KEY](
+    name: IndexName,
+    key: FROM_KEY
+  )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZStream[LMDB, IndexErrors, TO_KEY] =
+    ZStream.serviceWithStream(_.indexed(name, key))
 }

@@ -36,5 +36,5 @@ package object lmdb {
   type DeleteErrors   = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
   type CollectErrors  = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
   type StreamErrors   = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
-  type IndexErrors    = StorageSystemError
+  type IndexErrors    = IndexNotFound | IndexAlreadyExists | OverSizedKey | CodecFailure | StorageSystemError
 }

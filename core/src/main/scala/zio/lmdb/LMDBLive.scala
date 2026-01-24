@@ -669,23 +669,209 @@ class LMDBLive(
     ZStream.unwrapScoped(result) // TODO not sure this is the good way ???
   }
 
-  override def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = ???
+  private def getIndexDbi(name: IndexName): IO[IndexNotFound, Dbi[ByteBuffer]] = {
+    val alreadyHereLogic = for {
+      openedCollectionDbis <- openedCollectionDbisRef.get
+    } yield openedCollectionDbis.get(name)
 
-  override def indexGet[FROM_KEY, TO_KEY](name: IndexName): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = ???
+    val openAndRememberLogic = for {
+      openedCollectionDbis <- reentrantLock.withWriteLock(
+                                openedCollectionDbisRef.updateAndGet(before =>
+                                  if (before.contains(name)) before
+                                  else before + (name -> env.openDbi(name, DbiFlags.MDB_DUPSORT))
+                                )
+                              )
+    } yield openedCollectionDbis.get(name)
 
-  override def indexExists(name: IndexName): IO[IndexErrors, Boolean] = ???
+    alreadyHereLogic.some
+      .orElse(openAndRememberLogic.some)
+      .mapError(err => IndexNotFound(name))
+  }
 
-  override def indexDrop(name: IndexName): IO[IndexErrors, Unit] = ???
+  private def indexCreateLogic(name: IndexName): ZIO[Any, StorageSystemError, Unit] = reentrantLock.withWriteLock {
+    for {
+      openedCollectionDbis <- reentrantLock.withWriteLock(
+                                openedCollectionDbisRef.updateAndGet(before =>
+                                  if (before.contains(name)) before
+                                  else before + (name -> env.openDbi(name, DbiFlags.MDB_CREATE, DbiFlags.MDB_DUPSORT))
+                                )
+                              )
+    } yield ()
+  }
 
-  override def indexes(): IO[IndexErrors, List[IndexName]] = ???
+  private def indexAllocate(name: IndexName): IO[IndexErrors, Unit] = {
+    for {
+      exists <- indexExists(name)
+      _      <- ZIO.cond[IndexAlreadyExists, Unit](!exists, (), IndexAlreadyExists(name))
+      _      <- indexCreateLogic(name)
+    } yield ()
+  }
 
-  override def index[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Unit] = ???
+  override def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
+    val allocateLogic = if (failIfExists) indexAllocate(name) else indexAllocate(name).ignore
+    allocateLogic.as(LMDBIndex[FROM_KEY, TO_KEY](name, None, this))
+  }
 
-  override def indexContains[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = ???
+  override def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
+    for {
+      exists <- indexExists(name)
+      _      <- ZIO.cond[IndexNotFound, Unit](exists, (), IndexNotFound(name))
+    } yield LMDBIndex[FROM_KEY, TO_KEY](name, None, this)
+  }
 
-  override def unindex[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = ???
+  override def indexExists(name: IndexName): IO[IndexErrors, Boolean] = {
+    for {
+      openedCollectionDbis <- openedCollectionDbisRef.get
+      found                <- if (openedCollectionDbis.contains(name)) ZIO.succeed(true)
+                              else collectionsAvailable().map(_.contains(name)).mapError(e => e)
+    } yield found
+  }
 
-  override def indexed[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZStream[Any, IndexErrors, TO_KEY] = ???
+  override def indexDrop(name: IndexName): IO[IndexErrors, Unit] = {
+    for {
+      dbi <- getIndexDbi(name)
+      _   <- collectionClearOrDropLogic(dbi, name, true)
+               .mapError {
+                 case CollectionNotFound(n) => IndexNotFound(n)
+                 case e: StorageSystemError => e
+               }
+               .mapError(e => e.asInstanceOf[IndexErrors])
+      _   <- openedCollectionDbisRef.updateAndGet(_.removed(name))
+      _   <- reentrantLock.withWriteLock(
+               ZIO
+                 .attemptBlocking(dbi.close())
+                 .mapError(err => InternalError("Couldn't close index handle", Some(err)))
+             )
+    } yield ()
+  }
+
+  override def indexes(): IO[IndexErrors, List[IndexName]] = {
+    collectionsAvailable().mapError(e => e)
+  }
+
+  override def index[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Unit] = {
+    for {
+      dbi <- getIndexDbi(name)
+      _   <- reentrantLock.withWriteLock(
+               withWriteTransaction(name) { txn =>
+                 for {
+                   keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+                   valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+                   _           <- ZIO
+                                    .attemptBlocking(dbi.put(txn, keyBuffer, valueBuffer))
+                                    .mapError(err => InternalError(s"Couldn't index $key -> $targetKey in $name", Some(err)))
+                   _           <- ZIO
+                                    .attemptBlocking(txn.commit())
+                                    .mapError(err => InternalError("Couldn't commit index transaction", Some(err)))
+                 } yield ()
+               }
+             )
+    } yield ()
+  }
+
+  override def indexContains[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
+    def containsLogic(dbi: Dbi[ByteBuffer]): ZIO[Scope, IndexErrors, Boolean] = {
+      withReadTransaction(name) { txn =>
+        for {
+          keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+          valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+          cursor      <- ZIO.acquireRelease(
+                           ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError("Cursor error", Some(e)))
+                         )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
+          found       <- ZIO
+                           .attemptBlocking {
+                             @scala.annotation.tailrec
+                             def findValue(): Boolean = {
+                               if (cursor.`val`().compareTo(valueBuffer) == 0) true
+                               else if (cursor.seek(SeekOp.MDB_NEXT_DUP)) findValue()
+                               else false
+                             }
+
+                             if (cursor.get(keyBuffer, GetOp.MDB_SET)) findValue()
+                             else false
+                           }
+                           .mapError(e => InternalError("Get error", Some(e)))
+        } yield found
+      }
+    }
+
+    for {
+      dbi <- getIndexDbi(name)
+      res <- ZIO.scoped(containsLogic(dbi))
+    } yield res
+  }
+
+  override def unindex[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
+    for {
+      dbi <- getIndexDbi(name)
+      res <- reentrantLock.withWriteLock(
+               withWriteTransaction(name) { txn =>
+                 for {
+                   keyBuffer   <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+                   valueBuffer <- makeKeyByteBuffer(targetKey).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+                   deleted     <- ZIO
+                                    .attemptBlocking(dbi.delete(txn, keyBuffer, valueBuffer))
+                                    .mapError(e => InternalError("Delete error", Some(e)))
+                   _           <- ZIO
+                                    .attemptBlocking(txn.commit())
+                                    .mapError(e => InternalError("Commit error", Some(e)))
+                 } yield deleted
+               }
+             )
+    } yield res
+  }
+
+  override def indexed[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZStream[Any, IndexErrors, TO_KEY] = {
+    ZStream.unwrapScoped {
+      for {
+        db <- getIndexDbi(name)
+        _  <- reentrantLock.readLock
+
+        txn <- ZIO.acquireRelease(
+                 ZIO
+                   .attemptBlocking(env.txnRead())
+                   .mapError(err => InternalError(s"Couldn't acquire read transaction on $name", Some(err)))
+               )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+
+        keyBuffer <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+
+        cursor <- ZIO.acquireRelease(
+                    ZIO
+                      .attemptBlocking(db.openCursor(txn))
+                      .mapError(err => InternalError(s"Couldn't acquire cursor on $name", Some(err)))
+                  )(cursor => ZIO.attemptBlocking(cursor.close()).ignoreLogged)
+
+        found <- ZIO
+                   .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
+                   .mapError(err => InternalError("Seek error", Some(err)))
+
+      } yield {
+        if (!found) ZStream.empty
+        else {
+          ZStream.paginateChunkZIO(true) { isFirst =>
+            ZIO
+              .attemptBlocking {
+                val valid = if (isFirst) true else cursor.seek(SeekOp.MDB_NEXT_DUP)
+                if (valid) {
+                  val v = cursor.`val`()
+                  Some(v)
+                } else None
+              }
+              .mapError(e => InternalError("Cursor iteration error", Some(e)): IndexErrors)
+              .flatMap {
+                case Some(v) =>
+                  ZIO
+                    .fromEither(toKeyCodec.decode(v))
+                    .mapError(e => CodecFailure(e): IndexErrors)
+                    .map(d => (Chunk(d), Some(false)))
+                case None    =>
+                  ZIO.succeed((Chunk.empty, None))
+              }
+          }
+        }
+      }
+    }
+  }
 }
 
 object LMDBLive {
