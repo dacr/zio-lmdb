@@ -1,6 +1,7 @@
 # build tools related
 target/
 project/target
+.lmdb/
 
 # IDE related
 .metals/
