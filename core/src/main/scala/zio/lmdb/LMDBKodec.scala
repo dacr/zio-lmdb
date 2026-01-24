@@ -20,14 +20,12 @@ import java.nio.charset.StandardCharsets
 import java.util.UUID
 import scala.util.{Try, Success, Failure}
 
-/**
- * A codec abstraction for encoding and decoding keys of type `K` into
- * a byte array representation for use with an LMDB database. The trait
- * provides methods for serialization and deserialization, allowing a
- * bidirectional mapping between `K` and its byte representation.
- *
- * @tparam K The type of key to be encoded and decoded.
- */
+/** A codec abstraction for encoding and decoding keys of type `K` into a byte array representation for use with an LMDB database. The trait provides methods for serialization and deserialization, allowing a bidirectional mapping between `K` and its
+  * byte representation.
+  *
+  * @tparam K
+  *   The type of key to be encoded and decoded.
+  */
 trait LMDBKodec[K] {
   def encode(key: K): Array[Byte]
   def decode(keyBytes: ByteBuffer): Either[String, K] // TODO Replace String by Throwable
@@ -44,17 +42,37 @@ object LMDBKodec {
       Right(charset.decode(keyBytes).toString)
   }
 
-  given LMDBKodec[UUID] = new LMDBKodec[UUID] {
-    private val charset = StandardCharsets.UTF_8
+  def uuidToBytes(uuid: UUID): Array[Byte] = {
+    val out = new Array[Byte](16)
+    val msb = uuid.getMostSignificantBits
+    val lsb = uuid.getLeastSignificantBits
 
-    override def encode(key: UUID): Array[Byte] = key.toString.getBytes(charset)
-
-    override def decode(keyBytes: ByteBuffer): Either[String, UUID] =
-      Try(UUID.fromString(charset.decode(keyBytes).toString)) match {
-        case Success(value) => Right(value)
-        case Failure(exception)=> Left(exception.getMessage)
-      }
+    // Fill the array using bit-shifting for maximum speed
+    for (i <- 0 until 8) {
+      out(i) = (msb >>> (8 * (7 - i))).toByte
+    }
+    for (i <- 8 until 16) {
+      out(i) = (lsb >>> (8 * (15 - i))).toByte
+    }
+    out
   }
 
+  def bytesToUUID(bytes: Array[Byte]): UUID = {
+    val bb = ByteBuffer.wrap(bytes)
+    new UUID(bb.getLong, bb.getLong)
+  }
+
+  given LMDBKodec[UUID] = new LMDBKodec[UUID] {
+    override def encode(key: UUID): Array[Byte] = uuidToBytes(key)
+
+    override def decode(keyBytes: ByteBuffer): Either[String, UUID] = {
+      if (keyBytes.remaining() < 16) Left(s"Not enough bytes for UUID, expected 16 but got ${keyBytes.remaining()}")
+      else {
+        val msb = keyBytes.getLong
+        val lsb = keyBytes.getLong
+        Right(new UUID(msb, lsb))
+      }
+    }
+  }
 
 }
