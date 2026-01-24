@@ -1,8 +1,8 @@
-pomIncludeRepository   := { _ => false }
-publishMavenStyle      := true
-Test / publishArtifact := false
-releaseCrossBuild      := true
-versionScheme          := Some("semver-spec")
+ThisBuild / pomIncludeRepository   := { _ => false }
+ThisBuild / publishMavenStyle      := true
+ThisBuild / Test / publishArtifact := false
+ThisBuild / releaseCrossBuild      := true
+ThisBuild / versionScheme          := Some("semver-spec")
 
 // -----------------------------------------------------------------------------
 ThisBuild / sonatypeCredentialHost := Sonatype.sonatypeCentralHost

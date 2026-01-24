@@ -28,7 +28,7 @@ import zio.stream._
   * @tparam T
   *   the data class type for collection content
   */
-case class LMDBCollection[K, T](name: String, lmdb: LMDB)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]) {
+case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]) {
 
   /** Get how many items a collection contains
     *
