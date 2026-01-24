@@ -93,11 +93,13 @@ class LMDBLive(
   override def collectionSize(name: CollectionName): IO[SizeErrors, Long] = {
     for {
       collectionDbi <- getCollectionDbi(name)
-      stats         <- withReadTransaction(name) { txn =>
-                         ZIO
-                           .attempt(collectionDbi.stat(txn))
-                           .mapError(err => InternalError(s"Couldn't get $name size", Some(err)))
-                       }
+      stats         <- reentrantLock.withReadLock(
+                         withReadTransaction(name) { txn =>
+                           ZIO
+                             .attempt(collectionDbi.stat(txn))
+                             .mapError(err => InternalError(s"Couldn't get $name size", Some(err)))
+                         }
+                       )
     } yield stats.entries
   }
 
@@ -250,7 +252,7 @@ class LMDBLive(
 
     for {
       db     <- getCollectionDbi(colName)
-      result <- fetchLogic(db)
+      result <- reentrantLock.withReadLock(fetchLogic(db))
     } yield result
   }
 
@@ -303,7 +305,7 @@ class LMDBLive(
     } yield seekedValue.flatMap(v => seekedKey.map(k => k -> v))
     for {
       db     <- getCollectionDbi(colName)
-      result <- ZIO.scoped(walkLogic(db))
+      result <- reentrantLock.withReadLock(ZIO.scoped(walkLogic(db)))
     } yield result
   }
 
@@ -357,7 +359,7 @@ class LMDBLive(
 
     for {
       db     <- getCollectionDbi(colName)
-      result <- ZIO.scoped(seekLogic(db))
+      result <- reentrantLock.withReadLock(ZIO.scoped(seekLogic(db)))
     } yield result
   }
 
@@ -389,7 +391,7 @@ class LMDBLive(
 
     for {
       db     <- getCollectionDbi(colName)
-      result <- containsLogic(db)
+      result <- reentrantLock.withReadLock(containsLogic(db))
     } yield result
   }
 
@@ -536,7 +538,7 @@ class LMDBLive(
 
     for {
       collectionDbi <- getCollectionDbi(colName)
-      collected     <- ZIO.scoped(collectLogic(collectionDbi))
+      collected     <- reentrantLock.withReadLock(ZIO.scoped(collectLogic(collectionDbi)))
     } yield collected
   }
 
@@ -797,7 +799,7 @@ class LMDBLive(
 
     for {
       dbi <- getIndexDbi(name)
-      res <- ZIO.scoped(containsLogic(dbi))
+      res <- reentrantLock.withReadLock(ZIO.scoped(containsLogic(dbi)))
     } yield res
   }
 
