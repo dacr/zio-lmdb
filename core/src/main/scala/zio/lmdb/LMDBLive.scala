@@ -95,12 +95,17 @@ class LMDBLive(
       collectionDbi <- getCollectionDbi(name)
       stats         <- reentrantLock.withReadLock(
                          withReadTransaction(name) { txn =>
-                           ZIO
-                             .attempt(collectionDbi.stat(txn))
-                             .mapError(err => InternalError(s"Couldn't get $name size", Some(err)))
+                           collectionSizeLogic(txn, collectionDbi, name)
                          }
                        )
-    } yield stats.entries
+    } yield stats
+  }
+
+  private def collectionSizeLogic(txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: CollectionName): IO[SizeErrors, Long] = {
+    ZIO
+      .attempt(dbi.stat(txn))
+      .mapError(err => InternalError(s"Couldn't get $name size", Some(err)))
+      .map(_.entries)
   }
 
   override def collectionAllocate(name: CollectionName): IO[CreateErrors, Unit] = {
@@ -170,8 +175,22 @@ class LMDBLive(
   override def collectionClear(colName: CollectionName): IO[ClearErrors, Unit] = {
     for {
       collectionDbi <- getCollectionDbi(colName)
-      _             <- collectionClearOrDropLogic(collectionDbi, colName, false)
+      _             <- reentrantLock.withWriteLock(
+                         withWriteTransaction(colName) { txn =>
+                           for {
+                             _ <- collectionClearLogic(txn, collectionDbi, colName)
+                             _ <- ZIO.attemptBlocking(txn.commit()).mapError[ClearErrors](err => InternalError("Couldn't commit transaction", Some(err)))
+                           } yield ()
+                         }
+                       )
     } yield ()
+  }
+
+  private def collectionClearLogic(txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName): IO[ClearErrors, Unit] = {
+    ZIO
+      .attemptBlocking(dbi.drop(txn, false))
+      .mapError(err => InternalError(s"Couldn't clear $colName", Some(err)))
+      .unit
   }
 
   override def collectionDrop(colName: CollectionName): IO[DropErrors, Unit] = {
@@ -212,64 +231,81 @@ class LMDBLive(
   }
 
   override def delete[K, T](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
-    def deleteLogic(colDbi: Dbi[ByteBuffer]): IO[DeleteErrors, Option[T]] = {
-      reentrantLock.withWriteLock(
-        withWriteTransaction(colName) { txn =>
-          for {
-            key           <- makeKeyByteBuffer(key)
-            found         <- ZIO.attemptBlocking(Option(colDbi.get(txn, key))).mapError[DeleteErrors](err => InternalError(s"Couldn't fetch $key for delete on $colName", Some(err)))
-            mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
-            mayBeDoc      <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                               ZIO.fromEither(codec.decode(rawValue)).mapError[DeleteErrors](msg => CodecFailure(msg))
-                             }
-            keyFound      <- ZIO.attemptBlocking(colDbi.delete(txn, key)).mapError[DeleteErrors](err => InternalError(s"Couldn't delete $key from $colName", Some(err)))
-            _             <- ZIO.attemptBlocking(txn.commit()).mapError[DeleteErrors](err => InternalError("Couldn't commit transaction", Some(err)))
-          } yield mayBeDoc
-        }
-      )
-    }
-
     for {
       db     <- getCollectionDbi(colName)
-      status <- deleteLogic(db)
-    } yield status
-  }
-
-  override def fetch[K, T](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]] = {
-    def fetchLogic(colDbi: Dbi[ByteBuffer]): ZIO[Any, FetchErrors, Option[T]] = {
-      withReadTransaction(colName) { txn =>
-        for {
-          key           <- makeKeyByteBuffer(key)
-          found         <- ZIO.attemptBlocking(Option(colDbi.get(txn, key))).mapError[FetchErrors](err => InternalError(s"Couldn't fetch $key on $colName", Some(err)))
-          mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
-          document      <- ZIO
-                             .foreach(mayBeRawValue) { rawValue =>
-                               ZIO.fromEither(codec.decode(rawValue)).mapError[FetchErrors](msg => CodecFailure(msg))
-                             }
-        } yield document
-      }
-    }
-
-    for {
-      db     <- getCollectionDbi(colName)
-      result <- reentrantLock.withReadLock(fetchLogic(db))
+      result <- reentrantLock.withWriteLock(
+                  withWriteTransaction(colName) { txn =>
+                    for {
+                      res <- deleteLogic(txn, db, colName, key)
+                      _   <- ZIO.attemptBlocking(txn.commit()).mapError[DeleteErrors](err => InternalError("Couldn't commit transaction", Some(err)))
+                    } yield res
+                  }
+                )
     } yield result
   }
 
+  private def deleteLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
+    for {
+      keyBB         <- makeKeyByteBuffer(key)
+      found         <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[DeleteErrors](err => InternalError(s"Couldn't fetch $key for delete on $colName", Some(err)))
+      mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
+      mayBeDoc      <- ZIO.foreach(mayBeRawValue) { rawValue =>
+                         ZIO.fromEither(codec.decode(rawValue)).mapError[DeleteErrors](msg => CodecFailure(msg))
+                       }
+      _             <- ZIO.attemptBlocking(dbi.delete(txn, keyBB)).mapError[DeleteErrors](err => InternalError(s"Couldn't delete $key from $colName", Some(err)))
+    } yield mayBeDoc
+  }
+
+  override def fetch[K, T](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]] = {
+    for {
+      db     <- getCollectionDbi(colName)
+      result <- reentrantLock.withReadLock(
+                  withReadTransaction(colName) { txn =>
+                    fetchLogic(txn, db, colName, key)
+                  }
+                )
+    } yield result
+  }
+
+  private def fetchLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZIO[Any, FetchErrors, Option[T]] = {
+    for {
+      keyBB         <- makeKeyByteBuffer(key)
+      found         <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[FetchErrors](err => InternalError(s"Couldn't fetch $key on $colName", Some(err)))
+      mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
+      document      <- ZIO
+                         .foreach(mayBeRawValue) { rawValue =>
+                           ZIO.fromEither(codec.decode(rawValue)).mapError[FetchErrors](msg => CodecFailure(msg))
+                         }
+    } yield document
+  }
+
   override def fetchAt[K, T](colName: CollectionName, index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
-    def walkLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, FetchErrors, Option[(K, T)]] = for {
-      txn                <- ZIO.acquireRelease(
-                              ZIO
-                                .attemptBlocking(env.txnRead())
-                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
-                            )(txn =>
-                              ZIO
-                                .attemptBlocking(txn.close())
-                                .ignoreLogged
-                            )
+    for {
+      db     <- getCollectionDbi(colName)
+      result <- reentrantLock.withReadLock(
+                  ZIO.scoped {
+                    for {
+                      txn <- ZIO.acquireRelease(
+                               ZIO
+                                 .attemptBlocking(env.txnRead())
+                                 .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                             )(txn =>
+                               ZIO
+                                 .attemptBlocking(txn.close())
+                                 .ignoreLogged
+                             )
+                      res <- fetchAtLogic(txn, db, colName, index)
+                    } yield res
+                  }
+                )
+    } yield result
+  }
+
+  private def fetchAtLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZIO[Scope, FetchErrors, Option[(K, T)]] = {
+    for {
       cursor             <- ZIO.acquireRelease(
                               ZIO
-                                .attemptBlocking(colDbi.openCursor(txn))
+                                .attemptBlocking(dbi.openCursor(txn))
                                 .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
                             )(cursor =>
                               ZIO
@@ -303,27 +339,35 @@ class LMDBLive(
                               .map(_.flatten)
 
     } yield seekedValue.flatMap(v => seekedKey.map(k => k -> v))
-    for {
-      db     <- getCollectionDbi(colName)
-      result <- reentrantLock.withReadLock(ZIO.scoped(walkLogic(db)))
-    } yield result
   }
 
   private def seek[K, T](colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
-    // TODO TOO COMPLEX !!!!
-    def seekLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, FetchErrors, Option[(K, T)]] = for {
-      txn         <- ZIO.acquireRelease(
-                       ZIO
-                         .attemptBlocking(env.txnRead())
-                         .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
-                     )(txn =>
-                       ZIO
-                         .attemptBlocking(txn.close())
-                         .ignoreLogged
-                     )
+    for {
+      db     <- getCollectionDbi(colName)
+      result <- reentrantLock.withReadLock(
+                  ZIO.scoped {
+                    for {
+                      txn <- ZIO.acquireRelease(
+                               ZIO
+                                 .attemptBlocking(env.txnRead())
+                                 .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                             )(txn =>
+                               ZIO
+                                 .attemptBlocking(txn.close())
+                                 .ignoreLogged
+                             )
+                      res <- seekLogic(txn, db, colName, recordKey, seekOperation)
+                    } yield res
+                  }
+                )
+    } yield result
+  }
+
+  private def seekLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZIO[Scope, FetchErrors, Option[(K, T)]] = {
+    for {
       cursor      <- ZIO.acquireRelease(
                        ZIO
-                         .attemptBlocking(colDbi.openCursor(txn))
+                         .attemptBlocking(dbi.openCursor(txn))
                          .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
                      )(cursor =>
                        ZIO
@@ -356,11 +400,6 @@ class LMDBLive(
                        .when(seekSuccess)
                        .map(_.flatten)
     } yield seekedValue.flatMap(v => seekedKey.map(k => k -> v))
-
-    for {
-      db     <- getCollectionDbi(colName)
-      result <- reentrantLock.withReadLock(ZIO.scoped(seekLogic(db)))
-    } yield result
   }
 
   override def head[K, T](collectionName: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
@@ -380,103 +419,109 @@ class LMDBLive(
   }
 
   override def contains[K](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K]): IO[ContainsErrors, Boolean] = {
-    def containsLogic(colDbi: Dbi[ByteBuffer]): ZIO[Any, ContainsErrors, Boolean] = {
-      withReadTransaction(colName) { txn =>
-        for {
-          key   <- makeKeyByteBuffer(key)
-          found <- ZIO.attemptBlocking(Option(colDbi.get(txn, key))).mapError[ContainsErrors](err => InternalError(s"Couldn't check $key on $colName", Some(err)))
-        } yield found.isDefined
-      }
-    }
-
     for {
       db     <- getCollectionDbi(colName)
-      result <- reentrantLock.withReadLock(containsLogic(db))
+      result <- reentrantLock.withReadLock(
+                  withReadTransaction(colName) { txn =>
+                    containsLogic(txn, db, colName, key)
+                  }
+                )
     } yield result
+  }
+
+  private def containsLogic[K](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K]): ZIO[Any, ContainsErrors, Boolean] = {
+    for {
+      keyBB <- makeKeyByteBuffer(key)
+      found <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[ContainsErrors](err => InternalError(s"Couldn't check $key on $colName", Some(err)))
+    } yield found.isDefined
   }
 
   override def update[K, T](collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
-    def updateLogic(collectionDbi: Dbi[ByteBuffer]): IO[UpdateErrors, Option[T]] = {
-      reentrantLock.withWriteLock(
-        withWriteTransaction(collectionName) { txn =>
-          for {
-            key            <- makeKeyByteBuffer(key)
-            found          <- ZIO.attemptBlocking(Option(collectionDbi.get(txn, key))).mapError(err => InternalError(s"Couldn't fetch $key for upsert on $collectionName", Some(err)))
-            mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
-            mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                                ZIO.fromEither(codec.decode(rawValue)).mapError[UpdateErrors](msg => CodecFailure(msg))
-                              }
-            mayBeDocAfter   = mayBeDocBefore.map(modifier)
-            _              <- ZIO.foreachDiscard(mayBeDocAfter) { docAfter =>
-                                val docBytes = codec.encode(docAfter)
-                                for {
-                                  valueBuffer <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for encoded value", Some(err)))
-                                  _           <- ZIO.attemptBlocking(valueBuffer.put(docBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
-                                  _           <- ZIO.attemptBlocking(collectionDbi.put(txn, key, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $key into $collectionName", Some(err)))
-                                  _           <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit upsert $key into $collectionName", Some(err)))
-                                } yield ()
-                              }
-          } yield mayBeDocAfter
-        }
-      )
-    }
-
     for {
       collectionDbi <- getCollectionDbi(collectionName)
-      result        <- updateLogic(collectionDbi)
+      result        <- reentrantLock.withWriteLock(
+                         withWriteTransaction(collectionName) { txn =>
+                           for {
+                             res <- updateLogic(txn, collectionDbi, collectionName, key, modifier)
+                             _   <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError("Couldn't commit transaction", Some(err)))
+                           } yield res
+                         }
+                       )
     } yield result
+  }
+
+  private def updateLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
+    for {
+      keyBB          <- makeKeyByteBuffer(key)
+      found          <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError(err => InternalError(s"Couldn't fetch $key for update on $collectionName", Some(err)))
+      mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
+      mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
+                          ZIO.fromEither(codec.decode(rawValue)).mapError[UpdateErrors](msg => CodecFailure(msg))
+                        }
+      mayBeDocAfter   = mayBeDocBefore.map(modifier)
+      _              <- ZIO.foreachDiscard(mayBeDocAfter) { docAfter =>
+                          val docBytes = codec.encode(docAfter)
+                          for {
+                            valueBuffer <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for encoded value", Some(err)))
+                            _           <- ZIO.attemptBlocking(valueBuffer.put(docBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
+                            _           <- ZIO.attemptBlocking(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't update $key into $collectionName", Some(err)))
+                          } yield ()
+                        }
+    } yield mayBeDocAfter
   }
 
   override def upsertOverwrite[K, T](colName: CollectionName, key: K, document: T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
-    def upsertLogic(collectionDbi: Dbi[ByteBuffer]): IO[UpsertErrors, Unit] = {
-      reentrantLock.withWriteLock(
-        withWriteTransaction(colName) { txn =>
-          for {
-            key           <- makeKeyByteBuffer(key)
-            found         <- ZIO.attemptBlocking(Option(collectionDbi.get(txn, key))).mapError(err => InternalError(s"Couldn't fetch $key for upsertOverwrite on $colName", Some(err)))
-            mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
-            docBytes       = codec.encode(document)
-            valueBuffer   <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for encoded value", Some(err)))
-            _             <- ZIO.attemptBlocking(valueBuffer.put(docBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
-            _             <- ZIO.attemptBlocking(collectionDbi.put(txn, key, valueBuffer)).mapError(err => InternalError(s"Couldn't upsertOverwrite $key into $colName", Some(err)))
-            _             <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit upsertOverwrite $key into $colName", Some(err)))
-          } yield ()
-        }
-      )
-    }
-
     for {
       collectionDbi <- getCollectionDbi(colName)
-      result        <- upsertLogic(collectionDbi)
+      result        <- reentrantLock.withWriteLock(
+                         withWriteTransaction(colName) { txn =>
+                           for {
+                             _ <- upsertOverwriteLogic(txn, collectionDbi, colName, key, document)
+                             _ <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError("Couldn't commit transaction", Some(err)))
+                           } yield ()
+                         }
+                       )
     } yield result
   }
 
-  override def upsert[K, T](colName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
-    def upsertLogic(collectionDbi: Dbi[ByteBuffer]): IO[UpsertErrors, T] = {
-      reentrantLock.withWriteLock(
-        withWriteTransaction(colName) { txn =>
-          for {
-            key            <- makeKeyByteBuffer(key)
-            found          <- ZIO.attemptBlocking(Option(collectionDbi.get(txn, key))).mapError(err => InternalError(s"Couldn't fetch $key for upsert on $colName", Some(err)))
-            mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
-            mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                                ZIO.fromEither(codec.decode(rawValue)).mapError[UpsertErrors](msg => CodecFailure(msg))
-                              }
-            docAfter        = modifier(mayBeDocBefore)
-            docBytes        = codec.encode(docAfter)
-            valueBuffer    <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for encoded value", Some(err)))
-            _              <- ZIO.attemptBlocking(valueBuffer.put(docBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
-            _              <- ZIO.attemptBlocking(collectionDbi.put(txn, key, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $key into $colName", Some(err)))
-            _              <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit upsert $key into $colName", Some(err)))
-          } yield docAfter
-        }
-      )
-    }
+  private def upsertOverwriteLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, document: T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
+    for {
+      keyBB       <- makeKeyByteBuffer(key)
+      docBytes     = codec.encode(document)
+      valueBuffer <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for encoded value", Some(err)))
+      _           <- ZIO.attemptBlocking(valueBuffer.put(docBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
+      _           <- ZIO.attemptBlocking(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't upsertOverwrite $key into $colName", Some(err)))
+    } yield ()
+  }
 
+  override def upsert[K, T](colName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
     for {
       collectionDbi <- getCollectionDbi(colName)
-      result        <- upsertLogic(collectionDbi)
+      result        <- reentrantLock.withWriteLock(
+                         withWriteTransaction(colName) { txn =>
+                           for {
+                             res <- upsertLogic(txn, collectionDbi, colName, key, modifier)
+                             _   <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError("Couldn't commit transaction", Some(err)))
+                           } yield res
+                         }
+                       )
     } yield result
+  }
+
+  private def upsertLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
+    for {
+      keyBB          <- makeKeyByteBuffer(key)
+      found          <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError(err => InternalError(s"Couldn't fetch $key for upsert on $colName", Some(err)))
+      mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
+      mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
+                          ZIO.fromEither(codec.decode(rawValue)).mapError[UpsertErrors](msg => CodecFailure(msg))
+                        }
+      docAfter        = modifier(mayBeDocBefore)
+      docBytes        = codec.encode(docAfter)
+      valueBuffer    <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for encoded value", Some(err)))
+      _              <- ZIO.attemptBlocking(valueBuffer.put(docBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
+      _              <- ZIO.attemptBlocking(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $key into $colName", Some(err)))
+    } yield docAfter
   }
 
   private def makeRange(
@@ -501,20 +546,42 @@ class LMDBLive(
     backward: Boolean = false,
     limit: Option[Int] = None
   )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]] = {
-    def collectLogic(collectionDbi: Dbi[ByteBuffer]): ZIO[Scope, CollectErrors, List[T]] = for {
-      txn          <- ZIO.acquireRelease(
-                        ZIO
-                          .attemptBlocking(env.txnRead())
-                          .mapError[CollectErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
-                      )(txn =>
-                        ZIO
-                          .attemptBlocking(txn.close())
-                          .ignoreLogged
-                      )
+    for {
+      collectionDbi <- getCollectionDbi(colName)
+      collected     <- reentrantLock.withReadLock(
+                         ZIO.scoped {
+                           for {
+                             txn <- ZIO.acquireRelease(
+                                      ZIO
+                                        .attemptBlocking(env.txnRead())
+                                        .mapError[CollectErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                                    )(txn =>
+                                      ZIO
+                                        .attemptBlocking(txn.close())
+                                        .ignoreLogged
+                                    )
+                             res <- collectLogic(txn, collectionDbi, colName, keyFilter, valueFilter, startAfter, backward, limit)
+                           } yield res
+                         }
+                       )
+    } yield collected
+  }
+
+  private def collectLogic[K, T](
+    txn: Txn[ByteBuffer],
+    dbi: Dbi[ByteBuffer],
+    colName: CollectionName,
+    keyFilter: K => Boolean = (_: K) => true,
+    valueFilter: T => Boolean = (_: T) => true,
+    startAfter: Option[K] = None,
+    backward: Boolean = false,
+    limit: Option[Int] = None
+  )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZIO[Scope, CollectErrors, List[T]] = {
+    for {
       startAfterBB <- ZIO.foreach(startAfter)(makeKeyByteBuffer)
       iterable     <- ZIO.acquireRelease(
                         ZIO
-                          .attemptBlocking(collectionDbi.iterate(txn, makeRange(startAfterBB, backward)))
+                          .attemptBlocking(dbi.iterate(txn, makeRange(startAfterBB, backward)))
                           .mapError[CollectErrors](err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
                       )(cursor =>
                         ZIO
@@ -534,11 +601,6 @@ class LMDBLive(
                           }
                         } { r => ZIO.from(r) }
                         .mapError[CollectErrors](err => InternalError(s"Couldn't collect documents stored in $colName : $err", None))
-    } yield collected
-
-    for {
-      collectionDbi <- getCollectionDbi(colName)
-      collected     <- reentrantLock.withReadLock(ZIO.scoped(collectLogic(collectionDbi)))
     } yield collected
   }
 
@@ -757,50 +819,66 @@ class LMDBLive(
       _   <- reentrantLock.withWriteLock(
                withWriteTransaction(name) { txn =>
                  for {
-                   keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-                   valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-                   _           <- ZIO
-                                    .attemptBlocking(dbi.put(txn, keyBuffer, valueBuffer))
-                                    .mapError(err => InternalError(s"Couldn't index $key -> $targetKey in $name", Some(err)))
-                   _           <- ZIO
-                                    .attemptBlocking(txn.commit())
-                                    .mapError(err => InternalError("Couldn't commit index transaction", Some(err)))
+                   _ <- indexLogic(txn, dbi, name, key, targetKey)
+                   _ <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError("Couldn't commit index transaction", Some(err)))
                  } yield ()
                }
              )
     } yield ()
   }
 
+  private def indexLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Unit] = {
+    for {
+      keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      _           <- ZIO
+                       .attemptBlocking(dbi.put(txn, keyBuffer, valueBuffer))
+                       .mapError(err => InternalError(s"Couldn't index $key -> $targetKey in $name", Some(err)))
+    } yield ()
+  }
+
   override def indexContains[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
-    def containsLogic(dbi: Dbi[ByteBuffer]): ZIO[Scope, IndexErrors, Boolean] = {
-      withReadTransaction(name) { txn =>
-        for {
-          keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-          valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-          cursor      <- ZIO.acquireRelease(
-                           ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError("Cursor error", Some(e)))
-                         )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
-          found       <- ZIO
-                           .attemptBlocking {
-                             @scala.annotation.tailrec
-                             def findValue(): Boolean = {
-                               if (cursor.`val`().compareTo(valueBuffer) == 0) true
-                               else if (cursor.seek(SeekOp.MDB_NEXT_DUP)) findValue()
-                               else false
-                             }
-
-                             if (cursor.get(keyBuffer, GetOp.MDB_SET)) findValue()
-                             else false
-                           }
-                           .mapError(e => InternalError("Get error", Some(e)))
-        } yield found
-      }
-    }
-
     for {
       dbi <- getIndexDbi(name)
-      res <- reentrantLock.withReadLock(ZIO.scoped(containsLogic(dbi)))
+      res <- reentrantLock.withReadLock(
+               ZIO.scoped {
+                 for {
+                   txn <- ZIO.acquireRelease(
+                            ZIO
+                              .attemptBlocking(env.txnRead())
+                              .mapError(err => InternalError(s"Couldn't acquire read transaction on $name", Some(err)))
+                          )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+                   res <- indexContainsLogic(txn, dbi, name, key, targetKey)
+                 } yield res
+               }
+             )
     } yield res
+  }
+
+  private def indexContainsLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit
+    keyCodec: LMDBKodec[FROM_KEY],
+    toKeyCodec: LMDBKodec[TO_KEY]
+  ): ZIO[Scope, IndexErrors, Boolean] = {
+    for {
+      keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      cursor      <- ZIO.acquireRelease(
+                       ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError("Cursor error", Some(e)))
+                     )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
+      found       <- ZIO
+                       .attemptBlocking {
+                         @scala.annotation.tailrec
+                         def findValue(): Boolean = {
+                           if (cursor.`val`().compareTo(valueBuffer) == 0) true
+                           else if (cursor.seek(SeekOp.MDB_NEXT_DUP)) findValue()
+                           else false
+                         }
+
+                         if (cursor.get(keyBuffer, GetOp.MDB_SET)) findValue()
+                         else false
+                       }
+                       .mapError(e => InternalError("Get error", Some(e)))
+    } yield found
   }
 
   override def unindex[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
@@ -809,18 +887,22 @@ class LMDBLive(
       res <- reentrantLock.withWriteLock(
                withWriteTransaction(name) { txn =>
                  for {
-                   keyBuffer   <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-                   valueBuffer <- makeKeyByteBuffer(targetKey).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-                   deleted     <- ZIO
-                                    .attemptBlocking(dbi.delete(txn, keyBuffer, valueBuffer))
-                                    .mapError(e => InternalError("Delete error", Some(e)))
-                   _           <- ZIO
-                                    .attemptBlocking(txn.commit())
-                                    .mapError(e => InternalError("Commit error", Some(e)))
-                 } yield deleted
+                   res <- unindexLogic(txn, dbi, name, key, targetKey)
+                   _   <- ZIO.attemptBlocking(txn.commit()).mapError(e => InternalError("Commit error", Some(e)))
+                 } yield res
                }
              )
     } yield res
+  }
+
+  private def unindexLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
+    for {
+      keyBuffer   <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      valueBuffer <- makeKeyByteBuffer(targetKey).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      deleted     <- ZIO
+                       .attemptBlocking(dbi.delete(txn, keyBuffer, valueBuffer))
+                       .mapError(e => InternalError("Delete error", Some(e)))
+    } yield deleted
   }
 
   override def indexed[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZStream[Any, IndexErrors, TO_KEY] = {
@@ -872,6 +954,165 @@ class LMDBLive(
           }
         }
       }
+    }
+  }
+  override def readOnly[R, E, A](f: LMDBReadOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A]                                                                                = {
+    reentrantLock.withReadLock(
+      ZIO.scoped(
+        for {
+          txn <- ZIO.acquireRelease(
+                   ZIO
+                     .attemptBlocking(env.txnRead())
+                     .mapError(err => InternalError("Couldn't acquire read transaction", Some(err)))
+                 )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+          ops  = new LMDBReadOpsLive(txn)
+          res <- f(ops)
+        } yield res
+      )
+    )
+  }
+
+  override def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A] = {
+    reentrantLock.withWriteLock(
+      ZIO.scoped(
+        for {
+          txn <- ZIO.acquireRelease(
+                   ZIO
+                     .attemptBlocking(env.txnWrite())
+                     .mapError(err => InternalError("Couldn't acquire write transaction", Some(err)))
+                 )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+          ops  = new LMDBWriteOpsLive(txn)
+          res <- f(ops)
+          _   <- ZIO
+                   .attemptBlocking(txn.commit())
+                   .mapError(err => InternalError("Couldn't commit transaction", Some(err)))
+        } yield res
+      )
+    )
+  }
+
+  private class LMDBReadOpsLive(txn: Txn[ByteBuffer]) extends LMDBReadOps {
+    override def collectionExists(name: CollectionName): IO[StorageSystemError, Boolean] = LMDBLive.this.collectionExists(name)
+
+    override def collectionSize(name: CollectionName): IO[SizeErrors, Long] = {
+      for {
+        collectionDbi <- getCollectionDbi(name)
+        size          <- collectionSizeLogic(txn, collectionDbi, name)
+      } yield size
+    }
+
+    override def fetch[K, T](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]] = {
+      for {
+        db  <- getCollectionDbi(colName)
+        res <- fetchLogic(txn, db, colName, key)
+      } yield res
+    }
+
+    override def fetchAt[K, T](colName: CollectionName, index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
+      for {
+        db  <- getCollectionDbi(colName)
+        res <- ZIO.scoped(fetchAtLogic(txn, db, colName, index))
+      } yield res
+    }
+
+    override def head[K, T](collectionName: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] =
+      seek(collectionName, None, SeekOp.MDB_FIRST)
+
+    override def previous[K, T](collectionName: CollectionName, beforeThatKey: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] =
+      seek(collectionName, Some(beforeThatKey), SeekOp.MDB_PREV)
+
+    override def next[K, T](collectionName: CollectionName, afterThatKey: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] =
+      seek(collectionName, Some(afterThatKey), SeekOp.MDB_NEXT)
+
+    override def last[K, T](collectionName: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] =
+      seek(collectionName, None, SeekOp.MDB_LAST)
+
+    private def seek[K, T](colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
+      for {
+        db  <- getCollectionDbi(colName)
+        res <- ZIO.scoped(seekLogic(txn, db, colName, recordKey, seekOperation))
+      } yield res
+    }
+
+    override def contains[K](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K]): IO[ContainsErrors, Boolean] = {
+      for {
+        db  <- getCollectionDbi(colName)
+        res <- containsLogic(txn, db, colName, key)
+      } yield res
+    }
+
+    override def collect[K, T](
+      colName: CollectionName,
+      keyFilter: K => Boolean,
+      valueFilter: T => Boolean,
+      startAfter: Option[K],
+      backward: Boolean,
+      limit: Option[Int]
+    )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]] = {
+      for {
+        collectionDbi <- getCollectionDbi(colName)
+        res           <- ZIO.scoped(collectLogic(txn, collectionDbi, colName, keyFilter, valueFilter, startAfter, backward, limit))
+      } yield res
+    }
+
+    override def indexExists(name: IndexName): IO[IndexErrors, Boolean] = LMDBLive.this.indexExists(name)
+
+    override def indexContains[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
+      for {
+        dbi <- getIndexDbi(name)
+        res <- ZIO.scoped(indexContainsLogic(txn, dbi, name, key, targetKey))
+      } yield res
+    }
+  }
+
+  private class LMDBWriteOpsLive(txn: Txn[ByteBuffer]) extends LMDBReadOpsLive(txn) with LMDBWriteOps {
+    override def collectionClear(name: CollectionName): IO[ClearErrors, Unit] = {
+      for {
+        collectionDbi <- getCollectionDbi(name)
+        _             <- collectionClearLogic(txn, collectionDbi, name)
+      } yield ()
+    }
+
+    override def update[K, T](collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
+      for {
+        collectionDbi <- getCollectionDbi(collectionName)
+        res           <- updateLogic(txn, collectionDbi, collectionName, key, modifier)
+      } yield res
+    }
+
+    override def upsert[K, T](collectionName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
+      for {
+        collectionDbi <- getCollectionDbi(collectionName)
+        res           <- upsertLogic(txn, collectionDbi, collectionName, key, modifier)
+      } yield res
+    }
+
+    override def upsertOverwrite[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
+      for {
+        collectionDbi <- getCollectionDbi(collectionName)
+        _             <- upsertOverwriteLogic(txn, collectionDbi, collectionName, key, document)
+      } yield ()
+    }
+
+    override def delete[K, T](collectionName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
+      for {
+        db  <- getCollectionDbi(collectionName)
+        res <- deleteLogic(txn, db, collectionName, key)
+      } yield res
+    }
+
+    override def index[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Unit] = {
+      for {
+        dbi <- getIndexDbi(name)
+        _   <- indexLogic(txn, dbi, name, key, targetKey)
+      } yield ()
+    }
+
+    override def unindex[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
+      for {
+        dbi <- getIndexDbi(name)
+        res <- unindexLogic(txn, dbi, name, key, targetKey)
+      } yield res
     }
   }
 }

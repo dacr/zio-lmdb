@@ -116,6 +116,9 @@ trait LMDB {
     key: FROM_KEY
   )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZStream[Any, IndexErrors, TO_KEY]
 
+  def readOnly[R, E, A](f: LMDBReadOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A]
+  def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A]
+
 }
 
 object LMDB {
@@ -507,4 +510,10 @@ object LMDB {
     key: FROM_KEY
   )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZStream[LMDB, IndexErrors, TO_KEY] =
     ZStream.serviceWithStream(_.indexed(name, key))
+
+  def readOnly[R, E, A](f: LMDBReadOps => ZIO[R, E, A]): ZIO[LMDB & R, E | StorageSystemError, A] =
+    ZIO.serviceWithZIO[LMDB](_.readOnly(f))
+
+  def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[LMDB & R, E | StorageSystemError, A] =
+    ZIO.serviceWithZIO[LMDB](_.readWrite(f))
 }
