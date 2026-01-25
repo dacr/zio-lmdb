@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 David Crosson
+ * Copyright 2026 David Crosson
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,21 @@ package zio.lmdb
 import java.io.File
 import zio._
 
+/** Configuration for LMDB
+  *
+  * @param databaseName
+  *   Database name, which will be also used as the directory name
+  * @param databasesHome
+  *   Where to store the database directory
+  * @param fileSystemSynchronized
+  *   Synchronize the file system with all database write operations
+  * @param maxReaders
+  *   The maximum number of readers
+  * @param maxCollections
+  *   The maximum number of collections which can be created
+  * @param mapSize
+  *   The maximum size of the whole database including metadata
+  */
 case class LMDBConfig(
   databaseName: String,
   databasesHome: Option[String],

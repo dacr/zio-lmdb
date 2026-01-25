@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 David Crosson
+ * Copyright 2026 David Crosson
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,50 +20,256 @@ import zio._
 import zio.stream.ZStream
 import zio.config._
 
+/** Lightning Memory-Mapped Database (LMDB) abstraction layer for ZIO. */
 trait LMDB {
 
+  /** Get the used storage directory in your file system.
+    * @return
+    *   storage directory path
+    */
   def databasePath: String
 
+  /** Check LMDB server current configuration compatibility */
   def platformCheck(): IO[StorageSystemError, Unit]
 
+  /** List all available collections
+    * @return
+    *   the list of collection names
+    */
   def collectionsAvailable(): IO[StorageSystemError, List[CollectionName]]
 
+  /** check if a collection exists
+    * @param name
+    *   the collection name
+    * @return
+    *   true if the collection exists
+    */
   def collectionExists(name: CollectionName): IO[StorageSystemError, Boolean]
 
+  /** Create a collection and return the collection helper facade.
+    * @param name
+    *   the collection name
+    * @param failIfExists
+    *   raise an error if the collection already exists, default to true
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the records
+    * @return
+    *   the collection helper facade
+    */
   def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[CreateErrors, LMDBCollection[K, T]]
 
+  /** Create a collection
+    * @param name
+    *   the collection name
+    */
   def collectionAllocate(name: CollectionName): IO[CreateErrors, Unit]
 
+  /** Get a collection helper facade.
+    * @param name
+    *   the collection name
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the records
+    * @return
+    *   the collection helper facade
+    */
   def collectionGet[K, T](name: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[GetErrors, LMDBCollection[K, T]]
 
+  /** Get how many items a collection contains
+    * @param name
+    *   the collection name
+    * @return
+    *   the collection size
+    */
   def collectionSize(name: CollectionName): IO[SizeErrors, Long]
 
+  /** Remove all the content of a collection
+    * @param name
+    *   the collection name
+    */
   def collectionClear(name: CollectionName): IO[ClearErrors, Unit]
 
+  /** Drop a collection
+    * @param name
+    *   the collection name
+    */
   def collectionDrop(name: CollectionName): IO[DropErrors, Unit]
 
+  /** Get a collection record
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the record to get
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the record
+    * @return
+    *   some record or none if no record has been found for the given key
+    */
   def fetch[K, T](collectionName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]]
 
+  /** Fetches an optional value from the specified collection at the given index.
+    * @param collectionName
+    *   the collection name
+    * @param index
+    *   the index within the collection to fetch the value
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the record
+    * @return
+    *   some (key,record) tuple or none if index is out of bounds
+    */
   def fetchAt[K, T](collectionName: CollectionName, index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
+  /** Get collection first record
+    * @param collectionName
+    *   the collection name
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the record
+    * @return
+    *   some (key,record) tuple or none if the collection is empty
+    */
   def head[K, T](collectionName: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
+  /** Get the previous record for the given key
+    * @param collectionName
+    *   the collection name
+    * @param beforeThatKey
+    *   the key of the reference record
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the record
+    * @return
+    *   some (key,record) tuple or none if the key is the first one
+    */
   def previous[K, T](collectionName: CollectionName, beforeThatKey: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
+  /** Get the next record for the given key
+    * @param collectionName
+    *   the collection name
+    * @param afterThatKey
+    *   the key of the reference record
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the record
+    * @return
+    *   some (key,record) tuple or none if the key is the last one
+    */
   def next[K, T](collectionName: CollectionName, afterThatKey: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
+  /** Get collection last record
+    * @param collectionName
+    *   the collection name
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the record
+    * @return
+    *   some (key,record) tuple or none if the collection is empty
+    */
   def last[K, T](collectionName: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
+  /** Check if a collection contains the given key
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the record to look for
+    * @tparam K
+    *   key type
+    * @return
+    *   true if the key is used by the given collection
+    */
   def contains[K](collectionName: CollectionName, key: K)(implicit kodec: LMDBKodec[K]): IO[ContainsErrors, Boolean]
 
+  /** atomically update a record in a collection.
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key for the record update
+    * @param modifier
+    *   the lambda used to update the record content
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    * @return
+    *   the updated record if a record exists for the given key
+    */
   def update[K, T](collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]]
 
+  /** update or insert atomically a record in a collection.
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key for the record upsert
+    * @param modifier
+    *   the lambda used to update the record content
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    * @return
+    *   the updated or inserted record
+    */
   def upsert[K, T](collectionName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T]
 
+  /** Overwrite or insert a record in a collection.
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key for the record upsert
+    * @param document
+    *   the record content to upsert
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    */
   def upsertOverwrite[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit]
 
+  /** Delete a record in a collection
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the record to delete
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    * @return
+    *   the deleted content
+    */
   def delete[K, T](collectionName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]]
 
+  /** Collect collection content into the memory.
+    * @param collectionName
+    *   the collection name
+    * @param keyFilter
+    *   filter lambda to select only the keys you want
+    * @param valueFilter
+    *   filter lambda to select only the record your want
+    * @param startAfter
+    *   start the stream after the given key
+    * @param backward
+    *   going in reverse key order
+    * @param limit
+    *   maximum number of item you want to get
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    * @return
+    *   All matching records
+    */
   def collect[K, T](
     collectionName: CollectionName,
     keyFilter: K => Boolean = (_: K) => true,
@@ -73,6 +279,22 @@ trait LMDB {
     limit: Option[Int] = None
   )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]]
 
+  /** Stream collection records.
+    * @param collectionName
+    *   the collection name
+    * @param keyFilter
+    *   filter lambda to select only the keys you want
+    * @param startAfter
+    *   start the stream after the given key
+    * @param backward
+    *   going in reverse key order
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    * @return
+    *   the stream of records
+    */
   def stream[K, T](
     collectionName: CollectionName,
     keyFilter: K => Boolean = (_: K) => true,
@@ -80,6 +302,22 @@ trait LMDB {
     backward: Boolean = false
   )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T]
 
+  /** stream collection Key/record tuples.
+    * @param collectionName
+    *   the collection name
+    * @param keyFilter
+    *   filter lambda to select only the keys you want
+    * @param startAfter
+    *   start the stream after the given key
+    * @param backward
+    *   going in reverse key order
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    * @return
+    *   the tuple of key and record stream
+    */
   def streamWithKeys[K, T](
     collectionName: CollectionName,
     keyFilter: K => Boolean = (_: K) => true,
@@ -87,36 +325,141 @@ trait LMDB {
     backward: Boolean = false
   )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)]
 
+  /** Create an index
+    * @param name
+    *   the index name
+    * @param failIfExists
+    *   raise an error if the index already exists, default to true
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   the index helper facade
+    */
   def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
+
+  /** Get an index helper facade.
+    * @param name
+    *   the index name
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   the index helper facade
+    */
   def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
+
+  /** Check if an index exists
+    * @param name
+    *   the index name
+    * @return
+    *   true if the index exists
+    */
   def indexExists(name: IndexName): IO[IndexErrors, Boolean]
+
+  /** Drop an index
+    * @param name
+    *   the index name
+    */
   def indexDrop(name: IndexName): IO[IndexErrors, Unit]
+
+  /** List all available indexes
+    * @return
+    *   the list of index names
+    */
   def indexes(): IO[IndexErrors, List[IndexName]]
 
+  /** Add a mapping to an index
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to index
+    * @param targetKey
+    *   the target key to map to
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    */
   def index[FROM_KEY, TO_KEY](
     name: IndexName,
     key: FROM_KEY,
     targetKey: TO_KEY
   )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Unit]
 
+  /** Check if an index contains the given mapping
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to check
+    * @param targetKey
+    *   the target key to check
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   true if the index contains the mapping
+    */
   def indexContains[FROM_KEY, TO_KEY](
     name: IndexName,
     key: FROM_KEY,
     targetKey: TO_KEY
   )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean]
 
+  /** Remove a mapping from an index
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to unindex
+    * @param targetKey
+    *   the target key to unmap
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   true if the mapping was found and removed
+    */
   def unindex[FROM_KEY, TO_KEY](
     name: IndexName,
     key: FROM_KEY,
     targetKey: TO_KEY
   )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean]
 
+  /** Get a stream of target keys for a given key in an index
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to look for
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   a stream of target keys
+    */
   def indexed[FROM_KEY, TO_KEY](
     name: IndexName,
     key: FROM_KEY
   )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZStream[Any, IndexErrors, TO_KEY]
 
+  /** Execute a series of read operations within a single read-only transaction.
+    * @param f
+    *   function using read-only operations
+    * @return
+    *   result of the function
+    */
   def readOnly[R, E, A](f: LMDBReadOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A]
+
+  /** Execute a series of read and write operations within a single read-write transaction.
+    * @param f
+    *   function using read-write operations
+    * @return
+    *   result of the function
+    */
   def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A]
 
 }
@@ -469,21 +812,69 @@ object LMDB {
   )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZStream[LMDB, StreamErrors, (K, T)] =
     ZStream.serviceWithStream(_.streamWithKeys(collectionName, keyFilter, startAfter, backward))
 
+  /** Create an index
+    * @param name
+    *   the index name
+    * @param failIfExists
+    *   raise an error if the index already exists, default to true
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   the index helper facade
+    */
   def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZIO[LMDB, IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] =
     ZIO.serviceWithZIO(_.indexCreate(name, failIfExists))
 
+  /** Get an index helper facade.
+    * @param name
+    *   the index name
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   the index helper facade
+    */
   def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZIO[LMDB, IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] =
     ZIO.serviceWithZIO(_.indexGet(name))
 
+  /** Check if an index exists
+    * @param name
+    *   the index name
+    * @return
+    *   true if the index exists
+    */
   def indexExists(name: IndexName): ZIO[LMDB, IndexErrors, Boolean] =
     ZIO.serviceWithZIO(_.indexExists(name))
 
+  /** Drop an index
+    * @param name
+    *   the index name
+    */
   def indexDrop(name: IndexName): ZIO[LMDB, IndexErrors, Unit] =
     ZIO.serviceWithZIO(_.indexDrop(name))
 
+  /** List all available indexes
+    * @return
+    *   the list of index names
+    */
   def indexes(): ZIO[LMDB, IndexErrors, List[IndexName]] =
     ZIO.serviceWithZIO(_.indexes())
 
+  /** Add a mapping to an index
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to index
+    * @param targetKey
+    *   the target key to map to
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    */
   def index[FROM_KEY, TO_KEY](
     name: IndexName,
     key: FROM_KEY,
@@ -491,6 +882,20 @@ object LMDB {
   )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZIO[LMDB, IndexErrors, Unit] =
     ZIO.serviceWithZIO(_.index(name, key, targetKey))
 
+  /** Check if an index contains the given mapping
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to check
+    * @param targetKey
+    *   the target key to check
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   true if the index contains the mapping
+    */
   def indexContains[FROM_KEY, TO_KEY](
     name: IndexName,
     key: FROM_KEY,
@@ -498,6 +903,20 @@ object LMDB {
   )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZIO[LMDB, IndexErrors, Boolean] =
     ZIO.serviceWithZIO(_.indexContains(name, key, targetKey))
 
+  /** Remove a mapping from an index
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to unindex
+    * @param targetKey
+    *   the target key to unmap
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   true if the mapping was found and removed
+    */
   def unindex[FROM_KEY, TO_KEY](
     name: IndexName,
     key: FROM_KEY,
@@ -505,15 +924,39 @@ object LMDB {
   )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZIO[LMDB, IndexErrors, Boolean] =
     ZIO.serviceWithZIO(_.unindex(name, key, targetKey))
 
+  /** Get a stream of target keys for a given key in an index
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to look for
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   a stream of target keys
+    */
   def indexed[FROM_KEY, TO_KEY](
     name: IndexName,
     key: FROM_KEY
   )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZStream[LMDB, IndexErrors, TO_KEY] =
     ZStream.serviceWithStream(_.indexed(name, key))
 
+  /** Execute a series of read operations within a single read-only transaction.
+    * @param f
+    *   function using read-only operations
+    * @return
+    *   result of the function
+    */
   def readOnly[R, E, A](f: LMDBReadOps => ZIO[R, E, A]): ZIO[LMDB & R, E | StorageSystemError, A] =
     ZIO.serviceWithZIO[LMDB](_.readOnly(f))
 
+  /** Execute a series of read and write operations within a single read-write transaction.
+    * @param f
+    *   function using read-write operations
+    * @return
+    *   result of the function
+    */
   def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[LMDB & R, E | StorageSystemError, A] =
     ZIO.serviceWithZIO[LMDB](_.readWrite(f))
 }

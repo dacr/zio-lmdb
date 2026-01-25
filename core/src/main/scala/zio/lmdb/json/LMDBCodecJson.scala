@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 David Crosson
+ * Copyright 2026 David Crosson
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,12 +23,26 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import scala.deriving.Mirror
 
+/** A combined codec that provides both LMDB and JSON serialization/deserialization for type `T`.
+  *
+  * @tparam T
+  *   the data class type
+  */
 trait LMDBCodecJson[T] extends LMDBCodec[T] with JsonEncoder[T] with JsonDecoder[T]
 
 object LMDBCodecJson {
 
+  /** Internal helper to create a codec from an encoder and decoder.
+    *
+    * @param encoder
+    *   the JSON encoder
+    * @param decoder
+    *   the JSON decoder
+    * @return
+    *   a combined LMDB and JSON codec
+    */
   private def createCodec[T](encoder: JsonEncoder[T], decoder: JsonDecoder[T]): LMDBCodecJson[T] = {
-    val charset = StandardCharsets.UTF_8  // TODO enhance charset support
+    val charset = StandardCharsets.UTF_8 // TODO enhance charset support
 
     new LMDBCodecJson[T] {
       override def unsafeEncode(a: T, indent: Option[Int], out: Write): Unit  = encoder.unsafeEncode(a, indent, out)
@@ -39,11 +53,20 @@ object LMDBCodecJson {
     }
   }
 
+  /** Derives an `LMDBCodecJson` instance for type `T`.
+    *
+    * @tparam T
+    *   the type to derive the codec for
+    * @return
+    *   the derived codec
+    */
   inline def derived[T](using m: Mirror.Of[T]): LMDBCodecJson[T] = {
     val encoder = DeriveJsonEncoder.gen[T]
     val decoder = DeriveJsonDecoder.gen[T]
     createCodec(encoder, decoder)
   }
 
+  /** Automatically provides a given instance of `LMDBCodecJson` for any type `T` that can be mirrored.
+    */
   inline given [T](using m: Mirror.Of[T]): LMDBCodecJson[T] = derived
 }

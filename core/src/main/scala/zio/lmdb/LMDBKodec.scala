@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 David Crosson
+ * Copyright 2026 David Crosson
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,21 @@ import scala.util.{Try, Success, Failure}
   *   The type of key to be encoded and decoded.
   */
 trait LMDBKodec[K] {
+
+  /** Encodes a key of type `K` into a byte array.
+    * @param key
+    *   the key to encode
+    * @return
+    *   the byte array representation
+    */
   def encode(key: K): Array[Byte]
+
+  /** Decodes a key of type `K` from a byte buffer.
+    * @param keyBytes
+    *   the byte buffer containing the encoded key
+    * @return
+    *   the decoded key or an error message
+    */
   def decode(keyBytes: ByteBuffer): Either[String, K] // TODO Replace String by Throwable
 }
 
@@ -42,6 +56,12 @@ object LMDBKodec {
       Right(charset.decode(keyBytes).toString)
   }
 
+  /** Converts a UUID to a byte array.
+    * @param uuid
+    *   the UUID to convert
+    * @return
+    *   a 16-byte array
+    */
   def uuidToBytes(uuid: UUID): Array[Byte] = {
     val out = new Array[Byte](16)
     val msb = uuid.getMostSignificantBits
@@ -57,6 +77,12 @@ object LMDBKodec {
     out
   }
 
+  /** Converts a 16-byte array to a UUID.
+    * @param bytes
+    *   the 16-byte array
+    * @return
+    *   the UUID
+    */
   def bytesToUUID(bytes: Array[Byte]): UUID = {
     val bb = ByteBuffer.wrap(bytes)
     new UUID(bb.getLong, bb.getLong)

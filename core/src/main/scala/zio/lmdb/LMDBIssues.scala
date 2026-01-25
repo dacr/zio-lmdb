@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 David Crosson
+ * Copyright 2026 David Crosson
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 package zio.lmdb
 
+/** Errors that can be triggered by user actions or invalid data. */
 enum StorageUserError {
   case CollectionAlreadExists(name: CollectionName)
   case CollectionNotFound(name: CollectionName)
@@ -25,6 +26,7 @@ enum StorageUserError {
   case OverSizedKey(id: String, expandedSize: Int, limit: Int)
 }
 
+/** Errors indicating a failure within the underlying storage system or library. */
 enum StorageSystemError {
   case InternalError(message: String, cause: Option[Throwable] = None) extends StorageSystemError
 }

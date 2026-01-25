@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 David Crosson
+ * Copyright 2026 David Crosson
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -205,35 +205,91 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit kodec
   ): ZStream[Any, StreamErrors, (K, T)] =
     lmdb.streamWithKeys(name, keyFilter, startAfter, backward)
 
+  /** Execute a series of read operations on this collection within a single read-only transaction.
+    * @param f
+    *   function using collection read operations
+    * @return
+    *   result of the function
+    */
   def readOnly[R, E, A](f: LMDBCollectionReadOps[K, T] => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A] =
     lmdb.readOnly { ops =>
       f(LMDBCollectionReadOps(this, ops))
     }
 
+  /** Execute a series of read and write operations on this collection within a single read-write transaction.
+    * @param f
+    *   function using collection write operations
+    * @return
+    *   result of the function
+    */
   def readWrite[R, E, A](f: LMDBCollectionWriteOps[K, T] => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A] =
     lmdb.readWrite { ops =>
       f(LMDBCollectionWriteOps(this, ops))
     }
 }
 
+/** Collection-specific read operations available within a transaction.
+  * @tparam K
+  *   key type
+  * @tparam T
+  *   value type
+  */
 case class LMDBCollectionReadOps[K, T](
   collection: LMDBCollection[K, T],
   ops: LMDBReadOps
 )(implicit val keyCodec: LMDBKodec[K], val valueCodec: LMDBCodec[T]) {
 
+  /** check if the collection exists */
   def exists(): IO[StorageSystemError, Boolean] = ops.collectionExists(collection.name)
-  def size(): IO[SizeErrors, Long]              = ops.collectionSize(collection.name)
 
+  /** Get how many items the collection contains */
+  def size(): IO[SizeErrors, Long] = ops.collectionSize(collection.name)
+
+  /** Get a collection record
+    * @param key
+    *   the key of the record to get
+    * @return
+    *   some record or none if no record has been found for the given key
+    */
   def fetch(key: K): IO[FetchErrors, Option[T]] = ops.fetch(collection.name, key)
+
+  /** Fetches an optional value from the specified collection at the given index.
+    * @param index
+    *   the index within the collection to fetch the value
+    * @return
+    *   some record or none if index is out of bounds
+    */
   def fetchAt(index: Long): IO[FetchErrors, Option[(K, T)]] = ops.fetchAt(collection.name, index)
 
+  /** Get collection first record */
   def head(): IO[FetchErrors, Option[(K, T)]] = ops.head(collection.name)
+
+  /** Get the previous record for the given key */
   def previous(beforeThatKey: K): IO[FetchErrors, Option[(K, T)]] = ops.previous(collection.name, beforeThatKey)
+
+  /** Get the next record for the given key */
   def next(afterThatKey: K): IO[FetchErrors, Option[(K, T)]] = ops.next(collection.name, afterThatKey)
+
+  /** Get collection last record */
   def last(): IO[FetchErrors, Option[(K, T)]] = ops.last(collection.name)
 
+  /** Check if the collection contains the given key */
   def contains(key: K): IO[ContainsErrors, Boolean] = ops.contains(collection.name, key)
 
+  /** Collect collection content into the memory.
+    * @param keyFilter
+    *   filter lambda to select only the keys you want
+    * @param valueFilter
+    *   filter lambda to select only the record your want
+    * @param startAfter
+    *   start the stream after the given key
+    * @param backward
+    *   going in reverse key order
+    * @param limit
+    *   maximum number of item you want to get
+    * @return
+    *   All matching records
+    */
   def collect(
     keyFilter: K => Boolean = _ => true,
     valueFilter: T => Boolean = (_: T) => true,
@@ -244,6 +300,12 @@ case class LMDBCollectionReadOps[K, T](
     ops.collect(collection.name, keyFilter, valueFilter, startAfter, backward, limit)
 }
 
+/** Collection-specific read-write operations available within a transaction.
+  * @tparam K
+  *   key type
+  * @tparam T
+  *   value type
+  */
 case class LMDBCollectionWriteOps[K, T](
   collection: LMDBCollection[K, T],
   ops: LMDBWriteOps
@@ -253,11 +315,42 @@ case class LMDBCollectionWriteOps[K, T](
   private val readOps = LMDBCollectionReadOps(collection, ops)
   export readOps.{collection as _, ops as _, keyCodec as _, valueCodec as _, _}
 
+  /** Remove all the content of the collection */
   def clear(): IO[ClearErrors, Unit] = ops.collectionClear(collection.name)
 
+  /** update atomically a record in the collection.
+    * @param key
+    *   the key for the record update
+    * @param modifier
+    *   the lambda used to update the record content
+    * @return
+    *   the updated record if a record exists for the given key
+    */
   def update(key: K, modifier: T => T): IO[UpdateErrors, Option[T]] = ops.update(collection.name, key, modifier)
+
+  /** update or insert atomically a record in the collection.
+    * @param key
+    *   the key for the record upsert
+    * @param modifier
+    *   the lambda used to update the record content
+    * @return
+    *   the updated or inserted record
+    */
   def upsert(key: K, modifier: Option[T] => T): IO[UpsertErrors, T] = ops.upsert(collection.name, key, modifier)
+
+  /** Overwrite or insert a record in the collection.
+    * @param key
+    *   the key for the record upsert
+    * @param document
+    *   the record content to upsert
+    */
   def upsertOverwrite(key: K, document: T): IO[UpsertErrors, Unit] = ops.upsertOverwrite(collection.name, key, document)
 
+  /** Delete a record in the collection
+    * @param key
+    *   the key of the record to delete
+    * @return
+    *   the deleted content
+    */
   def delete(key: K): IO[DeleteErrors, Option[T]] = ops.delete(collection.name, key)
 }
