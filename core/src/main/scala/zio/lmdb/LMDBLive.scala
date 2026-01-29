@@ -53,7 +53,7 @@ class LMDBLive(
     if (keyBytes.length > env.getMaxKeySize) ZIO.fail(OverSizedKey(id.toString, keyBytes.length, env.getMaxKeySize)) // TODO id.toString probably not the best choice
     else
       for {
-        key <- ZIO.attempt(ByteBuffer.allocateDirect(env.getMaxKeySize)).mapError(err => InternalError("Couldn't allocate byte buffer for key", Some(err)))
+        key <- ZIO.attempt(ByteBuffer.allocateDirect(keyBytes.length)).mapError(err => InternalError("Couldn't allocate byte buffer for key", Some(err)))
         _   <- ZIO.attempt(key.put(keyBytes).flip).mapError(err => InternalError("Couldn't copy key bytes to buffer", Some(err)))
       } yield key
   }
@@ -276,11 +276,9 @@ class LMDBLive(
   override def fetch[K, T](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]] = {
     for {
       db     <- getCollectionDbi(colName)
-      result <- reentrantLock.withReadLock(
-                  withReadTransaction(colName) { txn =>
-                    fetchLogic(txn, db, colName, key)
-                  }
-                )
+      result <- withReadTransaction(colName) { txn =>
+                  fetchLogic(txn, db, colName, key)
+                }
     } yield result
   }
 
@@ -300,22 +298,20 @@ class LMDBLive(
   override def fetchAt[K, T](colName: CollectionName, index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
     for {
       db     <- getCollectionDbi(colName)
-      result <- reentrantLock.withReadLock(
-                  ZIO.scoped {
-                    for {
-                      txn <- ZIO.acquireRelease(
-                               ZIO
-                                 .attemptBlocking(env.txnRead())
-                                 .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
-                             )(txn =>
-                               ZIO
-                                 .attemptBlocking(txn.close())
-                                 .ignoreLogged
-                             )
-                      res <- fetchAtLogic(txn, db, colName, index)
-                    } yield res
-                  }
-                )
+      result <- ZIO.scoped {
+                  for {
+                    txn <- ZIO.acquireRelease(
+                             ZIO
+                               .attemptBlocking(env.txnRead())
+                               .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                           )(txn =>
+                             ZIO
+                               .attemptBlocking(txn.close())
+                               .ignoreLogged
+                           )
+                    res <- fetchAtLogic(txn, db, colName, index)
+                  } yield res
+                }
     } yield result
   }
 
@@ -374,22 +370,20 @@ class LMDBLive(
   private def seek[K, T](colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
     for {
       db     <- getCollectionDbi(colName)
-      result <- reentrantLock.withReadLock(
-                  ZIO.scoped {
-                    for {
-                      txn <- ZIO.acquireRelease(
-                               ZIO
-                                 .attemptBlocking(env.txnRead())
-                                 .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
-                             )(txn =>
-                               ZIO
-                                 .attemptBlocking(txn.close())
-                                 .ignoreLogged
-                             )
-                      res <- seekLogic(txn, db, colName, recordKey, seekOperation)
-                    } yield res
-                  }
-                )
+      result <- ZIO.scoped {
+                  for {
+                    txn <- ZIO.acquireRelease(
+                             ZIO
+                               .attemptBlocking(env.txnRead())
+                               .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                           )(txn =>
+                             ZIO
+                               .attemptBlocking(txn.close())
+                               .ignoreLogged
+                           )
+                    res <- seekLogic(txn, db, colName, recordKey, seekOperation)
+                  } yield res
+                }
     } yield result
   }
 
@@ -470,11 +464,9 @@ class LMDBLive(
   override def contains[K](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K]): IO[ContainsErrors, Boolean] = {
     for {
       db     <- getCollectionDbi(colName)
-      result <- reentrantLock.withReadLock(
-                  withReadTransaction(colName) { txn =>
-                    containsLogic(txn, db, colName, key)
-                  }
-                )
+      result <- withReadTransaction(colName) { txn =>
+                  containsLogic(txn, db, colName, key)
+                }
     } yield result
   }
 
@@ -641,22 +633,20 @@ class LMDBLive(
   )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]] = {
     for {
       collectionDbi <- getCollectionDbi(colName)
-      collected     <- reentrantLock.withReadLock(
-                         ZIO.scoped {
-                           for {
-                             txn <- ZIO.acquireRelease(
-                                      ZIO
-                                        .attemptBlocking(env.txnRead())
-                                        .mapError[CollectErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
-                                    )(txn =>
-                                      ZIO
-                                        .attemptBlocking(txn.close())
-                                        .ignoreLogged
-                                    )
-                             res <- collectLogic(txn, collectionDbi, colName, keyFilter, valueFilter, startAfter, backward, limit)
-                           } yield res
-                         }
-                       )
+      collected     <- ZIO.scoped {
+                         for {
+                           txn <- ZIO.acquireRelease(
+                                    ZIO
+                                      .attemptBlocking(env.txnRead())
+                                      .mapError[CollectErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                                  )(txn =>
+                                    ZIO
+                                      .attemptBlocking(txn.close())
+                                      .ignoreLogged
+                                  )
+                           res <- collectLogic(txn, collectionDbi, colName, keyFilter, valueFilter, startAfter, backward, limit)
+                         } yield res
+                       }
     } yield collected
   }
 
@@ -794,7 +784,6 @@ class LMDBLive(
     val result =
       for {
         db     <- getCollectionDbi(colName)
-        _      <- reentrantLock.readLock
         stream <- streamLogic(db)
       } yield stream
 
@@ -841,7 +830,6 @@ class LMDBLive(
     val result =
       for {
         db     <- getCollectionDbi(colName)
-        _      <- reentrantLock.readLock
         stream <- streamLogic(db)
       } yield stream
 
@@ -977,18 +965,16 @@ class LMDBLive(
   override def indexContains[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
     for {
       dbi <- getIndexDbi(name)
-      res <- reentrantLock.withReadLock(
-               ZIO.scoped {
-                 for {
-                   txn <- ZIO.acquireRelease(
-                            ZIO
-                              .attemptBlocking(env.txnRead())
-                              .mapError(err => InternalError(s"Couldn't acquire read transaction on $name", Some(err)))
-                          )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
-                   res <- indexContainsLogic(txn, dbi, name, key, targetKey)
-                 } yield res
-               }
-             )
+      res <- ZIO.scoped {
+               for {
+                 txn <- ZIO.acquireRelease(
+                          ZIO
+                            .attemptBlocking(env.txnRead())
+                            .mapError(err => InternalError(s"Couldn't acquire read transaction on $name", Some(err)))
+                        )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+                 res <- indexContainsLogic(txn, dbi, name, key, targetKey)
+               } yield res
+             }
     } yield res
   }
 
@@ -1076,7 +1062,6 @@ class LMDBLive(
     ZStream.unwrapScoped {
       for {
         db <- getIndexDbi(name)
-        _  <- reentrantLock.readLock
 
         txn <- ZIO.acquireRelease(
                  ZIO
@@ -1126,18 +1111,16 @@ class LMDBLive(
 
   /** @inheritdoc */
   override def readOnly[R, E, A](f: LMDBReadOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A] = {
-    reentrantLock.withReadLock(
-      ZIO.scoped(
-        for {
-          txn <- ZIO.acquireRelease(
-                   ZIO
-                     .attemptBlocking(env.txnRead())
-                     .mapError(err => InternalError("Couldn't acquire read transaction", Some(err)))
-                 )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
-          ops  = new LMDBReadOpsLive(txn)
-          res <- f(ops)
-        } yield res
-      )
+    ZIO.scoped(
+      for {
+        txn <- ZIO.acquireRelease(
+                 ZIO
+                   .attemptBlocking(env.txnRead())
+                   .mapError(err => InternalError("Couldn't acquire read transaction", Some(err)))
+               )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+        ops  = new LMDBReadOpsLive(txn)
+        res <- f(ops)
+      } yield res
     )
   }
 
@@ -1326,10 +1309,10 @@ object LMDBLive {
     val syncFlag = if (!config.fileSystemSynchronized) Some(EnvFlags.MDB_NOSYNC) else None
 
     val flags = Array(
-      EnvFlags.MDB_NOTLS,
-      // MDB_NOLOCK : the caller must enforce single-writer semantics
-      // MDB_NOLOCK : the caller must ensure that no readers are using old transactions while a writer is active
-      EnvFlags.MDB_NOLOCK // Locks managed using ZIO ReentrantLock
+      EnvFlags.MDB_NOTLS
+        // MDB_NOLOCK : the caller must enforce single-writer semantics
+        // MDB_NOLOCK : the caller must ensure that no readers are using old transactions while a writer is active
+        // EnvFlags.MDB_NOLOCK // Locks managed using ZIO ReentrantLock
     ) ++ syncFlag
 
     Env

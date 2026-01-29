@@ -49,7 +49,7 @@ object LMDBConfig {
       databaseName = "default",
       databasesHome = None,
       fileSystemSynchronized = false,
-      maxReaders = 100,
+      maxReaders = 1_000,
       mapSize = BigInt(100_000_000_000L),
       maxCollections = 10_000
     )
