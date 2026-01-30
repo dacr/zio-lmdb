@@ -24,20 +24,22 @@ object UUIDToolsSpec extends ZIOSpecDefault {
 
   def spec = suite("UUIDTools spec")(
     test("roundtrip conversion") {
-      val uuid = UUID.randomUUID()
-      val bytes = UUIDTools.uuidToBytes(uuid)
+      val uuid    = UUID.randomUUID()
+      val bytes   = UUIDTools.uuidToBytes(uuid)
       val decoded = UUIDTools.bytesToUUID(bytes)
-      assert(decoded)(equalTo(uuid))
+      assertTrue(
+        decoded == uuid
+      )
     },
     test("lexical ordering matches string representation") {
       val uuids = List.fill(100)(UUID.randomUUID())
-      
+
       val sortedByString = uuids.sortBy(_.toString)
-      
+
       // Lexicographical byte array comparison
       implicit val byteArrayOrdering: Ordering[Array[Byte]] = (x: Array[Byte], y: Array[Byte]) => {
         val len = Math.min(x.length, y.length)
-        var i = 0
+        var i   = 0
         var res = 0
         while (i < len && res == 0) {
           res = (x(i) & 0xff).compare(y(i) & 0xff)
@@ -45,10 +47,12 @@ object UUIDToolsSpec extends ZIOSpecDefault {
         }
         if (res == 0) x.length.compare(y.length) else res
       }
-      
+
       val sortedByBytes = uuids.sortBy(UUIDTools.uuidToBytes)
-      
-      assertTrue(sortedByString == sortedByBytes)
+
+      assertTrue(
+        sortedByString == sortedByBytes
+      )
     }
   )
 }
