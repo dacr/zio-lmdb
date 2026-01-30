@@ -1,6 +1,6 @@
 # ZIO-LMDB RELEASE NOTES
 
-## 2.2 2025-01-30
+## 2.2 - 2025-01-30
 
 - transactions official support added
 - index collections support added
