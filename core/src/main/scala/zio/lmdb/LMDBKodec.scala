@@ -19,6 +19,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import scala.util.{Try, Success, Failure}
+import zio.lmdb.keytools.{UUIDTools, GEOTools}
 
 /** A codec abstraction for encoding and decoding keys of type `K` into a byte array representation for use with an LMDB database. The trait provides methods for serialization and deserialization, allowing a bidirectional mapping between `K` and its
   * byte representation.
@@ -56,40 +57,8 @@ object LMDBKodec {
       Right(charset.decode(keyBytes).toString)
   }
 
-  /** Converts a UUID to a byte array.
-    * @param uuid
-    *   the UUID to convert
-    * @return
-    *   a 16-byte array
-    */
-  def uuidToBytes(uuid: UUID): Array[Byte] = {
-    val out = new Array[Byte](16)
-    val msb = uuid.getMostSignificantBits
-    val lsb = uuid.getLeastSignificantBits
-
-    // Fill the array using bit-shifting for maximum speed
-    for (i <- 0 until 8) {
-      out(i) = (msb >>> (8 * (7 - i))).toByte
-    }
-    for (i <- 8 until 16) {
-      out(i) = (lsb >>> (8 * (15 - i))).toByte
-    }
-    out
-  }
-
-  /** Converts a 16-byte array to a UUID.
-    * @param bytes
-    *   the 16-byte array
-    * @return
-    *   the UUID
-    */
-  def bytesToUUID(bytes: Array[Byte]): UUID = {
-    val bb = ByteBuffer.wrap(bytes)
-    new UUID(bb.getLong, bb.getLong)
-  }
-
   given LMDBKodec[UUID] = new LMDBKodec[UUID] {
-    override def encode(key: UUID): Array[Byte] = uuidToBytes(key)
+    override def encode(key: UUID): Array[Byte] = UUIDTools.uuidToBytes(key)
 
     override def decode(keyBytes: ByteBuffer): Either[String, UUID] = {
       if (keyBytes.remaining() < 16) Left(s"Not enough bytes for UUID, expected 16 but got ${keyBytes.remaining()}")
@@ -97,6 +66,19 @@ object LMDBKodec {
         val msb = keyBytes.getLong
         val lsb = keyBytes.getLong
         Right(new UUID(msb, lsb))
+      }
+    }
+  }
+
+  given LMDBKodec[GEOTools.Location] = new LMDBKodec[GEOTools.Location] {
+    override def encode(key: GEOTools.Location): Array[Byte] = GEOTools.locationToBytes(key)
+
+    override def decode(keyBytes: ByteBuffer): Either[String, GEOTools.Location] = {
+      if (keyBytes.remaining() < 8) Left(s"Not enough bytes for Location, expected 8 but got ${keyBytes.remaining()}")
+      else {
+        val bytes = new Array[Byte](8)
+        keyBytes.get(bytes)
+        Right(GEOTools.bytesToLocation(bytes))
       }
     }
   }

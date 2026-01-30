@@ -13,28 +13,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package zio.lmdb
+package zio.lmdb.keytools
 
 import zio.*
 import zio.test.*
 import zio.test.Assertion.*
 import java.util.UUID
-import java.nio.ByteBuffer
 
-object LMDBUUIDSpec extends ZIOSpecDefault {
+object UUIDToolsSpec extends ZIOSpecDefault {
 
-  def spec = suite("LMDBKodec[UUID] spec")(
-    test("roundtrip encoding/decoding") {
+  def spec = suite("UUIDTools spec")(
+    test("roundtrip conversion") {
       val uuid = UUID.randomUUID()
-      val codec = summon[LMDBKodec[UUID]]
-      val encoded = codec.encode(uuid)
-      val buffer = ByteBuffer.allocateDirect(encoded.length).put(encoded).flip()
-      val decoded = codec.decode(buffer)
-      assert(decoded)(isRight(equalTo(uuid)))
+      val bytes = UUIDTools.uuidToBytes(uuid)
+      val decoded = UUIDTools.bytesToUUID(bytes)
+      assert(decoded)(equalTo(uuid))
     },
     test("lexical ordering matches string representation") {
       val uuids = List.fill(100)(UUID.randomUUID())
-      val codec = summon[LMDBKodec[UUID]]
       
       val sortedByString = uuids.sortBy(_.toString)
       
@@ -50,7 +46,7 @@ object LMDBUUIDSpec extends ZIOSpecDefault {
         if (res == 0) x.length.compare(y.length) else res
       }
       
-      val sortedByBytes = uuids.sortBy(codec.encode)
+      val sortedByBytes = uuids.sortBy(UUIDTools.uuidToBytes)
       
       assertTrue(sortedByString == sortedByBytes)
     }
