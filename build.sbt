@@ -10,11 +10,11 @@ lazy val versions = new {
 }
 
 lazy val commonSettings = Seq(
-  organization := "fr.janalyse",
+  organization                 := "fr.janalyse",
   licenses += "NON-AI-APACHE2" -> url(s"https://github.com/non-ai-licenses/non-ai-licenses/blob/main/NON-AI-APACHE2"),
-  homepage   := Some(new URL("https://github.com/dacr/zio-lmdb")),
-  scmInfo    := Some(ScmInfo(url(s"https://github.com/dacr/zio-lmdb.git"), s"git@github.com:dacr/zio-lmdb.git")),
-  developers := List(
+  homepage                     := Some(new URL("https://github.com/dacr/zio-lmdb")),
+  scmInfo                      := Some(ScmInfo(url(s"https://github.com/dacr/zio-lmdb.git"), s"git@github.com:dacr/zio-lmdb.git")),
+  developers                   := List(
     Developer(
       id = "dacr",
       name = "David Crosson",
@@ -22,7 +22,7 @@ lazy val commonSettings = Seq(
       url = url("https://github.com/dacr")
     )
   ),
-  fork := true,
+  fork                         := true,
   javaOptions ++= Seq("--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED"),
   testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
 )
@@ -30,7 +30,7 @@ lazy val commonSettings = Seq(
 lazy val root = (project in file("."))
   .settings(commonSettings)
   .settings(
-    name := "zio-lmdb-root",
+    name           := "zio-lmdb-root",
     publish / skip := true
   )
   .aggregate(core, keytools)
@@ -38,8 +38,8 @@ lazy val root = (project in file("."))
 lazy val core = (project in file("core"))
   .settings(commonSettings)
   .settings(
-    name := "zio-lmdb",
-    description  := "Lightning Memory Database (LMDB) for scala ZIO",
+    name        := "zio-lmdb",
+    description := "Lightning Memory Database (LMDB) for scala ZIO",
     libraryDependencies ++= Seq(
       "dev.zio"     %% "zio"                 % versions.zio,
       "dev.zio"     %% "zio-streams"         % versions.zio,
@@ -58,13 +58,12 @@ lazy val core = (project in file("core"))
 lazy val keytools = (project in file("keytools"))
   .settings(commonSettings)
   .settings(
-    name := "zio-lmdb-keytools",
-    description  := "Key manipulation tools for ZIO LMDB",
+    name        := "zio-lmdb-keytools",
+    description := "Key manipulation tools for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "dev.zio"     %% "zio"                 % versions.zio,
-      "dev.zio"     %% "zio-test"            % versions.zio        % Test,
-      "dev.zio"     %% "zio-test-sbt"        % versions.zio        % Test,
-      "dev.zio"     %% "zio-test-scalacheck" % versions.zio        % Test
+      "dev.zio" %% "zio-test"            % versions.zio % Test,
+      "dev.zio" %% "zio-test-sbt"        % versions.zio % Test,
+      "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
     )
   )
 
