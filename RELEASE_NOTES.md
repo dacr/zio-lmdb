@@ -5,6 +5,7 @@
 - transactions official support added
 - index collections support added
 - optimized storage for UUID keys provided
+- latitude/longitude keys using Morton coding
 - improved performance
 - switch to multi-module project structure
 
