@@ -1,5 +1,13 @@
 # ZIO-LMDB RELEASE NOTES
 
+## 2.2 2025-01-30
+
+- transactions official support added
+- index collections support added
+- optimized storage for UUID keys provided
+- improved performance
+- switch to multi-module project structure
+
 ## 2.1 - 2025-07-18
 
 - add support for customizable key types within the API
