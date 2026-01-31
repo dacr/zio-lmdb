@@ -47,7 +47,7 @@ trait KeyCodec[K] {
 
 object KeyCodec {
 
-  given KeyCodec[String] = new KeyCodec[String] {
+  given stringKeyCodec: KeyCodec[String] = new KeyCodec[String] {
     private val charset = StandardCharsets.UTF_8 // TODO enhance charset support
 
     override def encode(key: String): Array[Byte] = key.getBytes(charset)
@@ -56,7 +56,7 @@ object KeyCodec {
       Right(charset.decode(keyBytes).toString)
   }
 
-  given KeyCodec[UUID] = new KeyCodec[UUID] {
+  given uuidKeyCodec: KeyCodec[UUID] = new KeyCodec[UUID] {
     override def encode(key: UUID): Array[Byte] = UUIDTools.uuidToBytes(key)
 
     override def decode(keyBytes: ByteBuffer): Either[String, UUID] = {
@@ -69,7 +69,7 @@ object KeyCodec {
     }
   }
 
-  given KeyCodec[GEOTools.Location] = new KeyCodec[GEOTools.Location] {
+  given locationKeyCodec: KeyCodec[GEOTools.Location] = new KeyCodec[GEOTools.Location] {
     override def encode(key: GEOTools.Location): Array[Byte] = GEOTools.locationToBytes(key)
 
     override def decode(keyBytes: ByteBuffer): Either[String, GEOTools.Location] = {

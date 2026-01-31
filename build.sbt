@@ -33,7 +33,7 @@ lazy val root = (project in file("."))
     name           := "zio-lmdb-root",
     publish / skip := true
   )
-  .aggregate(core, keycodecs, keycodecsUlid)
+  .aggregate(core, keycodecs, keycodecsUlid, keycodecsUuidv7)
 
 lazy val core = (project in file("core"))
   .settings(commonSettings)
@@ -74,6 +74,20 @@ lazy val keycodecsUlid = (project in file("keycodecs-ulid"))
     description := "ULID support for ZIO LMDB",
     libraryDependencies ++= Seq(
       "org.wvlet.airframe" %% "airframe-ulid" % "2025.1.27",
+      "dev.zio" %% "zio-test"            % versions.zio % Test,
+      "dev.zio" %% "zio-test-sbt"        % versions.zio % Test,
+      "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
+    )
+  )
+  .dependsOn(keycodecs)
+
+lazy val keycodecsUuidv7 = (project in file("keycodecs-uuidv7"))
+  .settings(commonSettings)
+  .settings(
+    name        := "keycodecs-uuidv7",
+    description := "UUIDv7 support for ZIO LMDB",
+    libraryDependencies ++= Seq(
+      "com.github.f4b6a3" % "uuid-creator" % "6.1.1",
       "dev.zio" %% "zio-test"            % versions.zio % Test,
       "dev.zio" %% "zio-test-sbt"        % versions.zio % Test,
       "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
