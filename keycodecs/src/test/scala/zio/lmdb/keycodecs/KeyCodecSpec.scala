@@ -51,26 +51,6 @@ object KeyCodecSpec extends ZIOSpecDefault {
         val decoded = codec.decode(buffer)
         assert(decoded)(isLeft(containsString("Not enough bytes for UUID")))
       }
-    ),
-    suite("Location codec")(
-      test("roundtrip encoding/decoding") {
-        val loc = GEOTools.Location(latitude = 48.8566, longitude = 2.3522)
-        val codec = summon[KeyCodec[GEOTools.Location]]
-        val encoded = codec.encode(loc)
-        val buffer = ByteBuffer.allocateDirect(encoded.length).put(encoded).flip()
-        val decoded = codec.decode(buffer)
-        
-        assert(decoded)(isRight(assertion("matching location")(d => {
-          Math.abs(d.latitude - loc.latitude) < 1e-7 &&
-          Math.abs(d.longitude - loc.longitude) < 1e-7
-        })))
-      },
-      test("decoding fails when buffer has insufficient bytes") {
-        val codec = summon[KeyCodec[GEOTools.Location]]
-        val buffer = ByteBuffer.allocateDirect(7) // Location requires 8 bytes
-        val decoded = codec.decode(buffer)
-        assert(decoded)(isLeft(containsString("Not enough bytes for Location")))
-      }
     )
   )
 }

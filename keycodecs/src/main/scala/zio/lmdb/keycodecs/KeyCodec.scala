@@ -69,17 +69,4 @@ object KeyCodec {
     }
   }
 
-  given locationKeyCodec: KeyCodec[GEOTools.Location] = new KeyCodec[GEOTools.Location] {
-    override def encode(key: GEOTools.Location): Array[Byte] = GEOTools.locationToBytes(key)
-
-    override def decode(keyBytes: ByteBuffer): Either[String, GEOTools.Location] = {
-      if (keyBytes.remaining() < 8) Left(s"Not enough bytes for Location, expected 8 but got ${keyBytes.remaining()}")
-      else {
-        val bytes = new Array[Byte](8)
-        keyBytes.get(bytes)
-        Right(GEOTools.bytesToLocation(bytes))
-      }
-    }
-  }
-
 }

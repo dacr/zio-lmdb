@@ -33,7 +33,7 @@ lazy val root = (project in file("."))
     name           := "zio-lmdb-root",
     publish / skip := true
   )
-  .aggregate(core, keycodecs, keycodecsUlid, keycodecsUuidv7)
+  .aggregate(core, keycodecs, keycodecsUlid, keycodecsUuidv7, keycodecsGeo)
 
 lazy val core = (project in file("core"))
   .settings(commonSettings)
@@ -66,6 +66,19 @@ lazy val keycodecs = (project in file("keycodecs"))
       "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
     )
   )
+
+lazy val keycodecsGeo = (project in file("keycodecs-geo"))
+  .settings(commonSettings)
+  .settings(
+    name        := "keycodecs-geo",
+    description := "Geo location tools for ZIO LMDB",
+    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio-test"            % versions.zio % Test,
+      "dev.zio" %% "zio-test-sbt"        % versions.zio % Test,
+      "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
+    )
+  )
+  .dependsOn(keycodecs)
 
 lazy val keycodecsUlid = (project in file("keycodecs-ulid"))
   .settings(commonSettings)
