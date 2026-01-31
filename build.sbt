@@ -33,7 +33,7 @@ lazy val root = (project in file("."))
     name           := "zio-lmdb-root",
     publish / skip := true
   )
-  .aggregate(core, keycodecs, keycodecsUlid, keycodecsUuidv7, keycodecsGeo, keycodecsTimestamp)
+  .aggregate(core, keycodecs, keycodecsUlid, keycodecsUuidv7, keycodecsGeo, keycodecsTimestamp, keycodecsUca)
 
 lazy val core = (project in file("core"))
   .settings(commonSettings)
@@ -92,6 +92,20 @@ lazy val keycodecsTimestamp = (project in file("keycodecs-timestamp"))
     )
   )
   .dependsOn(keycodecs)
+
+lazy val keycodecsUca = (project in file("keycodecs-uca"))
+  .settings(commonSettings)
+  .settings(
+    name        := "keycodecs-uca",
+    description := "UCA Sort Key tools for ZIO LMDB",
+    libraryDependencies ++= Seq(
+      "com.ibm.icu" % "icu4j" % "76.1",
+      "dev.zio" %% "zio-test"            % versions.zio % Test,
+      "dev.zio" %% "zio-test-sbt"        % versions.zio % Test,
+      "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
+    )
+  )
+  .dependsOn(keycodecs, keycodecsUuidv7)
 
 lazy val keycodecsUlid = (project in file("keycodecs-ulid"))
   .settings(commonSettings)
