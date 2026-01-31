@@ -1,18 +1,23 @@
 # ZIO-LMDB RELEASE NOTES
 
+## 2.3 - 2025-02-01
+
+- generic `keycodecs` module added 
+- latitude/longitude key support using Morton coding
+- LMDBKodec renamed to KeyCodec and moved to keycodecs module
+
 ## 2.2 - 2025-01-30
 
 - transactions official support added
 - index collections support added
 - optimized storage for UUID keys provided
-- latitude/longitude keys using Morton coding
 - improved performance
 - switch to multi-module project structure
 
 ## 2.1 - 2025-07-18
 
 - add support for customizable key types within the API
-- introduce LMDBKodec type class for key serialization/deserialization
+- introduce KeyCodec type class for key serialization/deserialization
 - refactor API to use generic key type parameter instead of String only
 - maintain backward compatibility with String keys
 - enhance type safety and flexibility for key handling

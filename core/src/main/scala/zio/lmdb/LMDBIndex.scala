@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 package zio.lmdb
+import zio.lmdb.keycodecs.KeyCodec
 
 import zio.*
 import zio.stream.*
@@ -35,7 +36,7 @@ case class LMDBIndex[FROM_KEY, TO_KEY](
   name: IndexName,
   description: Option[String],
   lmdb: LMDB
-)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]) {
+)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]) {
 
   /** Add a mapping to the index
     * @param key

@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package zio.lmdb.keytools
+package zio.lmdb.keycodecs
 
 import zio.*
 import zio.test.*

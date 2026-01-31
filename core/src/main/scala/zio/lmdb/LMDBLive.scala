@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 package zio.lmdb
+import zio.lmdb.keycodecs.KeyCodec
 
 import zio._
 import zio.stm._
@@ -48,7 +49,7 @@ class LMDBLive(
 ) extends LMDB {
 
   /** Helper to create a direct ByteBuffer for a given key. */
-  private def makeKeyByteBuffer[K](id: K)(implicit kodec: LMDBKodec[K]): IO[KeyErrors, ByteBuffer] = {
+  private def makeKeyByteBuffer[K](id: K)(implicit kodec: KeyCodec[K]): IO[KeyErrors, ByteBuffer] = {
     val keyBytes: Array[Byte] = kodec.encode(id)
     if (keyBytes.length > env.getMaxKeySize) ZIO.fail(OverSizedKey(id.toString, keyBytes.length, env.getMaxKeySize)) // TODO id.toString probably not the best choice
     else
@@ -88,7 +89,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def collectionGet[K, T](name: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[GetErrors, LMDBCollection[K, T]] = {
+  override def collectionGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[GetErrors, LMDBCollection[K, T]] = {
     for {
       exists     <- collectionExists(name)
       collection <- ZIO.cond[CollectionNotFound, LMDBCollection[K, T]](exists, LMDBCollection[K, T](name, this), CollectionNotFound(name))
@@ -124,7 +125,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[CreateErrors, LMDBCollection[K, T]] = {
+  override def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CreateErrors, LMDBCollection[K, T]] = {
     val allocateLogic = if (failIfExists) collectionAllocate(name) else collectionAllocate(name).ignore
     allocateLogic.as(LMDBCollection[K, T](name, this))
   }
@@ -246,7 +247,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def delete[K, T](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
+  override def delete[K, T](colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
     for {
       db     <- getCollectionDbi(colName)
       result <- reentrantLock.withWriteLock(
@@ -260,7 +261,7 @@ class LMDBLive(
     } yield result
   }
 
-  private def deleteLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
+  private def deleteLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
     for {
       keyBB         <- makeKeyByteBuffer(key)
       found         <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[DeleteErrors](err => InternalError(s"Couldn't fetch $key for delete on $colName", Some(err)))
@@ -273,7 +274,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def fetch[K, T](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]] = {
+  override def fetch[K, T](colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]] = {
     for {
       db     <- getCollectionDbi(colName)
       result <- withReadTransaction(colName) { txn =>
@@ -282,7 +283,7 @@ class LMDBLive(
     } yield result
   }
 
-  private def fetchLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZIO[Any, FetchErrors, Option[T]] = {
+  private def fetchLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Any, FetchErrors, Option[T]] = {
     for {
       keyBB         <- makeKeyByteBuffer(key)
       found         <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[FetchErrors](err => InternalError(s"Couldn't fetch $key on $colName", Some(err)))
@@ -295,7 +296,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def fetchAt[K, T](colName: CollectionName, index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
+  override def fetchAt[K, T](colName: CollectionName, index: Long)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
     for {
       db     <- getCollectionDbi(colName)
       result <- ZIO.scoped {
@@ -327,7 +328,7 @@ class LMDBLive(
     * @return
     *   the record if found
     */
-  private def fetchAtLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZIO[Scope, FetchErrors, Option[(K, T)]] = {
+  private def fetchAtLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, index: Long)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, FetchErrors, Option[(K, T)]] = {
     for {
       cursor             <- ZIO.acquireRelease(
                               ZIO
@@ -367,7 +368,7 @@ class LMDBLive(
     } yield seekedValue.flatMap(v => seekedKey.map(k => k -> v))
   }
 
-  private def seek[K, T](colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
+  private def seek[K, T](colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
     for {
       db     <- getCollectionDbi(colName)
       result <- ZIO.scoped {
@@ -401,7 +402,7 @@ class LMDBLive(
     * @return
     *   the record if found
     */
-  private def seekLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZIO[Scope, FetchErrors, Option[(K, T)]] = {
+  private def seekLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, FetchErrors, Option[(K, T)]] = {
     for {
       cursor      <- ZIO.acquireRelease(
                        ZIO
@@ -441,27 +442,27 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def head[K, T](collectionName: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
+  override def head[K, T](collectionName: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
     seek(collectionName, None, SeekOp.MDB_FIRST)
   }
 
   /** @inheritdoc */
-  override def previous[K, T](collectionName: CollectionName, beforeThatKey: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
+  override def previous[K, T](collectionName: CollectionName, beforeThatKey: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
     seek(collectionName, Some(beforeThatKey), SeekOp.MDB_PREV)
   }
 
   /** @inheritdoc */
-  override def next[K, T](collectionName: CollectionName, afterThatKey: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
+  override def next[K, T](collectionName: CollectionName, afterThatKey: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
     seek(collectionName, Some(afterThatKey), SeekOp.MDB_NEXT)
   }
 
   /** @inheritdoc */
-  override def last[K, T](collectionName: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
+  override def last[K, T](collectionName: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
     seek(collectionName, None, SeekOp.MDB_LAST)
   }
 
   /** @inheritdoc */
-  override def contains[K](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K]): IO[ContainsErrors, Boolean] = {
+  override def contains[K](colName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): IO[ContainsErrors, Boolean] = {
     for {
       db     <- getCollectionDbi(colName)
       result <- withReadTransaction(colName) { txn =>
@@ -470,7 +471,7 @@ class LMDBLive(
     } yield result
   }
 
-  private def containsLogic[K](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K]): ZIO[Any, ContainsErrors, Boolean] = {
+  private def containsLogic[K](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): ZIO[Any, ContainsErrors, Boolean] = {
     for {
       keyBB <- makeKeyByteBuffer(key)
       found <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[ContainsErrors](err => InternalError(s"Couldn't check $key on $colName", Some(err)))
@@ -478,7 +479,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def update[K, T](collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
+  override def update[K, T](collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
     for {
       collectionDbi <- getCollectionDbi(collectionName)
       result        <- reentrantLock.withWriteLock(
@@ -506,7 +507,7 @@ class LMDBLive(
     * @return
     *   the updated record if found
     */
-  private def updateLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
+  private def updateLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
     for {
       keyBB          <- makeKeyByteBuffer(key)
       found          <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError(err => InternalError(s"Couldn't fetch $key for update on $collectionName", Some(err)))
@@ -527,7 +528,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def upsertOverwrite[K, T](colName: CollectionName, key: K, document: T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
+  override def upsertOverwrite[K, T](colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
     for {
       collectionDbi <- getCollectionDbi(colName)
       result        <- reentrantLock.withWriteLock(
@@ -553,7 +554,7 @@ class LMDBLive(
     * @param document
     *   record content
     */
-  private def upsertOverwriteLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, document: T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
+  private def upsertOverwriteLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
     for {
       keyBB       <- makeKeyByteBuffer(key)
       docBytes     = codec.encode(document)
@@ -564,7 +565,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def upsert[K, T](colName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
+  override def upsert[K, T](colName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
     for {
       collectionDbi <- getCollectionDbi(colName)
       result        <- reentrantLock.withWriteLock(
@@ -592,7 +593,7 @@ class LMDBLive(
     * @return
     *   the updated or inserted record
     */
-  private def upsertLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
+  private def upsertLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
     for {
       keyBB          <- makeKeyByteBuffer(key)
       found          <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError(err => InternalError(s"Couldn't fetch $key for upsert on $colName", Some(err)))
@@ -630,7 +631,7 @@ class LMDBLive(
     startAfter: Option[K] = None,
     backward: Boolean = false,
     limit: Option[Int] = None
-  )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]] = {
+  )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]] = {
     for {
       collectionDbi <- getCollectionDbi(colName)
       collected     <- ZIO.scoped {
@@ -679,7 +680,7 @@ class LMDBLive(
     startAfter: Option[K] = None,
     backward: Boolean = false,
     limit: Option[Int] = None
-  )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZIO[Scope, CollectErrors, List[T]] = {
+  )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, CollectErrors, List[T]] = {
     for {
       startAfterBB <- ZIO.foreach(startAfter)(makeKeyByteBuffer)
       iterable     <- ZIO.acquireRelease(
@@ -728,9 +729,9 @@ class LMDBLive(
 
   case class KeyValue[K, T](key: Either[String, K], value: Either[String, T])
 
-  case class KeyValueIterator[K, T](jiterator: java.util.Iterator[KeyVal[ByteBuffer]])(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]) extends Iterator[KeyValue[K, T]] {
+  case class KeyValueIterator[K, T](jiterator: java.util.Iterator[KeyVal[ByteBuffer]])(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]) extends Iterator[KeyValue[K, T]] {
 
-    private def extractKeyVal[K, T](keyval: KeyVal[ByteBuffer])(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): KeyValue[K, T] = {
+    private def extractKeyVal[K, T](keyval: KeyVal[ByteBuffer])(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): KeyValue[K, T] = {
       val key   = keyval.key()
       val value = keyval.`val`()
       KeyValue(kodec.decode(key), codec.decode(value))
@@ -749,7 +750,7 @@ class LMDBLive(
     keyFilter: K => Boolean = (_: K) => true,
     startAfter: Option[K] = None,
     backward: Boolean = false
-  )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T] = {
+  )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T] = {
     def streamLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, T]] = for {
       txn          <- ZIO.acquireRelease(
                         ZIO
@@ -796,7 +797,7 @@ class LMDBLive(
     keyFilter: K => Boolean = (_: K) => true,
     startAfter: Option[K] = None,
     backward: Boolean = false
-  )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)] = {
+  )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)] = {
     def streamLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, (K, T)]] = for {
       txn          <- ZIO.acquireRelease(
                         ZIO
@@ -878,13 +879,13 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
+  override def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
     val allocateLogic = if (failIfExists) indexAllocate(name) else indexAllocate(name).ignore
     allocateLogic.as(LMDBIndex[FROM_KEY, TO_KEY](name, None, this))
   }
 
   /** @inheritdoc */
-  override def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
+  override def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
     for {
       exists <- indexExists(name)
       _      <- ZIO.cond[IndexNotFound, Unit](exists, (), IndexNotFound(name))
@@ -925,7 +926,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def index[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Unit] = {
+  override def index[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Unit] = {
     for {
       dbi <- getIndexDbi(name)
       _   <- reentrantLock.withWriteLock(
@@ -951,7 +952,7 @@ class LMDBLive(
     * @param targetKey
     *   target key to map to
     */
-  private def indexLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Unit] = {
+  private def indexLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Unit] = {
     for {
       keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
@@ -962,7 +963,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def indexContains[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
+  override def indexContains[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean] = {
     for {
       dbi <- getIndexDbi(name)
       res <- ZIO.scoped {
@@ -993,8 +994,8 @@ class LMDBLive(
     *   true if the mapping is found
     */
   private def indexContainsLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit
-    keyCodec: LMDBKodec[FROM_KEY],
-    toKeyCodec: LMDBKodec[TO_KEY]
+    keyCodec: KeyCodec[FROM_KEY],
+    toKeyCodec: KeyCodec[TO_KEY]
   ): ZIO[Scope, IndexErrors, Boolean] = {
     for {
       keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
@@ -1019,7 +1020,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def unindex[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
+  override def unindex[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean] = {
     for {
       dbi <- getIndexDbi(name)
       res <- reentrantLock.withWriteLock(
@@ -1047,7 +1048,7 @@ class LMDBLive(
     * @return
     *   true if the mapping was found and removed
     */
-  private def unindexLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
+  private def unindexLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean] = {
     for {
       keyBuffer   <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       valueBuffer <- makeKeyByteBuffer(targetKey).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
@@ -1058,7 +1059,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def indexed[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): ZStream[Any, IndexErrors, TO_KEY] = {
+  override def indexed[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZStream[Any, IndexErrors, TO_KEY] = {
     ZStream.unwrapScoped {
       for {
         db <- getIndexDbi(name)
@@ -1159,7 +1160,7 @@ class LMDBLive(
     }
 
     /** @inheritdoc */
-    override def fetch[K, T](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]] = {
+    override def fetch[K, T](colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]] = {
       for {
         db  <- getCollectionDbi(colName)
         res <- fetchLogic(txn, db, colName, key)
@@ -1167,7 +1168,7 @@ class LMDBLive(
     }
 
     /** @inheritdoc */
-    override def fetchAt[K, T](colName: CollectionName, index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
+    override def fetchAt[K, T](colName: CollectionName, index: Long)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
       for {
         db  <- getCollectionDbi(colName)
         res <- ZIO.scoped(fetchAtLogic(txn, db, colName, index))
@@ -1175,19 +1176,19 @@ class LMDBLive(
     }
 
     /** @inheritdoc */
-    override def head[K, T](collectionName: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] =
+    override def head[K, T](collectionName: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] =
       seek(collectionName, None, SeekOp.MDB_FIRST)
 
     /** @inheritdoc */
-    override def previous[K, T](collectionName: CollectionName, beforeThatKey: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] =
+    override def previous[K, T](collectionName: CollectionName, beforeThatKey: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] =
       seek(collectionName, Some(beforeThatKey), SeekOp.MDB_PREV)
 
     /** @inheritdoc */
-    override def next[K, T](collectionName: CollectionName, afterThatKey: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] =
+    override def next[K, T](collectionName: CollectionName, afterThatKey: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] =
       seek(collectionName, Some(afterThatKey), SeekOp.MDB_NEXT)
 
     /** @inheritdoc */
-    override def last[K, T](collectionName: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] =
+    override def last[K, T](collectionName: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] =
       seek(collectionName, None, SeekOp.MDB_LAST)
 
     /** logic for seeking a record within a transaction
@@ -1200,7 +1201,7 @@ class LMDBLive(
       * @return
       *   the record if found
       */
-    private def seek[K, T](colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
+    private def seek[K, T](colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
       for {
         db  <- getCollectionDbi(colName)
         res <- ZIO.scoped(seekLogic(txn, db, colName, recordKey, seekOperation))
@@ -1208,7 +1209,7 @@ class LMDBLive(
     }
 
     /** @inheritdoc */
-    override def contains[K](colName: CollectionName, key: K)(implicit kodec: LMDBKodec[K]): IO[ContainsErrors, Boolean] = {
+    override def contains[K](colName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): IO[ContainsErrors, Boolean] = {
       for {
         db  <- getCollectionDbi(colName)
         res <- containsLogic(txn, db, colName, key)
@@ -1223,7 +1224,7 @@ class LMDBLive(
       startAfter: Option[K],
       backward: Boolean,
       limit: Option[Int]
-    )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]] = {
+    )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]] = {
       for {
         collectionDbi <- getCollectionDbi(colName)
         res           <- ZIO.scoped(collectLogic(txn, collectionDbi, colName, keyFilter, valueFilter, startAfter, backward, limit))
@@ -1234,7 +1235,7 @@ class LMDBLive(
     override def indexExists(name: IndexName): IO[IndexErrors, Boolean] = LMDBLive.this.indexExists(name)
 
     /** @inheritdoc */
-    override def indexContains[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
+    override def indexContains[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean] = {
       for {
         dbi <- getIndexDbi(name)
         res <- ZIO.scoped(indexContainsLogic(txn, dbi, name, key, targetKey))
@@ -1254,7 +1255,7 @@ class LMDBLive(
     }
 
     /** @inheritdoc */
-    override def update[K, T](collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
+    override def update[K, T](collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
       for {
         collectionDbi <- getCollectionDbi(collectionName)
         res           <- updateLogic(txn, collectionDbi, collectionName, key, modifier)
@@ -1262,7 +1263,7 @@ class LMDBLive(
     }
 
     /** @inheritdoc */
-    override def upsert[K, T](collectionName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
+    override def upsert[K, T](collectionName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
       for {
         collectionDbi <- getCollectionDbi(collectionName)
         res           <- upsertLogic(txn, collectionDbi, collectionName, key, modifier)
@@ -1270,7 +1271,7 @@ class LMDBLive(
     }
 
     /** @inheritdoc */
-    override def upsertOverwrite[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
+    override def upsertOverwrite[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
       for {
         collectionDbi <- getCollectionDbi(collectionName)
         _             <- upsertOverwriteLogic(txn, collectionDbi, collectionName, key, document)
@@ -1278,7 +1279,7 @@ class LMDBLive(
     }
 
     /** @inheritdoc */
-    override def delete[K, T](collectionName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
+    override def delete[K, T](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
       for {
         db  <- getCollectionDbi(collectionName)
         res <- deleteLogic(txn, db, collectionName, key)
@@ -1286,7 +1287,7 @@ class LMDBLive(
     }
 
     /** @inheritdoc */
-    override def index[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Unit] = {
+    override def index[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Unit] = {
       for {
         dbi <- getIndexDbi(name)
         _   <- indexLogic(txn, dbi, name, key, targetKey)
@@ -1294,7 +1295,7 @@ class LMDBLive(
     }
 
     /** @inheritdoc */
-    override def unindex[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean] = {
+    override def unindex[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean] = {
       for {
         dbi <- getIndexDbi(name)
         res <- unindexLogic(txn, dbi, name, key, targetKey)

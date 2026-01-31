@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 package zio.lmdb
+import zio.lmdb.keycodecs.KeyCodec
 
 import zio._
 import zio.lmdb.StorageUserError._
@@ -28,7 +29,7 @@ import zio.stream._
   * @tparam T
   *   the data class type for collection content
   */
-case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]) {
+case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]) {
 
   /** Get how many items a collection contains
     *
@@ -237,7 +238,7 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit kodec
 case class LMDBCollectionReadOps[K, T](
   collection: LMDBCollection[K, T],
   ops: LMDBReadOps
-)(implicit val keyCodec: LMDBKodec[K], val valueCodec: LMDBCodec[T]) {
+)(implicit val keyCodec: KeyCodec[K], val valueCodec: LMDBCodec[T]) {
 
   /** check if the collection exists */
   def exists(): IO[StorageSystemError, Boolean] = ops.collectionExists(collection.name)
@@ -309,7 +310,7 @@ case class LMDBCollectionReadOps[K, T](
 case class LMDBCollectionWriteOps[K, T](
   collection: LMDBCollection[K, T],
   ops: LMDBWriteOps
-)(implicit val keyCodec: LMDBKodec[K], val valueCodec: LMDBCodec[T]) {
+)(implicit val keyCodec: KeyCodec[K], val valueCodec: LMDBCodec[T]) {
 
   // Delegate read operations
   private val readOps = LMDBCollectionReadOps(collection, ops)

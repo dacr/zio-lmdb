@@ -33,7 +33,7 @@ lazy val root = (project in file("."))
     name           := "zio-lmdb-root",
     publish / skip := true
   )
-  .aggregate(core, keytools)
+  .aggregate(core, keycodecs)
 
 lazy val core = (project in file("core"))
   .settings(commonSettings)
@@ -53,12 +53,12 @@ lazy val core = (project in file("core"))
       "dev.zio"     %% "zio-nio"             % versions.zionio     % Test
     )
   )
-  .dependsOn(keytools)
+  .dependsOn(keycodecs)
 
-lazy val keytools = (project in file("keytools"))
+lazy val keycodecs = (project in file("keycodecs"))
   .settings(commonSettings)
   .settings(
-    name        := "zio-lmdb-keytools",
+    name        := "keycodecs",
     description := "Key manipulation tools for ZIO LMDB",
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio-test"            % versions.zio % Test,

@@ -15,6 +15,7 @@
  */
 
 package zio.lmdb
+import zio.lmdb.keycodecs.KeyCodec
 
 import zio._
 
@@ -45,7 +46,7 @@ trait LMDBReadOps {
     * @return
     *   some record or none if no record has been found for the given key
     */
-  def fetch[K, T](collectionName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]]
+  def fetch[K, T](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]]
 
   /** Fetches an optional value of type `T` from the specified collection at the given index. This is non optimal feature that requires walking through available records using the default ordering until the given index is reached.
     * @param collectionName
@@ -55,7 +56,7 @@ trait LMDBReadOps {
     * @return
     *   some record or none if index is out of bounds
     */
-  def fetchAt[K, T](collectionName: CollectionName, index: Long)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
+  def fetchAt[K, T](collectionName: CollectionName, index: Long)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
   /** Get collection first record
     * @param collectionName
@@ -63,7 +64,7 @@ trait LMDBReadOps {
     * @return
     *   some (key,record) tuple or none if the collection is empty
     */
-  def head[K, T](collectionName: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
+  def head[K, T](collectionName: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
   /** Get the previous record for the given key
     * @param collectionName
@@ -73,7 +74,7 @@ trait LMDBReadOps {
     * @return
     *   some (key,record) tuple or none if the key is the first one
     */
-  def previous[K, T](collectionName: CollectionName, beforeThatKey: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
+  def previous[K, T](collectionName: CollectionName, beforeThatKey: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
   /** Get the next record for the given key
     * @param collectionName
@@ -83,7 +84,7 @@ trait LMDBReadOps {
     * @return
     *   some (key,record) tuple or none if the key is the last one
     */
-  def next[K, T](collectionName: CollectionName, afterThatKey: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
+  def next[K, T](collectionName: CollectionName, afterThatKey: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
   /** Get collection last record
     * @param collectionName
@@ -91,7 +92,7 @@ trait LMDBReadOps {
     * @return
     *   some (key,record) tuple or none if the collection is empty
     */
-  def last[K, T](collectionName: CollectionName)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
+  def last[K, T](collectionName: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
   /** Check if a collection contains the given key
     * @param collectionName
@@ -101,7 +102,7 @@ trait LMDBReadOps {
     * @return
     *   true if the key is used by the given collection
     */
-  def contains[K](collectionName: CollectionName, key: K)(implicit kodec: LMDBKodec[K]): IO[ContainsErrors, Boolean]
+  def contains[K](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): IO[ContainsErrors, Boolean]
 
   /** Collect collection content into the memory, use keyFilter or valueFilter to limit the amount of loaded entries.
     * @param collectionName
@@ -126,7 +127,7 @@ trait LMDBReadOps {
     startAfter: Option[K] = None,
     backward: Boolean = false,
     limit: Option[Int] = None
-  )(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]]
+  )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]]
 
   /** check if an index exists
     * @param name
@@ -150,7 +151,7 @@ trait LMDBReadOps {
     name: IndexName,
     key: FROM_KEY,
     targetKey: TO_KEY
-  )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean]
+  )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean]
 }
 
 /** LMDB operations available within a read-write transaction context. */
@@ -172,7 +173,7 @@ trait LMDBWriteOps extends LMDBReadOps {
     * @return
     *   the updated record if a record exists for the given key
     */
-  def update[K, T](collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]]
+  def update[K, T](collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]]
 
   /** update or insert atomically a record in a collection.
     * @param collectionName
@@ -184,7 +185,7 @@ trait LMDBWriteOps extends LMDBReadOps {
     * @return
     *   the updated or inserted record
     */
-  def upsert[K, T](collectionName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T]
+  def upsert[K, T](collectionName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T]
 
   /** Overwrite or insert a record in a collection. If the key is already being used for a record then the previous record will be overwritten by the new one.
     * @param collectionName
@@ -194,7 +195,7 @@ trait LMDBWriteOps extends LMDBReadOps {
     * @param document
     *   the record content to upsert
     */
-  def upsertOverwrite[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit]
+  def upsertOverwrite[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit]
 
   /** Delete a record in a collection
     * @param collectionName
@@ -204,7 +205,7 @@ trait LMDBWriteOps extends LMDBReadOps {
     * @return
     *   the deleted content
     */
-  def delete[K, T](collectionName: CollectionName, key: K)(implicit kodec: LMDBKodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]]
+  def delete[K, T](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]]
 
   /** Add a mapping to an index
     * @param name
@@ -218,7 +219,7 @@ trait LMDBWriteOps extends LMDBReadOps {
     name: IndexName,
     key: FROM_KEY,
     targetKey: TO_KEY
-  )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Unit]
+  )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Unit]
 
   /** Remove a mapping from an index
     * @param name
@@ -234,5 +235,5 @@ trait LMDBWriteOps extends LMDBReadOps {
     name: IndexName,
     key: FROM_KEY,
     targetKey: TO_KEY
-  )(implicit keyCodec: LMDBKodec[FROM_KEY], toKeyCodec: LMDBKodec[TO_KEY]): IO[IndexErrors, Boolean]
+  )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean]
 }

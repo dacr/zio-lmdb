@@ -13,13 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package zio.lmdb
+package zio.lmdb.keycodecs
 
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import scala.util.{Try, Success, Failure}
-import zio.lmdb.keytools.{UUIDTools, GEOTools}
 
 /** A codec abstraction for encoding and decoding keys of type `K` into a byte array representation for use with an LMDB database. The trait provides methods for serialization and deserialization, allowing a bidirectional mapping between `K` and its
   * byte representation.
@@ -27,7 +26,7 @@ import zio.lmdb.keytools.{UUIDTools, GEOTools}
   * @tparam K
   *   The type of key to be encoded and decoded.
   */
-trait LMDBKodec[K] {
+trait KeyCodec[K] {
 
   /** Encodes a key of type `K` into a byte array.
     * @param key
@@ -46,9 +45,9 @@ trait LMDBKodec[K] {
   def decode(keyBytes: ByteBuffer): Either[String, K] // TODO Replace String by Throwable
 }
 
-object LMDBKodec {
+object KeyCodec {
 
-  given LMDBKodec[String] = new LMDBKodec[String] {
+  given KeyCodec[String] = new KeyCodec[String] {
     private val charset = StandardCharsets.UTF_8 // TODO enhance charset support
 
     override def encode(key: String): Array[Byte] = key.getBytes(charset)
@@ -57,7 +56,7 @@ object LMDBKodec {
       Right(charset.decode(keyBytes).toString)
   }
 
-  given LMDBKodec[UUID] = new LMDBKodec[UUID] {
+  given KeyCodec[UUID] = new KeyCodec[UUID] {
     override def encode(key: UUID): Array[Byte] = UUIDTools.uuidToBytes(key)
 
     override def decode(keyBytes: ByteBuffer): Either[String, UUID] = {
@@ -70,7 +69,7 @@ object LMDBKodec {
     }
   }
 
-  given LMDBKodec[GEOTools.Location] = new LMDBKodec[GEOTools.Location] {
+  given KeyCodec[GEOTools.Location] = new KeyCodec[GEOTools.Location] {
     override def encode(key: GEOTools.Location): Array[Byte] = GEOTools.locationToBytes(key)
 
     override def decode(keyBytes: ByteBuffer): Either[String, GEOTools.Location] = {
