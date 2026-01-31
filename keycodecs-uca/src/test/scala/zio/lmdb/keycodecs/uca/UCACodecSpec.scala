@@ -19,7 +19,7 @@ import zio.*
 import zio.test.*
 import zio.test.Assertion.*
 import zio.lmdb.keycodecs.KeyCodec
-import zio.lmdb.keycodecs.uca.UCASortKey
+import zio.lmdb.keycodecs.uca.UCAKey
 import zio.lmdb.keycodecs.uuidv7.UUIDv7
 import java.nio.ByteBuffer
 import com.ibm.icu.text.Collator
@@ -31,7 +31,7 @@ object UCACodecSpec extends ZIOSpecDefault {
     test("SortKey generation and ordering") {
       val collator = Collator.getInstance(ULocale.FRENCH)
       val words = List("cote", "côte", "coté", "côté")
-      val sortKeys = words.map(w => UCASortKey.from(w, collator))
+      val sortKeys = words.map(w => UCAKey.from(w, collator))
       
       // Verify ordering of SortKeys (byte comparison) matches collator comparison
       val consistent = words.zip(sortKeys).zip(words.tail.zip(sortKeys.tail)).forall { 
@@ -42,7 +42,7 @@ object UCACodecSpec extends ZIOSpecDefault {
       }
       assertTrue(consistent)
     },
-    test("Tuple2(UCASortKey, UUIDv7) ordering and roundtrip") {
+    test("Tuple2(UCAKey, UUIDv7) ordering and roundtrip") {
       val collator = Collator.getInstance(ULocale.FRENCH)
       
       val w1 = "cote"
@@ -51,12 +51,12 @@ object UCACodecSpec extends ZIOSpecDefault {
       val id1 = UUIDv7.generate()
       val id2 = UUIDv7.generate() // id2 > id1 because time passed
       
-      val k1 = (UCASortKey.from(w1, collator), id1)
-      val k2 = (UCASortKey.from(w2, collator), id2)
+      val k1 = (UCAKey.from(w1, collator), id1)
+      val k2 = (UCAKey.from(w2, collator), id2)
       
       // k1 should be < k2 because "cote" < "côté"
       
-      val codec = summon[KeyCodec[(UCASortKey, UUIDv7)]]
+      val codec = summon[KeyCodec[(UCAKey, UUIDv7)]]
       val b1 = codec.encode(k1)
       val b2 = codec.encode(k2)
       
@@ -78,7 +78,7 @@ object UCACodecSpec extends ZIOSpecDefault {
     test("Tuple2 with same SortKey (different UUIDv7)") {
       val collator = Collator.getInstance(ULocale.US)
       val w = "hello"
-      val sk = UCASortKey.from(w, collator)
+      val sk = UCAKey.from(w, collator)
       
       val id1 = UUIDv7.generate()
       val id2 = UUIDv7.generate() // id2 > id1
@@ -86,7 +86,7 @@ object UCACodecSpec extends ZIOSpecDefault {
       val k1 = (sk, id1)
       val k2 = (sk, id2)
       
-      val codec = summon[KeyCodec[(UCASortKey, UUIDv7)]]
+      val codec = summon[KeyCodec[(UCAKey, UUIDv7)]]
       val b1 = codec.encode(k1)
       val b2 = codec.encode(k2)
       
@@ -102,7 +102,7 @@ object UCACodecSpec extends ZIOSpecDefault {
       // Let's just verify it works and is consistent.
       
       val words = List("banana", "apple", "cherry")
-      val sortKeys = words.map(w => UCASortKey.from(w)) // Using default collator
+      val sortKeys = words.map(w => UCAKey.from(w)) // Using default collator
       
       val expectedOrder = List("apple", "banana", "cherry")
       val sortedWords = sortKeys.zip(words).sortBy(_._1.bytes)(Ordering.fromLessThan((a, b) => java.util.Arrays.compareUnsigned(a, b) < 0)).map(_._2)
@@ -111,7 +111,7 @@ object UCACodecSpec extends ZIOSpecDefault {
     },
     test("Default collator accent handling") {
       val words = List("cote", "côte")
-      val sortKeys = words.map(w => UCASortKey.from(w))
+      val sortKeys = words.map(w => UCAKey.from(w))
       
       // In UCA default, accents are significant at secondary level.
       // "cote" < "côte" usually.

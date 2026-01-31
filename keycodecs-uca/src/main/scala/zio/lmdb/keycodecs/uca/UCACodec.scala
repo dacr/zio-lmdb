@@ -22,26 +22,26 @@ import java.util.Arrays
 
 import com.ibm.icu.util.ULocale
 
-opaque type UCASortKey = Array[Byte]
+opaque type UCAKey = Array[Byte]
 
-object UCASortKey {
-  def apply(bytes: Array[Byte]): UCASortKey = bytes
+object UCAKey {
+  def apply(bytes: Array[Byte]): UCAKey = bytes
   
-  def from(text: String, collator: Collator = Collator.getInstance(ULocale.ROOT)): UCASortKey = {
+  def from(text: String, collator: Collator = Collator.getInstance(ULocale.ROOT)): UCAKey = {
     collator.getCollationKey(text).toByteArray
   }
   
-  extension (key: UCASortKey) {
+  extension (key: UCAKey) {
     def bytes: Array[Byte] = key
     
-    def compare(other: UCASortKey): Int = 
+    def compare(other: UCAKey): Int = 
       Arrays.compareUnsigned(key, other)
   }
 
-  given ucaSortKeyCodec: KeyCodec[UCASortKey] = new KeyCodec[UCASortKey] {
-    override def encode(key: UCASortKey): Array[Byte] = key
+  given ucaKeyCodec: KeyCodec[UCAKey] = new KeyCodec[UCAKey] {
+    override def encode(key: UCAKey): Array[Byte] = key
     
-    override def decode(keyBytes: ByteBuffer): Either[String, UCASortKey] = {
+    override def decode(keyBytes: ByteBuffer): Either[String, UCAKey] = {
       val bytes = new Array[Byte](keyBytes.remaining())
       keyBytes.get(bytes)
       Right(bytes)
