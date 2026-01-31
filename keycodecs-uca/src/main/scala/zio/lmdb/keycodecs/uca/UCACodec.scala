@@ -30,12 +30,18 @@ object UCAKey {
   def from(text: String, collator: Collator = Collator.getInstance(ULocale.ROOT)): UCAKey = {
     collator.getCollationKey(text).toByteArray
   }
+
+  def fromBase64(base64: String): UCAKey = 
+    java.util.Base64.getDecoder.decode(base64)
   
   extension (key: UCAKey) {
     def bytes: Array[Byte] = key
     
     def compare(other: UCAKey): Int = 
       Arrays.compareUnsigned(key, other)
+
+    def toBase64: String = 
+      java.util.Base64.getEncoder.encodeToString(key)
   }
 
   given ucaKeyCodec: KeyCodec[UCAKey] = new KeyCodec[UCAKey] {

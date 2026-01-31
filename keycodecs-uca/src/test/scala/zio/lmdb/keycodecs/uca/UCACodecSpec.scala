@@ -119,6 +119,19 @@ object UCACodecSpec extends ZIOSpecDefault {
       val sk2 = sortKeys(1)
       
       assertTrue(sk1.compare(sk2) != 0) // Should not be equal
+    },
+    test("Base64 representation roundtrip") {
+      val word = "Hello World"
+      val sk = UCAKey.from(word)
+      val base64 = sk.toBase64
+      val decodedSk = UCAKey.fromBase64(base64)
+      
+      val isEqual = java.util.Arrays.equals(sk.bytes, decodedSk.bytes)
+      
+      assertTrue(
+        sk.compare(decodedSk) == 0,
+        isEqual
+      )
     }
   )
 }
