@@ -3,8 +3,12 @@
 ## 2.3 - 2025-02-01
 
 - generic `keycodecs` module added 
-- latitude/longitude key support using Morton coding
-- LMDBKodec renamed to KeyCodec and moved to keycodecs module
+- add specialized `keycodecs` for
+  - latitude/longitude codec using Morton coding (8 bytes)
+  - timestamps codec using nanoseconds precision (12 bytes)
+  - UUIDv7 codec (16 bytes)
+  - ULID codec (16 bytes)
+- `LMDBKodec` renamed to `KeyCodec` and moved to the `keycodecs` module
 
 ## 2.2 - 2025-01-30
 
