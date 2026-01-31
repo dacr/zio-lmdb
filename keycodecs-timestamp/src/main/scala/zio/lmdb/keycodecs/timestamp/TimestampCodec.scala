@@ -45,5 +45,7 @@ object TimestampCodec {
         Right(Instant.ofEpochSecond(seconds, nanos.toLong))
       }
     }
+
+    override def width: Option[Int] = Some(12)
   }
 }

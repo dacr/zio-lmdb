@@ -2,12 +2,15 @@
 
 ## 2.3 - 2025-02-01
 
-- generic `keycodecs` module added 
+- generic `keycodecs` module added
+  - basic UUID codec
+  - basic String codec
+  - compound tuple2 codec
 - add specialized `keycodecs` for
   - latitude/longitude codec using Morton coding (8 bytes)
-  - timestamps codec using nanoseconds precision (12 bytes)
-  - UUIDv7 codec (16 bytes)
-  - ULID codec (16 bytes)
+  - timestamps codec using nanoseconds precision (12 bytes instead of 30 bytes string)
+  - UUIDv7 codec (16 bytes instead of 36 bytes string)
+  - ULID codec (16 bytes instead of 26 bytes string)
 - `LMDBKodec` renamed to `KeyCodec` and moved to the `keycodecs` module
 
 ## 2.2 - 2025-01-30

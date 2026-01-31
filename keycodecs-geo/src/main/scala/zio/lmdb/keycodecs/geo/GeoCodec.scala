@@ -30,5 +30,7 @@ object GeoCodec {
         Right(GEOTools.bytesToLocation(bytes))
       }
     }
+
+    override def width: Option[Int] = Some(8)
   }
 }

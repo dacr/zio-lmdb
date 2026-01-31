@@ -31,5 +31,7 @@ object ULIDCodec {
         Right(ULID.fromBytes(bytes))
       }
     }
+
+    override def width: Option[Int] = Some(16)
   }
 }

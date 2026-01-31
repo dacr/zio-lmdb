@@ -43,5 +43,7 @@ object UUIDv7 {
 
     override def decode(keyBytes: ByteBuffer): Either[String, UUIDv7] =
       codec.decode(keyBytes).map(UUIDv7(_))
+
+    override def width: Option[Int] = Some(16)
   }
 }
