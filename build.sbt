@@ -33,7 +33,7 @@ lazy val root = (project in file("."))
     name           := "zio-lmdb-root",
     publish / skip := true
   )
-  .aggregate(core, keycodecs)
+  .aggregate(core, keycodecs, keycodecsUlid)
 
 lazy val core = (project in file("core"))
   .settings(commonSettings)
@@ -66,6 +66,20 @@ lazy val keycodecs = (project in file("keycodecs"))
       "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
     )
   )
+
+lazy val keycodecsUlid = (project in file("keycodecs-ulid"))
+  .settings(commonSettings)
+  .settings(
+    name        := "keycodecs-ulid",
+    description := "ULID support for ZIO LMDB",
+    libraryDependencies ++= Seq(
+      "org.wvlet.airframe" %% "airframe-ulid" % "2025.1.27",
+      "dev.zio" %% "zio-test"            % versions.zio % Test,
+      "dev.zio" %% "zio-test-sbt"        % versions.zio % Test,
+      "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
+    )
+  )
+  .dependsOn(keycodecs)
 
 homepage   := Some(new URL("https://github.com/dacr/zio-lmdb"))
 scmInfo    := Some(ScmInfo(url(s"https://github.com/dacr/zio-lmdb.git"), s"git@github.com:dacr/zio-lmdb.git"))
