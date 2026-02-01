@@ -29,7 +29,7 @@ import zio.stream._
   * @tparam T
   *   the data class type for collection content
   */
-case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]) {
+case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit val kodec: KeyCodec[K], val codec: LMDBCodec[T]) {
 
   /** Get how many items a collection contains
     *
@@ -227,6 +227,24 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit kodec
     lmdb.readWrite { ops =>
       f(LMDBCollectionWriteOps(this, ops))
     }
+
+  /** Create a collection-specific read-only operations facade from a global transaction.
+    * @param ops
+    *   The global read-only operations
+    * @return
+    *   The collection-specific facade
+    */
+  def lift(ops: LMDBReadOps): LMDBCollectionReadOps[K, T] =
+    LMDBCollectionReadOps(this, ops)(kodec, codec)
+
+  /** Create a collection-specific read-write operations facade from a global transaction.
+    * @param ops
+    *   The global read-write operations
+    * @return
+    *   The collection-specific facade
+    */
+  def lift(ops: LMDBWriteOps): LMDBCollectionWriteOps[K, T] =
+    LMDBCollectionWriteOps(this, ops)(kodec, codec)
 }
 
 /** Collection-specific read operations available within a transaction.
