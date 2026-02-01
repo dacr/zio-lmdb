@@ -13,6 +13,7 @@
   - ULID codec (16 bytes instead of 26 bytes string)
 - `LMDBKodec` renamed to `KeyCodec` and moved to the `keycodecs` module
 - cross-collections transaction using `lift` through several collections 
+- cross-indexes transaction using `lift` through several indexes and collections
 
 ## 2.2 - 2025-01-30
 

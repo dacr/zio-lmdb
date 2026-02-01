@@ -36,7 +36,7 @@ case class LMDBIndex[FROM_KEY, TO_KEY](
   name: IndexName,
   description: Option[String],
   lmdb: LMDB
-)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]) {
+)(implicit val keyCodec: KeyCodec[FROM_KEY], val toKeyCodec: KeyCodec[TO_KEY]) {
 
   /** Add a mapping to the index
     * @param key
@@ -85,4 +85,87 @@ case class LMDBIndex[FROM_KEY, TO_KEY](
     key: FROM_KEY
   ): ZStream[Any, IndexErrors, TO_KEY] = lmdb.indexed[FROM_KEY, TO_KEY](name, key)
 
+  /** Execute a series of read operations on this index within a single read-only transaction.
+    * @param f
+    *   function using index read operations
+    * @return
+    *   result of the function
+    */
+  def readOnly[R, E, A](f: LMDBIndexReadOps[FROM_KEY, TO_KEY] => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A] =
+    lmdb.readOnly { ops =>
+      f(LMDBIndexReadOps(this, ops))
+    }
+
+  /** Execute a series of read and write operations on this index within a single read-write transaction.
+    * @param f
+    *   function using index write operations
+    * @return
+    *   result of the function
+    */
+  def readWrite[R, E, A](f: LMDBIndexWriteOps[FROM_KEY, TO_KEY] => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A] =
+    lmdb.readWrite { ops =>
+      f(LMDBIndexWriteOps(this, ops))
+    }
+
+  /** Create an index-specific read-only operations facade from a global transaction.
+    * @param ops
+    *   The global read-only operations
+    * @return
+    *   The index-specific facade
+    */
+  def lift(ops: LMDBReadOps): LMDBIndexReadOps[FROM_KEY, TO_KEY] =
+    LMDBIndexReadOps(this, ops)(keyCodec, toKeyCodec)
+
+  /** Create an index-specific read-write operations facade from a global transaction.
+    * @param ops
+    *   The global read-write operations
+    * @return
+    *   The index-specific facade
+    */
+  def lift(ops: LMDBWriteOps): LMDBIndexWriteOps[FROM_KEY, TO_KEY] =
+    LMDBIndexWriteOps(this, ops)(keyCodec, toKeyCodec)
+
+}
+
+/** Index-specific read operations available within a transaction.
+  * @tparam FROM_KEY
+  *   source key type
+  * @tparam TO_KEY
+  *   target key type
+  */
+case class LMDBIndexReadOps[FROM_KEY, TO_KEY](
+  index: LMDBIndex[FROM_KEY, TO_KEY],
+  ops: LMDBReadOps
+)(implicit val keyCodec: KeyCodec[FROM_KEY], val toKeyCodec: KeyCodec[TO_KEY]) {
+
+  /** Check if the index exists */
+  def exists(): IO[IndexErrors, Boolean] = ops.indexExists(index.name)
+
+  /** Check if the index contains the given mapping */
+  def contains(key: FROM_KEY, toKey: TO_KEY): IO[IndexErrors, Boolean] =
+    ops.indexContains(index.name, key, toKey)
+}
+
+/** Index-specific read-write operations available within a transaction.
+  * @tparam FROM_KEY
+  *   source key type
+  * @tparam TO_KEY
+  *   target key type
+  */
+case class LMDBIndexWriteOps[FROM_KEY, TO_KEY](
+  index: LMDBIndex[FROM_KEY, TO_KEY],
+  ops: LMDBWriteOps
+)(implicit val keyCodec: KeyCodec[FROM_KEY], val toKeyCodec: KeyCodec[TO_KEY]) {
+
+  // Delegate read operations
+  private val readOps = LMDBIndexReadOps(index, ops)
+  export readOps.{index as _, ops as _, keyCodec as _, toKeyCodec as _, _}
+
+  /** Add a mapping to the index */
+  def index(key: FROM_KEY, toKey: TO_KEY): IO[IndexErrors, Unit] =
+    ops.index(index.name, key, toKey)
+
+  /** Remove a mapping from the index */
+  def unindex(key: FROM_KEY, toKey: TO_KEY): IO[IndexErrors, Boolean] =
+    ops.unindex(index.name, key, toKey)
 }
