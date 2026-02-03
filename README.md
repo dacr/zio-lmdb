@@ -127,7 +127,8 @@ SimpleExample.main(Array.empty)
 - [zwords - wordle like game][ZWORDS-CODE] which can be played [zwords game][ZWORDS-LIVE]
 
 ### Code snippets using ZIO-LMDB, runnable with [scala-cli][SCL]
-- [ZIO LMDB simple example (scala-3)](https://gist.github.com/dacr/dcb8a11f095ef0a2a95c24701e6eb804)
+- [ZIO LMDB CRUD example](https://gist.github.com/dacr/dcb8a11f095ef0a2a95c24701e6eb804)
+- [ZIO LMDB transaction example](https://gist.github.com/dacr/f69159308f971361a2643393d4b9bf3f)
 - [ZIO LMDB feeding with French town postal codes](https://gist.github.com/dacr/6d24baf827ae0c590133e0f27f1ef20b)
 - [ZIO LMDB using custom configuration provider](https://gist.github.com/dacr/790df1705c7ec19ae2fe4098dad8d762)
 - [Extract photos records from elasticsearch and save them into LMDB](https://gist.github.com/dacr/6ea121f251ad316a64657cbe78085ab7)
