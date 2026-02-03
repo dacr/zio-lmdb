@@ -46,7 +46,13 @@ or java properties to resolve this library configuration parameters.
 | lmdb.mapSize        | LMDB_MAPSIZE         | The maximum size of the whole database including metadata      | 100_000_000_000L |
 
 
-## Usages example
+## Usage examples
+
+Available LMDB layers :
+- `LMDB.live` : Fully configurable using standard zio-config
+- `LMDB.liveWithDatabaseName("chosen-database-name")` : to override/force the database name
+
+### CRUD example
 
 ```scala
 //> using scala 3.8.1
@@ -82,10 +88,38 @@ object SimpleExample extends ZIOAppDefault {
 SimpleExample.main(Array.empty)
 ```
 
-To run the such application logic, you'll have to provide the LMDB layer. Two layers are available :
-- `LMDB.live` : Fully configurable using standard zio-config
-- `LMDB.liveWithDatabaseName("chosen-database-name")` : to override/force the database name
-  (quite useful when writing scala scripts)
+### Transaction example
+
+```scala
+//> using scala 3.8.1
+//> using dep fr.janalyse::zio-lmdb:2.3.2
+//> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
+
+import zio.*, zio.json.*, zio.lmdb.*, zio.lmdb.json.*
+import java.io.File, java.util.UUID, java.time.OffsetDateTime
+
+case class Record(uuid: UUID, name: String, age: Int, addedOn: OffsetDateTime) derives LMDBCodecJson
+
+object SimpleExample extends ZIOAppDefault {
+  override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-data-basic-transaction-example"), Scope.default)
+
+  val collectionName = "people"
+  val example        = for {
+    people    <- LMDB.collectionCreate[UUID, Record](collectionName, failIfExists = false)
+    dateTime  <- Clock.currentDateTime
+    record1   <- Random.nextUUID.map(id => Record(id, "John Doe", 42, dateTime))
+    record2   <- Random.nextUUID.map(id => Record(id, "Sarah Connors", 24, dateTime))
+    _         <- people.readWrite { peopleTX =>
+                   peopleTX.upsertOverwrite(record1.uuid, record1) *>
+                     peopleTX.upsertOverwrite(record2.uuid, record2)
+                 }
+    collected <- people.collect()
+    _         <- ZIO.foreachDiscard(collected)(record => Console.printLine(record))
+  } yield ()
+}
+
+SimpleExample.main(Array.empty)
+```
 
 ### ZIO-LMDB based Applications
 - [sotohp - photos management][SOTOHP] which uses zio-lmdb intensively
