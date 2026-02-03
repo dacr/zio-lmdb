@@ -126,7 +126,13 @@ class LMDBLive(
 
   /** @inheritdoc */
   override def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CreateErrors, LMDBCollection[K, T]] = {
-    val allocateLogic = if (failIfExists) collectionAllocate(name) else collectionAllocate(name).ignore
+    val allocateLogic = if (failIfExists) {
+      collectionAllocate(name)
+    } else {
+      collectionAllocate(name).catchSome { case CollectionAlreadExists(_) =>
+        getCollectionDbi(name).ignore
+      }
+    }
     allocateLogic.as(LMDBCollection[K, T](name, this))
   }
 
@@ -880,7 +886,13 @@ class LMDBLive(
 
   /** @inheritdoc */
   override def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
-    val allocateLogic = if (failIfExists) indexAllocate(name) else indexAllocate(name).ignore
+    val allocateLogic = if (failIfExists) {
+      indexAllocate(name)
+    } else {
+      indexAllocate(name).catchSome { case IndexAlreadyExists(_) =>
+        getIndexDbi(name).ignore
+      }
+    }
     allocateLogic.as(LMDBIndex[FROM_KEY, TO_KEY](name, None, this))
   }
 

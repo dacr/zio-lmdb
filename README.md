@@ -49,11 +49,11 @@ or java properties to resolve this library configuration parameters.
 ## Usages example
 
 ```scala
-//> using scala  3.7.1
-//> using dep fr.janalyse::zio-lmdb:2.1.0
+//> using scala 3.8.1
+//> using dep fr.janalyse::zio-lmdb:2.3.1
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 
-import zio.*, zio.json.*,zio.lmdb.*,zio.lmdb.json.*
+import zio.*, zio.json.*, zio.lmdb.*, zio.lmdb.json.*
 import java.io.File, java.util.UUID, java.time.OffsetDateTime
 
 case class Record(uuid: UUID, name: String, age: Int, addedOn: OffsetDateTime) derives LMDBCodecJson
@@ -63,15 +63,15 @@ object SimpleExample extends ZIOAppDefault {
 
   val collectionName = "examples"
   val example        = for {
-    examples  <- LMDB.collectionCreate[String, Record](collectionName, failIfExists = false)
+    examples  <- LMDB.collectionCreate[UUID,Record](collectionName, failIfExists = false)
     recordId  <- Random.nextUUID
     dateTime  <- Clock.currentDateTime
     record     = Record(recordId, "John Doe", 42, dateTime)
-    _         <- examples.upsertOverwrite(recordId.toString, record)
-    gotten    <- examples.fetch(recordId.toString).some
+    _         <- examples.upsertOverwrite(recordId, record)
+    gotten    <- examples.fetch(recordId).some
     collected <- examples.collect()
     _         <- Console.printLine(s"collection $collectionName contains ${collected.size} records")
-    _         <- ZIO.foreach(collected)(record => Console.printLine(record))
+    _         <- ZIO.foreachDiscard(collected)(record => Console.printLine(record))
     lmdb      <- ZIO.service[LMDB]
     _         <- Console.printLine("""LMDB standard tools can be used to manage the database content : sudo apt-get install lmdb-utils""")
     _         <- Console.printLine(s"""To get some statistics     : mdb_stat -s $collectionName ${lmdb.databasePath}/""")
@@ -82,7 +82,7 @@ object SimpleExample extends ZIOAppDefault {
 SimpleExample.main(Array.empty)
 ```
 
-To run the previous logic, you'll have to provide the LMDB layer. Two layers are available :
+To run the such application logic, you'll have to provide the LMDB layer. Two layers are available :
 - `LMDB.live` : Fully configurable using standard zio-config
 - `LMDB.liveWithDatabaseName("chosen-database-name")` : to override/force the database name
   (quite useful when writing scala scripts)
