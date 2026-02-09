@@ -2,6 +2,7 @@
 target/
 project/target
 .lmdb/
+.direnv
 
 # IDE related
 .metals/
