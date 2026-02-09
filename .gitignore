@@ -12,6 +12,7 @@ project/target
 .idea/
 .scala-build/
 project/metals.sbt
+.opencode/
 
 # application related
 lmdb-test-data/
