@@ -60,23 +60,23 @@ class LMDBLive(
   }
 
   /** Gets or opens a collection DBI handle. */
-  private def getCollectionDbi(name: CollectionName): IO[CollectionNotFound, Dbi[ByteBuffer]] = {
-    val alreadyHereLogic = for {
+  private def getCollectionDbi(name: CollectionName, txn: Option[Txn[ByteBuffer]] = None): IO[CollectionNotFound, Dbi[ByteBuffer]] = {
+    val logic = for {
       openedCollectionDbis <- openedCollectionDbisRef.get
-    } yield openedCollectionDbis.get(name)
+      dbi                  <- ZIO
+                                .fromOption(openedCollectionDbis.get(name))
+                                .orElse {
+                                  for {
+                                    newDbi <- txn match {
+                                                case Some(t) => ZIO.attempt(env.openDbi(t, name.getBytes(StandardCharsets.UTF_8), null, false))
+                                                case None    => ZIO.attemptBlocking(env.openDbi(name))
+                                              }
+                                    _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                                  } yield newDbi
+                                }
+    } yield dbi
 
-    val openAndRememberLogic = for {
-      openedCollectionDbis <- reentrantLock.withWriteLock( // See https://github.com/lmdbjava/lmdbjava/issues/195
-                                openedCollectionDbisRef.updateAndGet(before =>
-                                  if (before.contains(name)) before
-                                  else before + (name -> env.openDbi(name))
-                                )
-                              )
-    } yield openedCollectionDbis.get(name)
-
-    alreadyHereLogic.some
-      .orElse(openAndRememberLogic.some)
-      .mapError(err => CollectionNotFound(name))
+    reentrantLock.withWriteLock(logic).mapError(_ => CollectionNotFound(name))
   }
 
   /** @inheritdoc */
@@ -139,15 +139,15 @@ class LMDBLive(
   /** Internal logic to create a collection. */
   private def collectionCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = reentrantLock.withWriteLock {
     for {
-      openedCollectionDbis <- reentrantLock.withWriteLock( // See https://github.com/lmdbjava/lmdbjava/issues/195
-                                openedCollectionDbisRef.updateAndGet(before =>
-                                  if (before.contains(name)) before
-                                  else before + (name -> env.openDbi(name, DbiFlags.MDB_CREATE)) // TODO
-                                )
-                              )
-      collectionDbi        <- ZIO
-                                .from(openedCollectionDbis.get(name))
-                                .mapError(err => InternalError(s"Couldn't create DB $name"))
+      openedCollectionDbis <- openedCollectionDbisRef.get
+      _                    <- ZIO.when(!openedCollectionDbis.contains(name)) {
+                                for {
+                                  newDbi <- ZIO
+                                              .attemptBlocking(env.openDbi(name, DbiFlags.MDB_CREATE))
+                                              .mapError(err => InternalError(s"Couldn't create DB $name", Some(err)))
+                                  _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                                } yield ()
+                              }
     } yield ()
   }
 
@@ -844,34 +844,38 @@ class LMDBLive(
   }
 
   /** Gets or opens an index DBI handle. */
-  private def getIndexDbi(name: IndexName): IO[IndexNotFound, Dbi[ByteBuffer]] = {
-    val alreadyHereLogic = for {
+  private def getIndexDbi(name: IndexName, txn: Option[Txn[ByteBuffer]] = None): IO[IndexNotFound, Dbi[ByteBuffer]] = {
+    val logic = for {
       openedCollectionDbis <- openedCollectionDbisRef.get
-    } yield openedCollectionDbis.get(name)
+      dbi                  <- ZIO
+                                .fromOption(openedCollectionDbis.get(name))
+                                .orElse {
+                                  for {
+                                    newDbi <- txn match {
+                                                case Some(t) =>
+                                                  ZIO.attempt(env.openDbi(t, name.getBytes(StandardCharsets.UTF_8), null, false, DbiFlags.MDB_DUPSORT))
+                                                case None    => ZIO.attemptBlocking(env.openDbi(name, DbiFlags.MDB_DUPSORT))
+                                              }
+                                    _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                                  } yield newDbi
+                                }
+    } yield dbi
 
-    val openAndRememberLogic = for {
-      openedCollectionDbis <- reentrantLock.withWriteLock(
-                                openedCollectionDbisRef.updateAndGet(before =>
-                                  if (before.contains(name)) before
-                                  else before + (name -> env.openDbi(name, DbiFlags.MDB_DUPSORT))
-                                )
-                              )
-    } yield openedCollectionDbis.get(name)
-
-    alreadyHereLogic.some
-      .orElse(openAndRememberLogic.some)
-      .mapError(err => IndexNotFound(name))
+    reentrantLock.withWriteLock(logic).mapError(_ => IndexNotFound(name))
   }
 
   /** Internal logic to create an index. */
   private def indexCreateLogic(name: IndexName): ZIO[Any, StorageSystemError, Unit] = reentrantLock.withWriteLock {
     for {
-      openedCollectionDbis <- reentrantLock.withWriteLock(
-                                openedCollectionDbisRef.updateAndGet(before =>
-                                  if (before.contains(name)) before
-                                  else before + (name -> env.openDbi(name, DbiFlags.MDB_CREATE, DbiFlags.MDB_DUPSORT))
-                                )
-                              )
+      openedCollectionDbis <- openedCollectionDbisRef.get
+      _                    <- ZIO.when(!openedCollectionDbis.contains(name)) {
+                                for {
+                                  newDbi <- ZIO
+                                              .attemptBlocking(env.openDbi(name, DbiFlags.MDB_CREATE, DbiFlags.MDB_DUPSORT))
+                                              .mapError(err => InternalError(s"Couldn't create Index $name", Some(err)))
+                                  _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                                } yield ()
+                              }
     } yield ()
   }
 
@@ -1166,7 +1170,7 @@ class LMDBLive(
     /** @inheritdoc */
     override def collectionSize(name: CollectionName): IO[SizeErrors, Long] = {
       for {
-        collectionDbi <- getCollectionDbi(name)
+        collectionDbi <- getCollectionDbi(name, Some(txn))
         size          <- collectionSizeLogic(txn, collectionDbi, name)
       } yield size
     }
@@ -1174,7 +1178,7 @@ class LMDBLive(
     /** @inheritdoc */
     override def fetch[K, T](colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[T]] = {
       for {
-        db  <- getCollectionDbi(colName)
+        db  <- getCollectionDbi(colName, Some(txn))
         res <- fetchLogic(txn, db, colName, key)
       } yield res
     }
@@ -1182,7 +1186,7 @@ class LMDBLive(
     /** @inheritdoc */
     override def fetchAt[K, T](colName: CollectionName, index: Long)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
       for {
-        db  <- getCollectionDbi(colName)
+        db  <- getCollectionDbi(colName, Some(txn))
         res <- ZIO.scoped(fetchAtLogic(txn, db, colName, index))
       } yield res
     }
@@ -1215,7 +1219,7 @@ class LMDBLive(
       */
     private def seek[K, T](colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
       for {
-        db  <- getCollectionDbi(colName)
+        db  <- getCollectionDbi(colName, Some(txn))
         res <- ZIO.scoped(seekLogic(txn, db, colName, recordKey, seekOperation))
       } yield res
     }
@@ -1223,7 +1227,7 @@ class LMDBLive(
     /** @inheritdoc */
     override def contains[K](colName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): IO[ContainsErrors, Boolean] = {
       for {
-        db  <- getCollectionDbi(colName)
+        db  <- getCollectionDbi(colName, Some(txn))
         res <- containsLogic(txn, db, colName, key)
       } yield res
     }
@@ -1238,7 +1242,7 @@ class LMDBLive(
       limit: Option[Int]
     )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]] = {
       for {
-        collectionDbi <- getCollectionDbi(colName)
+        collectionDbi <- getCollectionDbi(colName, Some(txn))
         res           <- ZIO.scoped(collectLogic(txn, collectionDbi, colName, keyFilter, valueFilter, startAfter, backward, limit))
       } yield res
     }
@@ -1249,7 +1253,7 @@ class LMDBLive(
     /** @inheritdoc */
     override def indexContains[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean] = {
       for {
-        dbi <- getIndexDbi(name)
+        dbi <- getIndexDbi(name, Some(txn))
         res <- ZIO.scoped(indexContainsLogic(txn, dbi, name, key, targetKey))
       } yield res
     }
@@ -1261,7 +1265,7 @@ class LMDBLive(
     /** @inheritdoc */
     override def collectionClear(name: CollectionName): IO[ClearErrors, Unit] = {
       for {
-        collectionDbi <- getCollectionDbi(name)
+        collectionDbi <- getCollectionDbi(name, Some(txn))
         _             <- collectionClearLogic(txn, collectionDbi, name)
       } yield ()
     }
@@ -1269,7 +1273,7 @@ class LMDBLive(
     /** @inheritdoc */
     override def update[K, T](collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
       for {
-        collectionDbi <- getCollectionDbi(collectionName)
+        collectionDbi <- getCollectionDbi(collectionName, Some(txn))
         res           <- updateLogic(txn, collectionDbi, collectionName, key, modifier)
       } yield res
     }
@@ -1277,7 +1281,7 @@ class LMDBLive(
     /** @inheritdoc */
     override def upsert[K, T](collectionName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
       for {
-        collectionDbi <- getCollectionDbi(collectionName)
+        collectionDbi <- getCollectionDbi(collectionName, Some(txn))
         res           <- upsertLogic(txn, collectionDbi, collectionName, key, modifier)
       } yield res
     }
@@ -1285,7 +1289,7 @@ class LMDBLive(
     /** @inheritdoc */
     override def upsertOverwrite[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
       for {
-        collectionDbi <- getCollectionDbi(collectionName)
+        collectionDbi <- getCollectionDbi(collectionName, Some(txn))
         _             <- upsertOverwriteLogic(txn, collectionDbi, collectionName, key, document)
       } yield ()
     }
@@ -1293,7 +1297,7 @@ class LMDBLive(
     /** @inheritdoc */
     override def delete[K, T](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
       for {
-        db  <- getCollectionDbi(collectionName)
+        db  <- getCollectionDbi(collectionName, Some(txn))
         res <- deleteLogic(txn, db, collectionName, key)
       } yield res
     }
@@ -1301,7 +1305,7 @@ class LMDBLive(
     /** @inheritdoc */
     override def index[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Unit] = {
       for {
-        dbi <- getIndexDbi(name)
+        dbi <- getIndexDbi(name, Some(txn))
         _   <- indexLogic(txn, dbi, name, key, targetKey)
       } yield ()
     }
@@ -1309,7 +1313,7 @@ class LMDBLive(
     /** @inheritdoc */
     override def unindex[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean] = {
       for {
-        dbi <- getIndexDbi(name)
+        dbi <- getIndexDbi(name, Some(txn))
         res <- unindexLogic(txn, dbi, name, key, targetKey)
       } yield res
     }
