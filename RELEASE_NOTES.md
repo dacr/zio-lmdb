@@ -1,6 +1,11 @@
 # ZIO-LMDB RELEASE NOTES
 
-## 2.3 - 2025-02-01
+## 2.4 - 2026-02-15
+
+- KeyCodec API consistency improvements
+- Indexes API improvements
+
+## 2.3 - 2026-02-01
 
 - generic `keycodecs` module added
   - basic UUID codec
@@ -15,7 +20,7 @@
 - cross-collections transaction using `lift` through several collections 
 - cross-indexes transaction using `lift` through several indexes and collections
 
-## 2.2 - 2025-01-30
+## 2.2 - 2026-01-30
 
 - transactions official support added
 - index collections support added

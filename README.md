@@ -56,23 +56,23 @@ Available LMDB layers :
 
 ```scala
 //> using scala 3.8.1
-//> using dep fr.janalyse::zio-lmdb:2.3.1
+//> using dep fr.janalyse::zio-lmdb:2.3.3
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 
 import zio.*, zio.json.*, zio.lmdb.*, zio.lmdb.json.*
 import java.io.File, java.util.UUID, java.time.OffsetDateTime
 
-case class Record(uuid: UUID, name: String, age: Int, addedOn: OffsetDateTime) derives LMDBCodecJson
+case class CrudRecord(uuid: UUID, name: String, age: Int, addedOn: OffsetDateTime) derives LMDBCodecJson
 
-object SimpleExample extends ZIOAppDefault {
-  override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-data-simple-example"), Scope.default)
+object CrudExample extends ZIOAppDefault {
+  override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-data-simple-example"), zio.Scope.default)
 
   val collectionName = "examples"
   val example        = for {
-    examples  <- LMDB.collectionCreate[UUID,Record](collectionName, failIfExists = false)
+    examples  <- LMDB.collectionCreate[UUID,CrudRecord](collectionName, failIfExists = false)
     recordId  <- Random.nextUUID
     dateTime  <- Clock.currentDateTime
-    record     = Record(recordId, "John Doe", 42, dateTime)
+    record     = CrudRecord(recordId, "John Doe", 42, dateTime)
     _         <- examples.upsertOverwrite(recordId, record)
     gotten    <- examples.fetch(recordId).some
     collected <- examples.collect()
@@ -85,30 +85,30 @@ object SimpleExample extends ZIOAppDefault {
   } yield ()
 }
 
-SimpleExample.main(Array.empty)
+CrudExample.main(Array.empty)
 ```
 
 ### Transaction example
 
 ```scala
 //> using scala 3.8.1
-//> using dep fr.janalyse::zio-lmdb:2.3.2
+//> using dep fr.janalyse::zio-lmdb:2.3.3
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 
 import zio.*, zio.json.*, zio.lmdb.*, zio.lmdb.json.*
 import java.io.File, java.util.UUID, java.time.OffsetDateTime
 
-case class Record(uuid: UUID, name: String, age: Int, addedOn: OffsetDateTime) derives LMDBCodecJson
+case class TransactionRecord(uuid: UUID, name: String, age: Int, addedOn: OffsetDateTime) derives LMDBCodecJson
 
-object SimpleExample extends ZIOAppDefault {
-  override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-data-basic-transaction-example"), Scope.default)
+object TransactionExample extends ZIOAppDefault {
+  override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-data-basic-transaction-example"), zio.Scope.default)
 
   val collectionName = "people"
   val example        = for {
-    people    <- LMDB.collectionCreate[UUID, Record](collectionName, failIfExists = false)
+    people    <- LMDB.collectionCreate[UUID, TransactionRecord](collectionName, failIfExists = false)
     dateTime  <- Clock.currentDateTime
-    record1   <- Random.nextUUID.map(id => Record(id, "John Doe", 42, dateTime))
-    record2   <- Random.nextUUID.map(id => Record(id, "Sarah Connors", 24, dateTime))
+    record1   <- Random.nextUUID.map(id => TransactionRecord(id, "John Doe", 42, dateTime))
+    record2   <- Random.nextUUID.map(id => TransactionRecord(id, "Sarah Connors", 24, dateTime))
     _         <- people.readWrite { peopleTX =>
                    peopleTX.upsertOverwrite(record1.uuid, record1) *>
                      peopleTX.upsertOverwrite(record2.uuid, record2)
@@ -118,7 +118,7 @@ object SimpleExample extends ZIOAppDefault {
   } yield ()
 }
 
-SimpleExample.main(Array.empty)
+TransactionExample.main(Array.empty)
 ```
 
 ### ZIO-LMDB based Applications

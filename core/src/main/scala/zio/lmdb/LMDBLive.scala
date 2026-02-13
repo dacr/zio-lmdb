@@ -995,6 +995,110 @@ class LMDBLive(
     } yield res
   }
 
+  /** @inheritdoc */
+  override def indexHasKey[FROM_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY]): IO[IndexErrors, Boolean] = {
+    for {
+      dbi <- getIndexDbi(name)
+      res <- ZIO.scoped {
+               for {
+                 txn <- ZIO.acquireRelease(
+                          ZIO
+                            .attemptBlocking(env.txnRead())
+                            .mapError(err => InternalError(s"Couldn't acquire read transaction on $name", Some(err)))
+                        )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+                 res <- indexHasKeyLogic(txn, dbi, name, key)
+               } yield res
+             }
+    } yield res
+  }
+
+  private def indexHasKeyLogic[FROM_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY]): ZIO[Scope, IndexErrors, Boolean] = {
+    for {
+      keyBuffer <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      cursor    <- ZIO.acquireRelease(
+                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError("Cursor error", Some(e)))
+                   )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
+      found     <- ZIO
+                     .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
+                     .mapError(e => InternalError("Get error", Some(e)))
+    } yield found
+  }
+
+  private def indexSeek[FROM_KEY, TO_KEY](name: IndexName, recordKey: Option[FROM_KEY], seekOperation: SeekOp)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
+    for {
+      db     <- getIndexDbi(name).catchAll { case IndexNotFound(n) => ZIO.fail(CollectionNotFound(n): FetchErrors) }
+      result <- ZIO.scoped {
+                  for {
+                    txn <- ZIO.acquireRelease(
+                             ZIO
+                               .attemptBlocking(env.txnRead())
+                               .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $name", Some(err)))
+                           )(txn =>
+                             ZIO
+                               .attemptBlocking(txn.close())
+                               .ignoreLogged
+                           )
+                    res <- indexSeekLogic(txn, db, name, recordKey, seekOperation)(keyCodec, toKeyCodec)
+                  } yield res
+                }
+    } yield result
+  }
+
+  private def indexSeekLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, recordKey: Option[FROM_KEY], seekOperation: SeekOp)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[Scope, FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
+    for {
+      cursor      <- ZIO.acquireRelease(
+                       ZIO
+                         .attemptBlocking(dbi.openCursor(txn))
+                         .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $name", Some(err)))
+                     )(cursor =>
+                       ZIO
+                         .attemptBlocking(cursor.close())
+                         .ignoreLogged
+                     )
+      key         <- ZIO.foreach(recordKey)(rk => makeKeyByteBuffer(rk).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e })
+      _           <- ZIO.foreachDiscard(key) { k =>
+                       ZIO
+                         .attempt(cursor.get(k, GetOp.MDB_SET))
+                         .mapError[FetchErrors](err => InternalError(s"Couldn't set cursor at $recordKey for $name", Some(err)))
+                     }
+      seekSuccess <- ZIO
+                       .attempt(cursor.seek(seekOperation))
+                       .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name", Some(err)))
+      seekedKey   <- ZIO
+                       .fromEither(keyCodec.decode(cursor.key()))
+                       .when(seekSuccess)
+                       .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $name", None))
+      valBuffer   <- ZIO
+                       .attempt(cursor.`val`())
+                       .when(seekSuccess)
+                       .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $name", Some(err)))
+      seekedValue <- ZIO
+                       .foreach(valBuffer) { rawValue =>
+                         ZIO
+                           .fromEither(toKeyCodec.decode(rawValue))
+                           .mapError[FetchErrors](msg => CodecFailure(msg))
+                       }
+                       .when(seekSuccess)
+                       .map(_.flatten)
+    } yield seekedValue.flatMap(v => seekedKey.map(k => k -> v))
+  }
+
+  /** @inheritdoc */
+  override def indexHead[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    indexSeek(name, None, SeekOp.MDB_FIRST)
+
+  /** @inheritdoc */
+  override def indexLast[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    indexSeek(name, None, SeekOp.MDB_LAST)
+
+  /** @inheritdoc */
+  override def indexPrevious[FROM_KEY, TO_KEY](name: IndexName, beforeThatKey: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    indexSeek(name, Some(beforeThatKey), SeekOp.MDB_PREV)
+
+  /** @inheritdoc */
+  override def indexNext[FROM_KEY, TO_KEY](name: IndexName, afterThatKey: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    indexSeek(name, Some(afterThatKey), SeekOp.MDB_NEXT)
+
   /** logic for checking if an index contains a mapping
     * @param txn
     *   transaction
@@ -1257,6 +1361,37 @@ class LMDBLive(
         res <- ZIO.scoped(indexContainsLogic(txn, dbi, name, key, targetKey))
       } yield res
     }
+
+    /** @inheritdoc */
+    override def indexHasKey[FROM_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY]): IO[IndexErrors, Boolean] = {
+      for {
+        dbi <- getIndexDbi(name, Some(txn))
+        res <- ZIO.scoped(indexHasKeyLogic(txn, dbi, name, key))
+      } yield res
+    }
+
+    private def indexSeek[FROM_KEY, TO_KEY](name: IndexName, recordKey: Option[FROM_KEY], seekOperation: SeekOp)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
+      for {
+        db  <- getIndexDbi(name, Some(txn)).catchAll { case IndexNotFound(n) => ZIO.fail(CollectionNotFound(n): FetchErrors) }
+        res <- ZIO.scoped(indexSeekLogic(txn, db, name, recordKey, seekOperation)(keyCodec, toKeyCodec))
+      } yield res
+    }
+
+    /** @inheritdoc */
+    override def indexHead[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+      indexSeek(name, None, SeekOp.MDB_FIRST)
+
+    /** @inheritdoc */
+    override def indexLast[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+      indexSeek(name, None, SeekOp.MDB_LAST)
+
+    /** @inheritdoc */
+    override def indexPrevious[FROM_KEY, TO_KEY](name: IndexName, beforeThatKey: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+      indexSeek(name, Some(beforeThatKey), SeekOp.MDB_PREV)
+
+    /** @inheritdoc */
+    override def indexNext[FROM_KEY, TO_KEY](name: IndexName, afterThatKey: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+      indexSeek(name, Some(afterThatKey), SeekOp.MDB_NEXT)
   }
 
   /** Live implementation of read-write operations using a shared transaction. */

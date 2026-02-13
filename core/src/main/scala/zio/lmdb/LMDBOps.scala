@@ -152,6 +152,55 @@ trait LMDBReadOps {
     key: FROM_KEY,
     targetKey: TO_KEY
   )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean]
+
+  /** Check if an index contains the given key
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to check
+    * @return
+    *   true if the index contains the key
+    */
+  def indexHasKey[FROM_KEY](
+    name: IndexName,
+    key: FROM_KEY
+  )(implicit keyCodec: KeyCodec[FROM_KEY]): IO[IndexErrors, Boolean]
+
+  /** Get index first record
+    * @param name
+    *   the index name
+    * @return
+    *   some (key,targetKey) tuple or none if the index is empty
+    */
+  def indexHead[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
+
+  /** Get the previous record for the given key in an index
+    * @param name
+    *   the index name
+    * @param beforeThatKey
+    *   the key of the reference record
+    * @return
+    *   some (key,targetKey) tuple or none if the key is the first one
+    */
+  def indexPrevious[FROM_KEY, TO_KEY](name: IndexName, beforeThatKey: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
+
+  /** Get the next record for the given key in an index
+    * @param name
+    *   the index name
+    * @param afterThatKey
+    *   the key of the reference record
+    * @return
+    *   some (key,targetKey) tuple or none if the key is the last one
+    */
+  def indexNext[FROM_KEY, TO_KEY](name: IndexName, afterThatKey: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
+
+  /** Get index last record
+    * @param name
+    *   the index name
+    * @return
+    *   some (key,targetKey) tuple or none if the index is empty
+    */
+  def indexLast[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
 }
 
 /** LMDB operations available within a read-write transaction context. */

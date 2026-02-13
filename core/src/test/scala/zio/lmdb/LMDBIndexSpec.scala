@@ -58,6 +58,46 @@ object LMDBIndexSpec extends ZIOSpecDefault with Commons {
         !contains1After
       )
     },
+    test("index navigation and key check") {
+      for {
+        indexName <- Random.nextUUID.map(_.toString)
+        index     <- LMDB.indexCreate[String, String](indexName)
+
+        key1 = "group1"
+        key2 = "group2"
+        key3 = "group3"
+        id1  = "item1"
+        id2  = "item2"
+        id3  = "item3"
+
+        _ <- index.index(key1, id1)
+        _ <- index.index(key1, id2)
+        _ <- index.index(key2, id3)
+
+        hasKey1 <- index.hasKey(key1)
+        hasKey2 <- index.hasKey(key2)
+        hasKey3 <- index.hasKey(key3)
+
+        head <- index.head()
+        last <- index.last()
+
+        nextKey1 <- index.next(key1)
+        prevKey2 <- index.previous(key2)
+        prevKey1 <- index.previous(key1)
+        nextKey2 <- index.next(key2) // Should be None as it is the last one
+
+      } yield assertTrue(
+        hasKey1,
+        hasKey2,
+        !hasKey3,
+        head.contains((key1, id1)),
+        last.contains((key2, id3)),
+        nextKey1.contains((key1, id2)), // Next after first entry of key1 is second entry of key1
+        prevKey2.contains((key1, id2)), // Previous before first entry of key2 is last entry of key1
+        prevKey1.isEmpty,               // Previous before first entry of key1 is None
+        nextKey2.isEmpty
+      )
+    },
     test("index duplicate values") {
       for {
         indexName <- Random.nextUUID.map(_.toString)

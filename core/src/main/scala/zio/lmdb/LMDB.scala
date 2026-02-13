@@ -410,6 +410,73 @@ trait LMDB {
     targetKey: TO_KEY
   )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean]
 
+  /** Check if an index contains the given key
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to check
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @return
+    *   true if the index contains the key
+    */
+  def indexHasKey[FROM_KEY](
+    name: IndexName,
+    key: FROM_KEY
+  )(implicit keyCodec: KeyCodec[FROM_KEY]): IO[IndexErrors, Boolean]
+
+  /** Get index first record
+    * @param name
+    *   the index name
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   some (key,targetKey) tuple or none if the index is empty
+    */
+  def indexHead[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
+
+  /** Get the previous record for the given key in an index
+    * @param name
+    *   the index name
+    * @param beforeThatKey
+    *   the key of the reference record
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   some (key,targetKey) tuple or none if the key is the first one
+    */
+  def indexPrevious[FROM_KEY, TO_KEY](name: IndexName, beforeThatKey: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
+
+  /** Get the next record for the given key in an index
+    * @param name
+    *   the index name
+    * @param afterThatKey
+    *   the key of the reference record
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   some (key,targetKey) tuple or none if the key is the last one
+    */
+  def indexNext[FROM_KEY, TO_KEY](name: IndexName, afterThatKey: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
+
+  /** Get index last record
+    * @param name
+    *   the index name
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   some (key,targetKey) tuple or none if the index is empty
+    */
+  def indexLast[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
+
   /** Remove a mapping from an index
     * @param name
     *   the index name
@@ -903,6 +970,78 @@ object LMDB {
     targetKey: TO_KEY
   )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[LMDB, IndexErrors, Boolean] =
     ZIO.serviceWithZIO(_.indexContains(name, key, targetKey))
+
+  /** Check if an index contains the given key
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to check
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @return
+    *   true if the index contains the key
+    */
+  def indexHasKey[FROM_KEY](
+    name: IndexName,
+    key: FROM_KEY
+  )(implicit keyCodec: KeyCodec[FROM_KEY]): ZIO[LMDB, IndexErrors, Boolean] =
+    ZIO.serviceWithZIO(_.indexHasKey(name, key))
+
+  /** Get index first record
+    * @param name
+    *   the index name
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   some (key,targetKey) tuple or none if the index is empty
+    */
+  def indexHead[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[LMDB, FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    ZIO.serviceWithZIO(_.indexHead(name))
+
+  /** Get the previous record for the given key in an index
+    * @param name
+    *   the index name
+    * @param beforeThatKey
+    *   the key of the reference record
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   some (key,targetKey) tuple or none if the key is the first one
+    */
+  def indexPrevious[FROM_KEY, TO_KEY](name: IndexName, beforeThatKey: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[LMDB, FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    ZIO.serviceWithZIO(_.indexPrevious(name, beforeThatKey))
+
+  /** Get the next record for the given key in an index
+    * @param name
+    *   the index name
+    * @param afterThatKey
+    *   the key of the reference record
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   some (key,targetKey) tuple or none if the key is the last one
+    */
+  def indexNext[FROM_KEY, TO_KEY](name: IndexName, afterThatKey: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[LMDB, FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    ZIO.serviceWithZIO(_.indexNext(name, afterThatKey))
+
+  /** Get index last record
+    * @param name
+    *   the index name
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   some (key,targetKey) tuple or none if the index is empty
+    */
+  def indexLast[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[LMDB, FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    ZIO.serviceWithZIO(_.indexLast(name))
 
   /** Remove a mapping from an index
     * @param name

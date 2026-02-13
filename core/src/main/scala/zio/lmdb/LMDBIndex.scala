@@ -62,6 +62,44 @@ case class LMDBIndex[FROM_KEY, TO_KEY](
     toKey: TO_KEY
   ): IO[IndexErrors, Boolean] = lmdb.indexContains[FROM_KEY, TO_KEY](name, key, toKey)
 
+  /** Check if the index contains the given key
+    * @param key
+    *   the key to check
+    * @return
+    *   true if the index contains the key
+    */
+  def hasKey(
+    key: FROM_KEY
+  ): IO[IndexErrors, Boolean] = lmdb.indexHasKey[FROM_KEY](name, key)
+
+  /** Get index first record
+    * @return
+    *   some (key,targetKey) tuple or none if the index is empty
+    */
+  def head(): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = lmdb.indexHead[FROM_KEY, TO_KEY](name)
+
+  /** Get the previous record for the given key in an index
+    * @param beforeThatKey
+    *   the key of the reference record
+    * @return
+    *   some (key,targetKey) tuple or none if the key is the first one
+    */
+  def previous(beforeThatKey: FROM_KEY): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = lmdb.indexPrevious[FROM_KEY, TO_KEY](name, beforeThatKey)
+
+  /** Get the next record for the given key in an index
+    * @param afterThatKey
+    *   the key of the reference record
+    * @return
+    *   some (key,targetKey) tuple or none if the key is the last one
+    */
+  def next(afterThatKey: FROM_KEY): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = lmdb.indexNext[FROM_KEY, TO_KEY](name, afterThatKey)
+
+  /** Get index last record
+    * @return
+    *   some (key,targetKey) tuple or none if the index is empty
+    */
+  def last(): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = lmdb.indexLast[FROM_KEY, TO_KEY](name)
+
   /** Remove a mapping from the index
     * @param key
     *   the key to unindex
@@ -144,6 +182,26 @@ case class LMDBIndexReadOps[FROM_KEY, TO_KEY](
   /** Check if the index contains the given mapping */
   def contains(key: FROM_KEY, toKey: TO_KEY): IO[IndexErrors, Boolean] =
     ops.indexContains(index.name, key, toKey)
+
+  /** Check if the index contains the given key */
+  def hasKey(key: FROM_KEY): IO[IndexErrors, Boolean] =
+    ops.indexHasKey(index.name, key)
+
+  /** Get index first record */
+  def head(): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    ops.indexHead(index.name)
+
+  /** Get the previous record for the given key in an index */
+  def previous(beforeThatKey: FROM_KEY): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    ops.indexPrevious(index.name, beforeThatKey)
+
+  /** Get the next record for the given key in an index */
+  def next(afterThatKey: FROM_KEY): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    ops.indexNext(index.name, afterThatKey)
+
+  /** Get index last record */
+  def last(): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    ops.indexLast(index.name)
 }
 
 /** Index-specific read-write operations available within a transaction.
