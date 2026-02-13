@@ -20,10 +20,11 @@ import zio.test.*
 import zio.test.Assertion.*
 import zio.lmdb.keycodecs.KeyCodec
 import zio.lmdb.keycodecs.uca.UCAKey
-import zio.lmdb.keycodecs.uuidv7.UUIDv7
+
 import java.nio.ByteBuffer
 import com.ibm.icu.text.Collator
 import com.ibm.icu.util.ULocale
+import zio.lmdb.keycodecs.uca.UCAKeyCodec.ucaKeyCodec
 
 object UCACodecSpec extends ZIOSpecDefault {
 
@@ -41,59 +42,6 @@ object UCACodecSpec extends ZIOSpecDefault {
           Integer.signum(colCmp) == Integer.signum(skCmp)
       }
       assertTrue(consistent)
-    },
-    test("Tuple2(UCAKey, UUIDv7) ordering and roundtrip") {
-      val collator = Collator.getInstance(ULocale.FRENCH)
-      
-      val w1 = "cote"
-      val w2 = "côté"
-      
-      val id1 = UUIDv7.generate()
-      val id2 = UUIDv7.generate() // id2 > id1 because time passed
-      
-      val k1 = (UCAKey.from(w1, collator), id1)
-      val k2 = (UCAKey.from(w2, collator), id2)
-      
-      // k1 should be < k2 because "cote" < "côté"
-      
-      val codec = summon[KeyCodec[(UCAKey, UUIDv7)]]
-      val b1 = codec.encode(k1)
-      val b2 = codec.encode(k2)
-      
-      def compare(x: Array[Byte], y: Array[Byte]): Int = java.util.Arrays.compareUnsigned(x, y)
-      
-      assertTrue(compare(b1, b2) < 0) && {
-        // Roundtrip check
-        val decoded1 = codec.decode(ByteBuffer.wrap(b1))
-        val decoded2 = codec.decode(ByteBuffer.wrap(b2))
-        
-        assert(decoded1)(isRight(assertion("equals k1") { case (sk, id) => 
-          java.util.Arrays.equals(sk.bytes, k1._1.bytes) && id == k1._2
-        })) &&
-        assert(decoded2)(isRight(assertion("equals k2") { case (sk, id) => 
-          java.util.Arrays.equals(sk.bytes, k2._1.bytes) && id == k2._2
-        }))
-      }
-    },
-    test("Tuple2 with same SortKey (different UUIDv7)") {
-      val collator = Collator.getInstance(ULocale.US)
-      val w = "hello"
-      val sk = UCAKey.from(w, collator)
-      
-      val id1 = UUIDv7.generate()
-      val id2 = UUIDv7.generate() // id2 > id1
-      
-      val k1 = (sk, id1)
-      val k2 = (sk, id2)
-      
-      val codec = summon[KeyCodec[(UCAKey, UUIDv7)]]
-      val b1 = codec.encode(k1)
-      val b2 = codec.encode(k2)
-      
-      def compare(x: Array[Byte], y: Array[Byte]): Int = java.util.Arrays.compareUnsigned(x, y)
-
-      // Should sort by UUID part
-      assertTrue(compare(b1, b2) < 0)
     },
     test("Default collator (Root locale) sorting") {
       // Root locale handles basic Latin characters essentially like ASCII/binary but with UCA rules

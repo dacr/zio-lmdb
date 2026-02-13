@@ -25,24 +25,24 @@ import java.time.Instant
 
 opaque type UUIDv7 = UUID
 
+extension (uuid: UUIDv7) {
+  def asUUID: UUID = uuid
+}
+
 object UUIDv7 {
-  def apply(uuid: UUID): UUIDv7 = uuid
-  
-  def generate(): UUIDv7 = UuidCreator.getTimeOrderedEpoch()
+  def apply(uuid: UUID): UUIDv7          = uuid
+  def generate(): UUIDv7                 = UUIDv7(UuidCreator.getTimeOrderedEpoch())
+  def generate(instant: Instant): UUIDv7 = UUIDv7(UuidCreator.getTimeOrderedEpoch(instant))
+}
 
-  def generate(instant: Instant): UUIDv7 = UuidCreator.getTimeOrderedEpoch(instant)
-
-  extension (uuid: UUIDv7) {
-    def toUUID: UUID = uuid
-  }
-
+object UUIDv7Codec {
   given KeyCodec[UUIDv7] = new KeyCodec[UUIDv7] {
     private val codec = zio.lmdb.keycodecs.KeyCodec.uuidKeyCodec
 
-    override def encode(key: UUIDv7): Array[Byte] = codec.encode(key)
+    override def encode(key: UUIDv7): Array[Byte] = codec.encode(key.asUUID)
 
     override def decode(keyBytes: ByteBuffer): Either[String, UUIDv7] =
-      codec.decode(keyBytes).map(UUIDv7(_))
+      codec.decode(keyBytes).map(UUIDv7.apply)
 
     override def width: Option[Int] = Some(16)
   }

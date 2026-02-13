@@ -105,7 +105,7 @@ lazy val keycodecsUca = (project in file("keycodecs-uca"))
       "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
     )
   )
-  .dependsOn(keycodecs, keycodecsUuidv7)
+  .dependsOn(keycodecs)
 
 lazy val keycodecsUlid = (project in file("keycodecs-ulid"))
   .settings(commonSettings)

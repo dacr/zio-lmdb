@@ -17,42 +17,43 @@ package zio.lmdb.keycodecs.uca
 
 import com.ibm.icu.text.Collator
 import zio.lmdb.keycodecs.KeyCodec
-import java.nio.ByteBuffer
-import java.util.Arrays
 
+import java.nio.ByteBuffer
 import com.ibm.icu.util.ULocale
 
 opaque type UCAKey = Array[Byte]
 
 object UCAKey {
   def apply(bytes: Array[Byte]): UCAKey = bytes
-  
+
   def from(text: String, collator: Collator = Collator.getInstance(ULocale.ROOT)): UCAKey = {
-    collator.getCollationKey(text).toByteArray
+    UCAKey(collator.getCollationKey(text).toByteArray)
   }
 
-  def fromBase64(base64: String): UCAKey = 
-    java.util.Base64.getDecoder.decode(base64)
-  
-  extension (key: UCAKey) {
-    def bytes: Array[Byte] = key
-    
-    def compare(other: UCAKey): Int = 
-      Arrays.compareUnsigned(key, other)
+  def fromBase64(base64: String): UCAKey =
+    UCAKey(java.util.Base64.getDecoder.decode(base64))
+}
 
-    def toBase64: String = 
-      java.util.Base64.getEncoder.encodeToString(key)
-  }
+extension (key: UCAKey) {
+  def bytes: Array[Byte] = key
 
+  def compare(other: UCAKey): Int =
+    java.util.Arrays.compareUnsigned(key, other)
+
+  def toBase64: String =
+    java.util.Base64.getEncoder.encodeToString(key)
+}
+
+object UCAKeyCodec {
   given ucaKeyCodec: KeyCodec[UCAKey] = new KeyCodec[UCAKey] {
-    override def encode(key: UCAKey): Array[Byte] = key
-    
+    override def encode(key: UCAKey): Array[Byte] = key.bytes
+
     override def decode(keyBytes: ByteBuffer): Either[String, UCAKey] = {
       val bytes = new Array[Byte](keyBytes.remaining())
       keyBytes.get(bytes)
-      Right(bytes)
+      Right(UCAKey(bytes))
     }
-    
-    override def width: Option[Int] = None 
+
+    override def width: Option[Int] = None
   }
 }
