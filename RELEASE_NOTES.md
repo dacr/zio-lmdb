@@ -4,6 +4,10 @@
 
 - KeyCodec API consistency improvements
 - Indexes API improvements
+  - head, last, next, previous operations added
+  - indexed signature modified
+    - no longer limited to only key associated values (with `limitToKey=false`)
+    - now returns both the `from` key and the `to` key
 
 ## 2.3 - 2026-02-01
 

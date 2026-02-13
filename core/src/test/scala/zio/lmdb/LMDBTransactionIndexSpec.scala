@@ -50,7 +50,7 @@ object LMDBTransactionIndexSpec extends ZIOSpecDefault with Commons {
 
         _ <- assertTrue(
           alice.exists(_.name == userName),
-          indexedId.contains(userId)
+          indexedId.contains((userName, userId))
         )
 
         // Transactional update: rename user and update index
@@ -74,7 +74,7 @@ object LMDBTransactionIndexSpec extends ZIOSpecDefault with Commons {
       } yield assertTrue(
         bob.exists(_.name == newUserName),
         oldIndex.isEmpty,
-        newIndex.contains(userId)
+        newIndex.contains((newUserName, userId))
       )
     },
     test("readOnly transaction on index") {

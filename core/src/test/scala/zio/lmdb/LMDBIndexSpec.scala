@@ -53,8 +53,8 @@ object LMDBIndexSpec extends ZIOSpecDefault with Commons {
         contains1,
         contains2,
         !contains3,
-        items == Chunk(id1, id2),
-        itemsAfterUnindex == Chunk(id2),
+        items == Chunk((key1, id1), (key1, id2)),
+        itemsAfterUnindex == Chunk((key1, id2)),
         !contains1After
       )
     },
@@ -114,7 +114,35 @@ object LMDBIndexSpec extends ZIOSpecDefault with Commons {
         items <- index.indexed(key).runCollect
       } yield assertTrue(
         items.size == 1,
-        items.head == otherKey
+        items.head == (key, otherKey)
+      )
+    },
+    test("index iteration logic") {
+      for {
+        indexName <- Random.nextUUID.map(_.toString)
+        index     <- LMDB.indexCreate[String, String](indexName)
+
+        key1 = "group1"
+        key2 = "group2"
+        id1  = "item1"
+        id2  = "item2"
+        id3  = "item3"
+
+        _ <- index.index(key1, id1)
+        _ <- index.index(key1, id2)
+        _ <- index.index(key2, id3)
+
+        // limitToKey = true (default)
+        items1 <- index.indexed(key1).runCollect
+        items2 <- index.indexed(key2).runCollect
+
+        // limitToKey = false
+        items1Full <- index.indexed(key1, limitToKey = false).runCollect
+
+      } yield assertTrue(
+        items1 == Chunk((key1, id1), (key1, id2)),
+        items2 == Chunk((key2, id3)),
+        items1Full == Chunk((key1, id1), (key1, id2), (key2, id3))
       )
     }
   ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom @@ timed

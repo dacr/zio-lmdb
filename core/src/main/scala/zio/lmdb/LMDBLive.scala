@@ -1179,7 +1179,7 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def indexed[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZStream[Any, IndexErrors, TO_KEY] = {
+  override def indexed[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY, limitToKey: Boolean)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZStream[Any, IndexErrors, (FROM_KEY, TO_KEY)] = {
     ZStream.unwrapScoped {
       for {
         db <- getIndexDbi(name)
@@ -1208,20 +1208,29 @@ class LMDBLive(
           ZStream.paginateChunkZIO(true) { isFirst =>
             ZIO
               .attemptBlocking {
-                val valid = if (isFirst) true else cursor.seek(SeekOp.MDB_NEXT_DUP)
+                val valid =
+                  if (isFirst) true
+                  else if (limitToKey) cursor.seek(SeekOp.MDB_NEXT_DUP)
+                  else cursor.seek(SeekOp.MDB_NEXT)
                 if (valid) {
                   val v = cursor.`val`()
-                  Some(v)
+                  val k = cursor.key()
+                  Some((k, v))
                 } else None
               }
               .mapError(e => InternalError("Cursor iteration error", Some(e)): IndexErrors)
               .flatMap {
-                case Some(v) =>
+                case Some((k, v)) =>
+                  val decoded = for {
+                    key   <- keyCodec.decode(k)
+                    value <- toKeyCodec.decode(v)
+                  } yield (key, value)
+
                   ZIO
-                    .fromEither(toKeyCodec.decode(v))
+                    .fromEither(decoded)
                     .mapError(e => CodecFailure(e): IndexErrors)
                     .map(d => (Chunk(d), Some(false)))
-                case None    =>
+                case None =>
                   ZIO.succeed((Chunk.empty, None))
               }
           }

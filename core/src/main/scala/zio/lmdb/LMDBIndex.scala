@@ -116,12 +116,15 @@ case class LMDBIndex[FROM_KEY, TO_KEY](
   /** Get a stream of target keys for a given key in the index
     * @param key
     *   the key to look for
+    * @param limitToKey
+    *   limit results to values belonging to the given key only (no key jump), default is true
     * @return
     *   a stream of target keys
     */
   def indexed(
-    key: FROM_KEY
-  ): ZStream[Any, IndexErrors, TO_KEY] = lmdb.indexed[FROM_KEY, TO_KEY](name, key)
+    key: FROM_KEY,
+    limitToKey: Boolean = true
+  ): ZStream[Any, IndexErrors, (FROM_KEY, TO_KEY)] = lmdb.indexed[FROM_KEY, TO_KEY](name, key, limitToKey)
 
   /** Execute a series of read operations on this index within a single read-only transaction.
     * @param f

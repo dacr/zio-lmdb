@@ -502,6 +502,8 @@ trait LMDB {
     *   the index name
     * @param key
     *   the key to look for
+    * @param limitToKey
+    *   limit results to values belonging to the given key only (no key jump), default is true
     * @tparam FROM_KEY
     *   the type of the key
     * @tparam TO_KEY
@@ -511,8 +513,9 @@ trait LMDB {
     */
   def indexed[FROM_KEY, TO_KEY](
     name: IndexName,
-    key: FROM_KEY
-  )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZStream[Any, IndexErrors, TO_KEY]
+    key: FROM_KEY,
+    limitToKey: Boolean = true
+  )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZStream[Any, IndexErrors, (FROM_KEY, TO_KEY)]
 
   /** Execute a series of read operations within a single read-only transaction.
     * @param f
@@ -1069,6 +1072,8 @@ object LMDB {
     *   the index name
     * @param key
     *   the key to look for
+    * @param limitToKey
+    *   limit results to values belonging to the given key only (no key jump), default is true
     * @tparam FROM_KEY
     *   the type of the key
     * @tparam TO_KEY
@@ -1078,9 +1083,10 @@ object LMDB {
     */
   def indexed[FROM_KEY, TO_KEY](
     name: IndexName,
-    key: FROM_KEY
-  )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZStream[LMDB, IndexErrors, TO_KEY] =
-    ZStream.serviceWithStream(_.indexed(name, key))
+    key: FROM_KEY,
+    limitToKey: Boolean = true
+  )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZStream[LMDB, IndexErrors, (FROM_KEY, TO_KEY)] =
+    ZStream.serviceWithStream(_.indexed(name, key, limitToKey))
 
   /** Execute a series of read operations within a single read-only transaction.
     * @param f
