@@ -477,6 +477,34 @@ trait LMDB {
     */
   def indexLast[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
 
+  /** Get an index record
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to fetch
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   some targetKey or none if the index is empty
+    */
+  def indexFetch[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[TO_KEY]]
+
+  /** Get an index record at a specific position
+    * @param name
+    *   the index name
+    * @param position
+    *   the position to fetch
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   some (key,targetKey) tuple or none if the index is empty
+    */
+  def indexFetchAt[FROM_KEY, TO_KEY](name: IndexName, position: Long)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
+
   /** Remove a mapping from an index
     * @param name
     *   the index name
@@ -1045,6 +1073,36 @@ object LMDB {
     */
   def indexLast[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[LMDB, FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
     ZIO.serviceWithZIO(_.indexLast(name))
+
+  /** Get an index record
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to fetch
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   some targetKey or none if the index is empty
+    */
+  def indexFetch[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[LMDB, FetchErrors, Option[TO_KEY]] =
+    ZIO.serviceWithZIO(_.indexFetch(name, key))
+
+  /** Get an index record at a specific position
+    * @param name
+    *   the index name
+    * @param position
+    *   the position to fetch
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   some (key,targetKey) tuple or none if the index is empty
+    */
+  def indexFetchAt[FROM_KEY, TO_KEY](name: IndexName, position: Long)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[LMDB, FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    ZIO.serviceWithZIO(_.indexFetchAt(name, position))
 
   /** Remove a mapping from an index
     * @param name

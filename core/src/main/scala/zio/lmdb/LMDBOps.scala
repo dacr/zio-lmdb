@@ -201,6 +201,26 @@ trait LMDBReadOps {
     *   some (key,targetKey) tuple or none if the index is empty
     */
   def indexLast[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
+
+  /** Get an index record
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to fetch
+    * @return
+    *   some targetKey or none if the index is empty
+    */
+  def indexFetch[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[TO_KEY]]
+
+  /** Get an index record at a specific position
+    * @param name
+    *   the index name
+    * @param position
+    *   the position to fetch
+    * @return
+    *   some (key,targetKey) tuple or none if the index is empty
+    */
+  def indexFetchAt[FROM_KEY, TO_KEY](name: IndexName, position: Long)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
 }
 
 /** LMDB operations available within a read-write transaction context. */

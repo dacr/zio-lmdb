@@ -144,6 +144,40 @@ object LMDBIndexSpec extends ZIOSpecDefault with Commons {
         items2 == Chunk((key2, id3)),
         items1Full == Chunk((key1, id1), (key1, id2), (key2, id3))
       )
+    },
+    test("index fetch and fetchAt") {
+      for {
+        indexName <- Random.nextUUID.map(_.toString)
+        index     <- LMDB.indexCreate[String, String](indexName)
+
+        key1 = "group1"
+        key2 = "group2"
+        id1  = "item1"
+        id2  = "item2"
+        id3  = "item3"
+
+        _ <- index.index(key1, id1)
+        _ <- index.index(key1, id2)
+        _ <- index.index(key2, id3)
+
+        fetch1 <- index.fetch(key1)
+        fetch2 <- index.fetch(key2)
+        fetch3 <- index.fetch("unknown")
+
+        at0 <- index.fetchAt(0)
+        at1 <- index.fetchAt(1)
+        at2 <- index.fetchAt(2)
+        at3 <- index.fetchAt(3)
+
+      } yield assertTrue(
+        fetch1.contains(id1),
+        fetch2.contains(id3),
+        fetch3.isEmpty,
+        at0.contains((key1, id1)),
+        at1.contains((key1, id2)),
+        at2.contains((key2, id3)),
+        at3.isEmpty
+      )
     }
   ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom @@ timed
 }

@@ -100,6 +100,26 @@ case class LMDBIndex[FROM_KEY, TO_KEY](
     */
   def last(): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = lmdb.indexLast[FROM_KEY, TO_KEY](name)
 
+  /** Get an index record
+    * @param key
+    *   the key to fetch
+    * @return
+    *   some targetKey or none if the index is empty
+    */
+  def fetch(
+    key: FROM_KEY
+  ): IO[FetchErrors, Option[TO_KEY]] = lmdb.indexFetch[FROM_KEY, TO_KEY](name, key)
+
+  /** Get an index record at a specific position
+    * @param position
+    *   the position to fetch
+    * @return
+    *   some (key,targetKey) tuple or none if the index is empty
+    */
+  def fetchAt(
+    position: Long
+  ): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = lmdb.indexFetchAt[FROM_KEY, TO_KEY](name, position)
+
   /** Remove a mapping from the index
     * @param key
     *   the key to unindex
@@ -205,6 +225,14 @@ case class LMDBIndexReadOps[FROM_KEY, TO_KEY](
   /** Get index last record */
   def last(): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
     ops.indexLast(index.name)
+
+  /** Get an index record */
+  def fetch(key: FROM_KEY): IO[FetchErrors, Option[TO_KEY]] =
+    ops.indexFetch(index.name, key)
+
+  /** Get an index record at a specific position */
+  def fetchAt(position: Long): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
+    ops.indexFetchAt(index.name, position)
 }
 
 /** Index-specific read-write operations available within a transaction.

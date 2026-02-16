@@ -54,8 +54,8 @@ class LMDBLive(
     if (keyBytes.length > env.getMaxKeySize) ZIO.fail(OverSizedKey(id.toString, keyBytes.length, env.getMaxKeySize)) // TODO id.toString probably not the best choice
     else
       for {
-        key <- ZIO.attempt(ByteBuffer.allocateDirect(keyBytes.length)).mapError(err => InternalError("Couldn't allocate byte buffer for key", Some(err)))
-        _   <- ZIO.attempt(key.put(keyBytes).flip).mapError(err => InternalError("Couldn't copy key bytes to buffer", Some(err)))
+        key <- ZIO.attempt(ByteBuffer.allocateDirect(keyBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for key: $err", Some(err)))
+        _   <- ZIO.attempt(key.put(keyBytes).flip).mapError(err => InternalError(s"Couldn't copy key bytes to buffer: $err", Some(err)))
       } yield key
   }
 
@@ -111,7 +111,7 @@ class LMDBLive(
   private def collectionSizeLogic(txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: CollectionName): IO[SizeErrors, Long] = {
     ZIO
       .attempt(dbi.stat(txn))
-      .mapError(err => InternalError(s"Couldn't get $name size", Some(err)))
+      .mapError(err => InternalError(s"Couldn't get $name size: $err", Some(err)))
       .map(_.entries)
   }
 
@@ -144,7 +144,7 @@ class LMDBLive(
                                 for {
                                   newDbi <- ZIO
                                               .attemptBlocking(env.openDbi(name, DbiFlags.MDB_CREATE))
-                                              .mapError(err => InternalError(s"Couldn't create DB $name", Some(err)))
+                                              .mapError(err => InternalError(s"Couldn't create DB $name: $err", Some(err)))
                                   _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
                                 } yield ()
                               }
@@ -156,7 +156,7 @@ class LMDBLive(
     ZIO.acquireReleaseWith(
       ZIO
         .attemptBlocking(env.txnWrite())
-        .mapError(err => InternalError(s"Couldn't acquire write transaction on $colName", Some(err)))
+        .mapError(err => InternalError(s"Couldn't acquire write transaction on $colName: $err", Some(err)))
     )(txn =>
       ZIO
         .attemptBlocking(txn.close())
@@ -168,7 +168,7 @@ class LMDBLive(
     ZIO.acquireReleaseWith(
       ZIO
         .attemptBlocking(env.txnRead())
-        .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+        .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
     )(txn =>
       ZIO
         .attemptBlocking(txn.close())
@@ -182,10 +182,10 @@ class LMDBLive(
         for {
           _ <- ZIO
                  .attemptBlocking(colDbi.drop(txn, dropDatabase))
-                 .mapError(err => InternalError(s"Couldn't ${if (dropDatabase) "drop" else "clear"} $collectionName", Some(err)))
+                 .mapError(err => InternalError(s"Couldn't ${if (dropDatabase) "drop" else "clear"} $collectionName: $err", Some(err)))
           _ <- ZIO
                  .attemptBlocking(txn.commit())
-                 .mapError[ClearErrors](err => InternalError("Couldn't commit transaction", Some(err)))
+                 .mapError[ClearErrors](err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
         } yield ()
       }
     )
@@ -199,7 +199,7 @@ class LMDBLive(
                          withWriteTransaction(colName) { txn =>
                            for {
                              _ <- collectionClearLogic(txn, collectionDbi, colName)
-                             _ <- ZIO.attemptBlocking(txn.commit()).mapError[ClearErrors](err => InternalError("Couldn't commit transaction", Some(err)))
+                             _ <- ZIO.attemptBlocking(txn.commit()).mapError[ClearErrors](err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
                            } yield ()
                          }
                        )
@@ -209,7 +209,7 @@ class LMDBLive(
   private def collectionClearLogic(txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName): IO[ClearErrors, Unit] = {
     ZIO
       .attemptBlocking(dbi.drop(txn, false))
-      .mapError(err => InternalError(s"Couldn't clear $colName", Some(err)))
+      .mapError(err => InternalError(s"Couldn't clear $colName: $err", Some(err)))
       .unit
   }
 
@@ -222,7 +222,7 @@ class LMDBLive(
       _             <- reentrantLock.withWriteLock(
                          ZIO
                            .attemptBlocking(collectionDbi.close()) // TODO check close documentation more precisely at it states : It is very rare that closing a database handle is useful.
-                           .mapError[DropErrors](err => InternalError("Couldn't close collection internal handler", Some(err)))
+                           .mapError[DropErrors](err => InternalError(s"Couldn't close collection internal handler: $err", Some(err)))
                        )
     } yield ()
   }
@@ -247,7 +247,7 @@ class LMDBLive(
                                  .map(bytes => new String(bytes))
                                  .toList
                              )
-                             .mapError(err => InternalError("Couldn't list collections", Some(err)))
+                             .mapError(err => InternalError(s"Couldn't list collections: $err", Some(err)))
       } yield collectionNames
     )
   }
@@ -260,7 +260,7 @@ class LMDBLive(
                   withWriteTransaction(colName) { txn =>
                     for {
                       res <- deleteLogic(txn, db, colName, key)
-                      _   <- ZIO.attemptBlocking(txn.commit()).mapError[DeleteErrors](err => InternalError("Couldn't commit transaction", Some(err)))
+                      _   <- ZIO.attemptBlocking(txn.commit()).mapError[DeleteErrors](err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
                     } yield res
                   }
                 )
@@ -270,12 +270,12 @@ class LMDBLive(
   private def deleteLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
     for {
       keyBB         <- makeKeyByteBuffer(key)
-      found         <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[DeleteErrors](err => InternalError(s"Couldn't fetch $key for delete on $colName", Some(err)))
+      found         <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[DeleteErrors](err => InternalError(s"Couldn't fetch $key for delete on $colName: $err", Some(err)))
       mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
       mayBeDoc      <- ZIO.foreach(mayBeRawValue) { rawValue =>
                          ZIO.fromEither(codec.decode(rawValue)).mapError[DeleteErrors](msg => CodecFailure(msg))
                        }
-      _             <- ZIO.attemptBlocking(dbi.delete(txn, keyBB)).mapError[DeleteErrors](err => InternalError(s"Couldn't delete $key from $colName", Some(err)))
+      _             <- ZIO.attemptBlocking(dbi.delete(txn, keyBB)).mapError[DeleteErrors](err => InternalError(s"Couldn't delete $key from $colName: $err", Some(err)))
     } yield mayBeDoc
   }
 
@@ -292,7 +292,7 @@ class LMDBLive(
   private def fetchLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Any, FetchErrors, Option[T]] = {
     for {
       keyBB         <- makeKeyByteBuffer(key)
-      found         <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[FetchErrors](err => InternalError(s"Couldn't fetch $key on $colName", Some(err)))
+      found         <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[FetchErrors](err => InternalError(s"Couldn't fetch $key on $colName: $err", Some(err)))
       mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
       document      <- ZIO
                          .foreach(mayBeRawValue) { rawValue =>
@@ -310,7 +310,7 @@ class LMDBLive(
                     txn <- ZIO.acquireRelease(
                              ZIO
                                .attemptBlocking(env.txnRead())
-                               .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                               .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
                            )(txn =>
                              ZIO
                                .attemptBlocking(txn.close())
@@ -339,7 +339,7 @@ class LMDBLive(
       cursor             <- ZIO.acquireRelease(
                               ZIO
                                 .attemptBlocking(dbi.openCursor(txn))
-                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
+                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
                             )(cursor =>
                               ZIO
                                 .attemptBlocking(cursor.close())
@@ -347,25 +347,84 @@ class LMDBLive(
                             )
       seekFirstSuccess   <- ZIO
                               .attempt(cursor.seek(SeekOp.MDB_FIRST))
-                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName", Some(err)))
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName: $err", Some(err)))
       seekAllNextSuccess <- ZIO
                               .attempt(cursor.seek(SeekOp.MDB_NEXT))
-                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName", Some(err)))
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName: $err", Some(err)))
                               .repeatN(index.toInt) // TODO review and optimize (support long, start from first or from last
                               .when(seekFirstSuccess)
       seeksSuccess        = seekAllNextSuccess.contains(true) || (index == 0 && seekFirstSuccess)
       seekedKey          <- ZIO
                               .fromEither(kodec.decode(cursor.key()))
                               .when(seeksSuccess)
-                              .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $colName", None))
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $colName: $err", None))
       valBuffer          <- ZIO
                               .attempt(cursor.`val`())
                               .when(seeksSuccess)
-                              .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $colName", Some(err)))
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $colName: $err", Some(err)))
       seekedValue        <- ZIO
                               .foreach(valBuffer) { rawValue =>
                                 ZIO
                                   .fromEither(codec.decode(rawValue))
+                                  .mapError[FetchErrors](msg => CodecFailure(msg))
+                              }
+                              .when(seeksSuccess)
+                              .map(_.flatten)
+
+    } yield seekedValue.flatMap(v => seekedKey.map(k => k -> v))
+  }
+
+  private def indexFetchLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[Scope, FetchErrors, Option[TO_KEY]] = {
+    for {
+      keyBuffer <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      cursor    <- ZIO.acquireRelease(
+                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
+                   )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
+      found     <- ZIO
+                     .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
+                     .mapError[FetchErrors](e => InternalError(s"Get error: $e", Some(e)))
+      result    <- if (found) {
+                     for {
+                       valBuffer <- ZIO.attempt(cursor.`val`()).mapError[FetchErrors](e => InternalError(s"Val error: $e", Some(e)))
+                       decoded   <- ZIO.fromEither(toKeyCodec.decode(valBuffer)).mapError[FetchErrors](e => CodecFailure(e))
+                     } yield Some(decoded)
+                   } else ZIO.succeed(None)
+    } yield result
+  }
+
+  private def indexFetchAtLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, position: Long)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[Scope, FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
+    for {
+      cursor             <- ZIO.acquireRelease(
+                              ZIO
+                                .attemptBlocking(dbi.openCursor(txn))
+                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $name: $err", Some(err)))
+                            )(cursor =>
+                              ZIO
+                                .attemptBlocking(cursor.close())
+                                .ignoreLogged
+                            )
+      seekFirstSuccess   <- ZIO
+                              .attempt(cursor.seek(SeekOp.MDB_FIRST))
+                                .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
+      seekAllNextSuccess <- if (position > 0) {
+                              ZIO
+                                .attempt(cursor.seek(SeekOp.MDB_NEXT))
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
+                                .repeatN(position.toInt - 1)
+                            } else ZIO.succeed(true)
+      seeksSuccess        = seekAllNextSuccess && seekFirstSuccess
+      seekedKey          <- ZIO
+                              .fromEither(keyCodec.decode(cursor.key()))
+                              .when(seeksSuccess)
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $name: $err", None))
+      valBuffer          <- ZIO
+                              .attempt(cursor.`val`())
+                              .when(seeksSuccess)
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $name: $err", Some(err)))
+      seekedValue        <- ZIO
+                              .foreach(valBuffer) { rawValue =>
+                                ZIO
+                                  .fromEither(toKeyCodec.decode(rawValue))
                                   .mapError[FetchErrors](msg => CodecFailure(msg))
                               }
                               .when(seeksSuccess)
@@ -382,7 +441,7 @@ class LMDBLive(
                     txn <- ZIO.acquireRelease(
                              ZIO
                                .attemptBlocking(env.txnRead())
-                               .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                               .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
                            )(txn =>
                              ZIO
                                .attemptBlocking(txn.close())
@@ -413,7 +472,7 @@ class LMDBLive(
       cursor      <- ZIO.acquireRelease(
                        ZIO
                          .attemptBlocking(dbi.openCursor(txn))
-                         .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
+                         .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
                      )(cursor =>
                        ZIO
                          .attemptBlocking(cursor.close())
@@ -423,19 +482,19 @@ class LMDBLive(
       _           <- ZIO.foreachDiscard(key) { k =>
                        ZIO
                          .attempt(cursor.get(k, GetOp.MDB_SET))
-                         .mapError[FetchErrors](err => InternalError(s"Couldn't set cursor at $recordKey for $colName", Some(err)))
+                         .mapError[FetchErrors](err => InternalError(s"Couldn't set cursor at $recordKey for $colName: $err", Some(err)))
                      }
       seekSuccess <- ZIO
                        .attempt(cursor.seek(seekOperation))
-                       .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName", Some(err)))
+                       .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName: $err", Some(err)))
       seekedKey   <- ZIO
                        .fromEither(kodec.decode(cursor.key()))
                        .when(seekSuccess)
-                       .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $colName", None))
+                        .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $colName: $err", None))
       valBuffer   <- ZIO
                        .attempt(cursor.`val`())
                        .when(seekSuccess)
-                       .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $colName", Some(err)))
+                       .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $colName: $err", Some(err)))
       seekedValue <- ZIO
                        .foreach(valBuffer) { rawValue =>
                          ZIO
@@ -448,6 +507,8 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
+
+
   override def head[K, T](collectionName: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
     seek(collectionName, None, SeekOp.MDB_FIRST)
   }
@@ -480,7 +541,7 @@ class LMDBLive(
   private def containsLogic[K](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): ZIO[Any, ContainsErrors, Boolean] = {
     for {
       keyBB <- makeKeyByteBuffer(key)
-      found <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[ContainsErrors](err => InternalError(s"Couldn't check $key on $colName", Some(err)))
+      found <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[ContainsErrors](err => InternalError(s"Couldn't check $key on $colName: $err", Some(err)))
     } yield found.isDefined
   }
 
@@ -492,7 +553,7 @@ class LMDBLive(
                          withWriteTransaction(collectionName) { txn =>
                            for {
                              res <- updateLogic(txn, collectionDbi, collectionName, key, modifier)
-                             _   <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError("Couldn't commit transaction", Some(err)))
+                             _   <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
                            } yield res
                          }
                        )
@@ -516,7 +577,7 @@ class LMDBLive(
   private def updateLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
     for {
       keyBB          <- makeKeyByteBuffer(key)
-      found          <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError(err => InternalError(s"Couldn't fetch $key for update on $collectionName", Some(err)))
+      found          <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError(err => InternalError(s"Couldn't fetch $key for update on $collectionName: $err", Some(err)))
       mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
       mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
                           ZIO.fromEither(codec.decode(rawValue)).mapError[UpdateErrors](msg => CodecFailure(msg))
@@ -525,9 +586,9 @@ class LMDBLive(
       _              <- ZIO.foreachDiscard(mayBeDocAfter) { docAfter =>
                           val docBytes = codec.encode(docAfter)
                           for {
-                            valueBuffer <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for encoded value", Some(err)))
-                            _           <- ZIO.attemptBlocking(valueBuffer.put(docBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
-                            _           <- ZIO.attemptBlocking(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't update $key into $collectionName", Some(err)))
+                            valueBuffer <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
+                            _           <- ZIO.attemptBlocking(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
+                            _           <- ZIO.attemptBlocking(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't update $key into $collectionName: $err", Some(err)))
                           } yield ()
                         }
     } yield mayBeDocAfter
@@ -541,7 +602,7 @@ class LMDBLive(
                          withWriteTransaction(colName) { txn =>
                            for {
                              _ <- upsertOverwriteLogic(txn, collectionDbi, colName, key, document)
-                             _ <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError("Couldn't commit transaction", Some(err)))
+                             _   <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
                            } yield ()
                          }
                        )
@@ -564,9 +625,9 @@ class LMDBLive(
     for {
       keyBB       <- makeKeyByteBuffer(key)
       docBytes     = codec.encode(document)
-      valueBuffer <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for encoded value", Some(err)))
-      _           <- ZIO.attemptBlocking(valueBuffer.put(docBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
-      _           <- ZIO.attemptBlocking(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't upsertOverwrite $key into $colName", Some(err)))
+      valueBuffer <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
+      _           <- ZIO.attemptBlocking(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
+      _           <- ZIO.attemptBlocking(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't upsertOverwrite $key into $colName: $err", Some(err)))
     } yield ()
   }
 
@@ -578,7 +639,7 @@ class LMDBLive(
                          withWriteTransaction(colName) { txn =>
                            for {
                              res <- upsertLogic(txn, collectionDbi, colName, key, modifier)
-                             _   <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError("Couldn't commit transaction", Some(err)))
+                             _   <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
                            } yield res
                          }
                        )
@@ -602,16 +663,16 @@ class LMDBLive(
   private def upsertLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
     for {
       keyBB          <- makeKeyByteBuffer(key)
-      found          <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError(err => InternalError(s"Couldn't fetch $key for upsert on $colName", Some(err)))
+      found          <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError(err => InternalError(s"Couldn't fetch $key for upsert on $colName: $err", Some(err)))
       mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
       mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
                           ZIO.fromEither(codec.decode(rawValue)).mapError[UpsertErrors](msg => CodecFailure(msg))
                         }
       docAfter        = modifier(mayBeDocBefore)
       docBytes        = codec.encode(docAfter)
-      valueBuffer    <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError("Couldn't allocate byte buffer for encoded value", Some(err)))
-      _              <- ZIO.attemptBlocking(valueBuffer.put(docBytes).flip).mapError(err => InternalError("Couldn't copy value bytes to buffer", Some(err)))
-      _              <- ZIO.attemptBlocking(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $key into $colName", Some(err)))
+      valueBuffer    <- ZIO.attemptBlocking(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
+      _              <- ZIO.attemptBlocking(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
+      _              <- ZIO.attemptBlocking(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $key into $colName: $err", Some(err)))
     } yield docAfter
   }
 
@@ -645,7 +706,7 @@ class LMDBLive(
                            txn <- ZIO.acquireRelease(
                                     ZIO
                                       .attemptBlocking(env.txnRead())
-                                      .mapError[CollectErrors](err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                                      .mapError[CollectErrors](err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
                                   )(txn =>
                                     ZIO
                                       .attemptBlocking(txn.close())
@@ -692,7 +753,7 @@ class LMDBLive(
       iterable     <- ZIO.acquireRelease(
                         ZIO
                           .attemptBlocking(dbi.iterate(txn, makeRange(startAfterBB, backward)))
-                          .mapError[CollectErrors](err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
+                          .mapError[CollectErrors](err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
                       )(cursor =>
                         ZIO
                           .attemptBlocking(cursor.close())
@@ -761,7 +822,7 @@ class LMDBLive(
       txn          <- ZIO.acquireRelease(
                         ZIO
                           .attemptBlocking(env.txnRead())
-                          .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                          .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
                       )(txn =>
                         ZIO
                           .attemptBlocking(txn.close())
@@ -771,7 +832,7 @@ class LMDBLive(
       iterable     <- ZIO.acquireRelease(
                         ZIO
                           .attemptBlocking(colDbi.iterate(txn, makeRange(startAfterBB, backward)))
-                          .mapError(err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
+                          .mapError(err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
                       )(cursor =>
                         ZIO
                           .attemptBlocking(cursor.close())
@@ -784,7 +845,7 @@ class LMDBLive(
       .mapZIO { valueEither => ZIO.fromEither(valueEither).mapError(err => CodecFailure(err)) }
       .mapError {
         case err: CodecFailure => err
-        case err: Throwable    => InternalError(s"Couldn't stream from $colName", Some(err))
+        case err: Throwable    => InternalError(s"Couldn't stream from $colName: $err", Some(err))
         case err               => InternalError(s"Couldn't stream from $colName : ${err.toString}", None)
       }
 
@@ -808,7 +869,7 @@ class LMDBLive(
       txn          <- ZIO.acquireRelease(
                         ZIO
                           .attemptBlocking(env.txnRead())
-                          .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName", Some(err)))
+                          .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
                       )(txn =>
                         ZIO
                           .attemptBlocking(txn.close())
@@ -818,7 +879,7 @@ class LMDBLive(
       iterable     <- ZIO.acquireRelease(
                         ZIO
                           .attemptBlocking(colDbi.iterate(txn, makeRange(startAfterBB, backward)))
-                          .mapError(err => InternalError(s"Couldn't acquire iterable on $colName", Some(err)))
+                          .mapError(err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
                       )(cursor =>
                         ZIO
                           .attemptBlocking(cursor.close())
@@ -830,7 +891,7 @@ class LMDBLive(
       .mapZIO { entry => ZIO.fromEither(entry.value.flatMap(value => entry.key.map(key => key -> value))).mapError(err => CodecFailure(err)) }
       .mapError {
         case err: CodecFailure => err
-        case err: Throwable    => InternalError(s"Couldn't stream from $colName", Some(err))
+        case err: Throwable    => InternalError(s"Couldn't stream from $colName: $err", Some(err))
         case err               => InternalError(s"Couldn't stream from $colName : ${err.toString}", None)
       }
 
@@ -872,7 +933,7 @@ class LMDBLive(
                                 for {
                                   newDbi <- ZIO
                                               .attemptBlocking(env.openDbi(name, DbiFlags.MDB_CREATE, DbiFlags.MDB_DUPSORT))
-                                              .mapError(err => InternalError(s"Couldn't create Index $name", Some(err)))
+                                              .mapError(err => InternalError(s"Couldn't create Index $name: $err", Some(err)))
                                   _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
                                 } yield ()
                               }
@@ -931,7 +992,7 @@ class LMDBLive(
       _   <- reentrantLock.withWriteLock(
                ZIO
                  .attemptBlocking(dbi.close())
-                 .mapError(err => InternalError("Couldn't close index handle", Some(err)))
+                 .mapError(err => InternalError(s"Couldn't close index handle: $err", Some(err)))
              )
     } yield ()
   }
@@ -949,7 +1010,7 @@ class LMDBLive(
                withWriteTransaction(name) { txn =>
                  for {
                    _ <- indexLogic(txn, dbi, name, key, targetKey)
-                   _ <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError("Couldn't commit index transaction", Some(err)))
+                   _ <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit index transaction: $err", Some(err)))
                  } yield ()
                }
              )
@@ -974,7 +1035,7 @@ class LMDBLive(
       valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       _           <- ZIO
                        .attemptBlocking(dbi.put(txn, keyBuffer, valueBuffer))
-                       .mapError(err => InternalError(s"Couldn't index $key -> $targetKey in $name", Some(err)))
+                       .mapError(err => InternalError(s"Couldn't index $key -> $targetKey in $name: $err", Some(err)))
     } yield ()
   }
 
@@ -987,7 +1048,7 @@ class LMDBLive(
                  txn <- ZIO.acquireRelease(
                           ZIO
                             .attemptBlocking(env.txnRead())
-                            .mapError(err => InternalError(s"Couldn't acquire read transaction on $name", Some(err)))
+                            .mapError(err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
                         )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
                  res <- indexContainsLogic(txn, dbi, name, key, targetKey)
                } yield res
@@ -1004,7 +1065,7 @@ class LMDBLive(
                  txn <- ZIO.acquireRelease(
                           ZIO
                             .attemptBlocking(env.txnRead())
-                            .mapError(err => InternalError(s"Couldn't acquire read transaction on $name", Some(err)))
+                            .mapError(err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
                         )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
                  res <- indexHasKeyLogic(txn, dbi, name, key)
                } yield res
@@ -1016,11 +1077,11 @@ class LMDBLive(
     for {
       keyBuffer <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       cursor    <- ZIO.acquireRelease(
-                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError("Cursor error", Some(e)))
+                       ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
                    )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
       found     <- ZIO
                      .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
-                     .mapError(e => InternalError("Get error", Some(e)))
+                       .mapError(e => InternalError(s"Get error: $e", Some(e)))
     } yield found
   }
 
@@ -1032,7 +1093,7 @@ class LMDBLive(
                     txn <- ZIO.acquireRelease(
                              ZIO
                                .attemptBlocking(env.txnRead())
-                               .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $name", Some(err)))
+                               .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
                            )(txn =>
                              ZIO
                                .attemptBlocking(txn.close())
@@ -1049,7 +1110,7 @@ class LMDBLive(
       cursor      <- ZIO.acquireRelease(
                        ZIO
                          .attemptBlocking(dbi.openCursor(txn))
-                         .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $name", Some(err)))
+                         .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $name: $err", Some(err)))
                      )(cursor =>
                        ZIO
                          .attemptBlocking(cursor.close())
@@ -1059,19 +1120,19 @@ class LMDBLive(
       _           <- ZIO.foreachDiscard(key) { k =>
                        ZIO
                          .attempt(cursor.get(k, GetOp.MDB_SET))
-                         .mapError[FetchErrors](err => InternalError(s"Couldn't set cursor at $recordKey for $name", Some(err)))
+                         .mapError[FetchErrors](err => InternalError(s"Couldn't set cursor at $recordKey for $name: $err", Some(err)))
                      }
       seekSuccess <- ZIO
                        .attempt(cursor.seek(seekOperation))
-                       .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name", Some(err)))
+                       .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
       seekedKey   <- ZIO
                        .fromEither(keyCodec.decode(cursor.key()))
                        .when(seekSuccess)
-                       .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $name", None))
+                        .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $name: $err", None))
       valBuffer   <- ZIO
                        .attempt(cursor.`val`())
                        .when(seekSuccess)
-                       .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $name", Some(err)))
+                       .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $name: $err", Some(err)))
       seekedValue <- ZIO
                        .foreach(valBuffer) { rawValue =>
                          ZIO
@@ -1099,6 +1160,48 @@ class LMDBLive(
   override def indexNext[FROM_KEY, TO_KEY](name: IndexName, afterThatKey: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
     indexSeek(name, Some(afterThatKey), SeekOp.MDB_NEXT)
 
+  /** @inheritdoc */
+  override def indexFetch[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[TO_KEY]] = {
+    for {
+      db     <- getIndexDbi(name).catchAll { case IndexNotFound(n) => ZIO.fail(CollectionNotFound(n): FetchErrors) }
+      result <- ZIO.scoped {
+                  for {
+                    txn <- ZIO.acquireRelease(
+                             ZIO
+                               .attemptBlocking(env.txnRead())
+                               .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
+                           )(txn =>
+                             ZIO
+                               .attemptBlocking(txn.close())
+                               .ignoreLogged
+                           )
+                    res <- indexFetchLogic(txn, db, name, key)(keyCodec, toKeyCodec)
+                  } yield res
+                }
+    } yield result
+  }
+
+  /** @inheritdoc */
+  override def indexFetchAt[FROM_KEY, TO_KEY](name: IndexName, position: Long)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
+    for {
+      db     <- getIndexDbi(name).catchAll { case IndexNotFound(n) => ZIO.fail(CollectionNotFound(n): FetchErrors) }
+      result <- ZIO.scoped {
+                  for {
+                    txn <- ZIO.acquireRelease(
+                             ZIO
+                               .attemptBlocking(env.txnRead())
+                               .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
+                           )(txn =>
+                             ZIO
+                               .attemptBlocking(txn.close())
+                               .ignoreLogged
+                           )
+                    res <- indexFetchAtLogic(txn, db, name, position)(keyCodec, toKeyCodec)
+                  } yield res
+                }
+    } yield result
+  }
+
   /** logic for checking if an index contains a mapping
     * @param txn
     *   transaction
@@ -1121,7 +1224,7 @@ class LMDBLive(
       keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       cursor      <- ZIO.acquireRelease(
-                       ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError("Cursor error", Some(e)))
+                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
                      )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
       found       <- ZIO
                        .attemptBlocking {
@@ -1135,7 +1238,7 @@ class LMDBLive(
                          if (cursor.get(keyBuffer, GetOp.MDB_SET)) findValue()
                          else false
                        }
-                       .mapError(e => InternalError("Get error", Some(e)))
+                     .mapError(e => InternalError(s"Get error: $e", Some(e)))
     } yield found
   }
 
@@ -1147,7 +1250,7 @@ class LMDBLive(
                withWriteTransaction(name) { txn =>
                  for {
                    res <- unindexLogic(txn, dbi, name, key, targetKey)
-                   _   <- ZIO.attemptBlocking(txn.commit()).mapError(e => InternalError("Commit error", Some(e)))
+                   _   <- ZIO.attemptBlocking(txn.commit()).mapError(e => InternalError(s"Commit error: $e", Some(e)))
                  } yield res
                }
              )
@@ -1174,7 +1277,7 @@ class LMDBLive(
       valueBuffer <- makeKeyByteBuffer(targetKey).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       deleted     <- ZIO
                        .attemptBlocking(dbi.delete(txn, keyBuffer, valueBuffer))
-                       .mapError(e => InternalError("Delete error", Some(e)))
+                       .mapError(e => InternalError(s"Delete error: $e", Some(e)))
     } yield deleted
   }
 
@@ -1187,7 +1290,7 @@ class LMDBLive(
         txn <- ZIO.acquireRelease(
                  ZIO
                    .attemptBlocking(env.txnRead())
-                   .mapError(err => InternalError(s"Couldn't acquire read transaction on $name", Some(err)))
+                   .mapError(err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
                )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
 
         keyBuffer <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
@@ -1195,12 +1298,12 @@ class LMDBLive(
         cursor <- ZIO.acquireRelease(
                     ZIO
                       .attemptBlocking(db.openCursor(txn))
-                      .mapError(err => InternalError(s"Couldn't acquire cursor on $name", Some(err)))
+                      .mapError(err => InternalError(s"Couldn't acquire cursor on $name: $err", Some(err)))
                   )(cursor => ZIO.attemptBlocking(cursor.close()).ignoreLogged)
 
         found <- ZIO
                    .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
-                   .mapError(err => InternalError("Seek error", Some(err)))
+                   .mapError(err => InternalError(s"Seek error: $err", Some(err)))
 
       } yield {
         if (!found) ZStream.empty
@@ -1218,7 +1321,7 @@ class LMDBLive(
                   Some((k, v))
                 } else None
               }
-              .mapError(e => InternalError("Cursor iteration error", Some(e)): IndexErrors)
+              .mapError(e => InternalError(s"Cursor iteration error: $e", Some(e)): IndexErrors)
               .flatMap {
                 case Some((k, v)) =>
                   val decoded = for {
@@ -1246,7 +1349,7 @@ class LMDBLive(
         txn <- ZIO.acquireRelease(
                  ZIO
                    .attemptBlocking(env.txnRead())
-                   .mapError(err => InternalError("Couldn't acquire read transaction", Some(err)))
+                   .mapError(err => InternalError(s"Couldn't acquire read transaction: $err", Some(err)))
                )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
         ops  = new LMDBReadOpsLive(txn)
         res <- f(ops)
@@ -1262,13 +1365,13 @@ class LMDBLive(
           txn <- ZIO.acquireRelease(
                    ZIO
                      .attemptBlocking(env.txnWrite())
-                     .mapError(err => InternalError("Couldn't acquire write transaction", Some(err)))
+                     .mapError(err => InternalError(s"Couldn't acquire write transaction: $err", Some(err)))
                  )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
           ops  = new LMDBWriteOpsLive(txn)
           res <- f(ops)
           _   <- ZIO
                    .attemptBlocking(txn.commit())
-                   .mapError(err => InternalError("Couldn't commit transaction", Some(err)))
+                   .mapError(err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
         } yield res
       )
     )
@@ -1401,6 +1504,22 @@ class LMDBLive(
     /** @inheritdoc */
     override def indexNext[FROM_KEY, TO_KEY](name: IndexName, afterThatKey: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
       indexSeek(name, Some(afterThatKey), SeekOp.MDB_NEXT)
+
+    /** @inheritdoc */
+    override def indexFetch[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[TO_KEY]] = {
+      for {
+        db  <- getIndexDbi(name, Some(txn)).catchAll { case IndexNotFound(n) => ZIO.fail(CollectionNotFound(n): FetchErrors) }
+        res <- ZIO.scoped(indexFetchLogic(txn, db, name, key)(keyCodec, toKeyCodec))
+      } yield res
+    }
+
+    /** @inheritdoc */
+    override def indexFetchAt[FROM_KEY, TO_KEY](name: IndexName, position: Long)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
+      for {
+        db  <- getIndexDbi(name, Some(txn)).catchAll { case IndexNotFound(n) => ZIO.fail(CollectionNotFound(n): FetchErrors) }
+        res <- ZIO.scoped(indexFetchAtLogic(txn, db, name, position)(keyCodec, toKeyCodec))
+      } yield res
+    }
   }
 
   /** Live implementation of read-write operations using a shared transaction. */
