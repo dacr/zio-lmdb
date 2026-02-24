@@ -1,6 +1,6 @@
 # ZIO-LMDB RELEASE NOTES
 
-## 2.4 - 2026-02-15
+## 2.4 - 2026-02-24
 
 - KeyCodec API consistency improvements
 - Indexes API improvements
