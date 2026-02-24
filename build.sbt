@@ -3,7 +3,7 @@ ThisBuild / scalaVersion := "3.3.7"
 lazy val versions = new {
   val zio        = "2.1.24"
   val zionio     = "2.0.2"
-  val ziojson    = "0.8.0"
+  val ziojson    = "0.9.0"
   val zioconfig  = "4.0.6"
   val ziologging = "2.5.3"
   val lmdb       = "0.9.3"
@@ -99,10 +99,10 @@ lazy val keycodecsUca = (project in file("keycodecs-uca"))
     name        := "keycodecs-uca",
     description := "UCA Sort Key tools for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "com.ibm.icu" % "icu4j" % "76.1",
-      "dev.zio" %% "zio-test"            % versions.zio % Test,
-      "dev.zio" %% "zio-test-sbt"        % versions.zio % Test,
-      "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
+      "com.ibm.icu" % "icu4j"               % "78.2",
+      "dev.zio"    %% "zio-test"            % versions.zio % Test,
+      "dev.zio"    %% "zio-test-sbt"        % versions.zio % Test,
+      "dev.zio"    %% "zio-test-scalacheck" % versions.zio % Test
     )
   )
   .dependsOn(keycodecs)
@@ -113,10 +113,10 @@ lazy val keycodecsUlid = (project in file("keycodecs-ulid"))
     name        := "keycodecs-ulid",
     description := "ULID support for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "org.wvlet.airframe" %% "airframe-ulid" % "2026.1.1",
-      "dev.zio" %% "zio-test"            % versions.zio % Test,
-      "dev.zio" %% "zio-test-sbt"        % versions.zio % Test,
-      "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
+      "org.wvlet.airframe" %% "airframe-ulid"       % "2026.1.1",
+      "dev.zio"            %% "zio-test"            % versions.zio % Test,
+      "dev.zio"            %% "zio-test-sbt"        % versions.zio % Test,
+      "dev.zio"            %% "zio-test-scalacheck" % versions.zio % Test
     )
   )
   .dependsOn(keycodecs)
@@ -127,10 +127,10 @@ lazy val keycodecsUuidv7 = (project in file("keycodecs-uuidv7"))
     name        := "keycodecs-uuidv7",
     description := "UUIDv7 support for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "com.github.f4b6a3" % "uuid-creator" % "6.1.1",
-      "dev.zio" %% "zio-test"            % versions.zio % Test,
-      "dev.zio" %% "zio-test-sbt"        % versions.zio % Test,
-      "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
+      "com.github.f4b6a3" % "uuid-creator"        % "6.1.1",
+      "dev.zio"          %% "zio-test"            % versions.zio % Test,
+      "dev.zio"          %% "zio-test-sbt"        % versions.zio % Test,
+      "dev.zio"          %% "zio-test-scalacheck" % versions.zio % Test
     )
   )
   .dependsOn(keycodecs)
