@@ -29,7 +29,50 @@ import zio.stream._
   * @tparam T
   *   the data class type for collection content
   */
-case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit val kodec: KeyCodec[K], val codec: LMDBCodec[T]) {
+case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters: List[IndexUpdater[K, T]] = Nil)(implicit val kodec: KeyCodec[K], val codec: LMDBCodec[T]) {
+
+  /** Link an index to this collection, so that it is automatically updated when the collection is modified.
+    * @param index The index to link
+    * @param extractor A function to extract the index keys from a collection record
+    * @tparam IK The index key type
+    * @return A new collection facade with the index updater attached
+    */
+  def withIndex[IK](index: LMDBIndex[IK, K])(extractor: T => Iterable[IK]): LMDBCollection[K, T] = {
+    val updater = new IndexUpdater[K, T] {
+      override def onInsert(ops: LMDBWriteOps, key: K, newValue: T): IO[IndexErrors, Unit] = {
+        ZIO.foreachDiscard(extractor(newValue)) { ik =>
+          ops.index(index.name, ik, key)(index.keyCodec, index.toKeyCodec)
+        }
+      }
+
+      override def onDelete(ops: LMDBWriteOps, key: K, oldValue: T): IO[IndexErrors, Unit] = {
+        ZIO.foreachDiscard(extractor(oldValue)) { ik =>
+          ops.unindex(index.name, ik, key)(index.keyCodec, index.toKeyCodec)
+        }
+      }
+
+      override def onUpdate(ops: LMDBWriteOps, key: K, oldValue: T, newValue: T): IO[IndexErrors, Unit] = {
+        val oldKeys = extractor(oldValue).toSet
+        val newKeys = extractor(newValue).toSet
+        val toRemove = oldKeys -- newKeys
+        val toAdd = newKeys -- oldKeys
+
+        for {
+          _ <- ZIO.foreachDiscard(toRemove) { ik =>
+                 ops.unindex(index.name, ik, key)(index.keyCodec, index.toKeyCodec)
+               }
+          _ <- ZIO.foreachDiscard(toAdd) { ik =>
+                 ops.index(index.name, ik, key)(index.keyCodec, index.toKeyCodec)
+               }
+        } yield ()
+      }
+
+      override def onClear(ops: LMDBWriteOps): IO[IndexErrors, Unit] = {
+        ops.indexClear(index.name)
+      }
+    }
+    this.copy(indexUpdaters = indexUpdaters :+ updater)
+  }
 
   /** Get how many items a collection contains
     *
@@ -38,9 +81,28 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit val k
     */
   def size(): IO[SizeErrors, Long] = lmdb.collectionSize(name)
 
-  /** Remove all the content
+  /** Rebuild all attached indices by clearing them and re-indexing all existing records in the collection.
+    * This is useful when indices are added after the collection has already been populated.
     */
-  def clear(): IO[ClearErrors, Unit] = lmdb.collectionClear(name)
+  def rebuildIndexes(): IO[IndexErrors | StreamErrors | ClearErrors, Unit] = {
+    if (indexUpdaters.isEmpty) ZIO.unit
+    else {
+      for {
+        _ <- ZIO.foreachDiscard(indexUpdaters) { updater =>
+               lmdb.readWrite(ops => updater.onClear(ops))
+             }
+        _ <- streamWithKeys().runForeach { case (key, value) =>
+               ZIO.foreachDiscard(indexUpdaters) { updater =>
+                 lmdb.readWrite(ops => updater.onInsert(ops, key, value))
+               }
+             }
+      } yield ()
+    }
+  }
+  def clear(): IO[ClearErrors | IndexErrors, Unit] = {
+    if (indexUpdaters.isEmpty) lmdb.collectionClear(name)
+    else readWrite(_.clear())
+  }
 
   /** Get a collection record
     *
@@ -112,7 +174,10 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit val k
     * @returns
     *   the updated record if a record exists for the given key
     */
-  def update(key: K, modifier: T => T): IO[UpdateErrors, Option[T]] = lmdb.update(name, key, modifier)
+  def update(key: K, modifier: T => T): IO[UpdateErrors | IndexErrors, Option[T]] = {
+    if (indexUpdaters.isEmpty) lmdb.update(name, key, modifier)
+    else readWrite(_.update(key, modifier))
+  }
 
   /** update or insert atomically a record in a collection.
     *
@@ -123,8 +188,10 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit val k
     * @returns
     *   the updated or inserted record
     */
-  def upsert(key: K, modifier: Option[T] => T): IO[UpsertErrors, T] =
-    lmdb.upsert[K, T](name, key, modifier)
+  def upsert(key: K, modifier: Option[T] => T): IO[UpsertErrors | IndexErrors, T] = {
+    if (indexUpdaters.isEmpty) lmdb.upsert[K, T](name, key, modifier)
+    else readWrite(_.upsert(key, modifier))
+  }
 
   /** Overwrite or insert a record in a collection. If the key is already being used for a record then the previous record will be overwritten by the new one.
     *
@@ -133,8 +200,10 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit val k
     * @param document
     *   the record content to upsert
     */
-  def upsertOverwrite(key: K, document: T): IO[UpsertErrors, Unit] =
-    lmdb.upsertOverwrite[K, T](name, key, document)
+  def upsertOverwrite(key: K, document: T): IO[UpsertErrors | IndexErrors, Unit] = {
+    if (indexUpdaters.isEmpty) lmdb.upsertOverwrite[K, T](name, key, document)
+    else readWrite(_.upsertOverwrite(key, document))
+  }
 
   /** Delete a record in a collection
     *
@@ -143,8 +212,10 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB)(implicit val k
     * @return
     *   the deleted content
     */
-  def delete(key: K): IO[DeleteErrors, Option[T]] =
-    lmdb.delete[K, T](name, key)
+  def delete(key: K): IO[DeleteErrors | IndexErrors, Option[T]] = {
+    if (indexUpdaters.isEmpty) lmdb.delete[K, T](name, key)
+    else readWrite(_.delete(key))
+  }
 
   /** Collect collection content into the memory, use keyFilter or valueFilter to limit the amount of loaded entries.
     *
@@ -335,7 +406,12 @@ case class LMDBCollectionWriteOps[K, T](
   export readOps.{collection as _, ops as _, keyCodec as _, valueCodec as _, _}
 
   /** Remove all the content of the collection */
-  def clear(): IO[ClearErrors, Unit] = ops.collectionClear(collection.name)
+  def clear(): IO[ClearErrors | IndexErrors, Unit] = {
+    for {
+      _ <- ops.collectionClear(collection.name)
+      _ <- ZIO.foreachDiscard(collection.indexUpdaters)(_.onClear(ops))
+    } yield ()
+  }
 
   /** update atomically a record in the collection.
     * @param key
@@ -345,7 +421,20 @@ case class LMDBCollectionWriteOps[K, T](
     * @return
     *   the updated record if a record exists for the given key
     */
-  def update(key: K, modifier: T => T): IO[UpdateErrors, Option[T]] = ops.update(collection.name, key, modifier)
+  def update(key: K, modifier: T => T): IO[UpdateErrors | IndexErrors, Option[T]] = {
+    for {
+      oldValueOpt <- ops.fetch(collection.name, key)
+      newValueOpt <- ops.update(collection.name, key, modifier)
+      _ <- ZIO.foreachDiscard(collection.indexUpdaters) { updater =>
+             (oldValueOpt, newValueOpt) match {
+               case (Some(oldVal), Some(newVal)) => updater.onUpdate(ops, key, oldVal, newVal)
+               case (None, Some(newVal))         => updater.onInsert(ops, key, newVal)
+               case (Some(oldVal), None)         => updater.onDelete(ops, key, oldVal)
+               case (None, None)                 => ZIO.unit
+             }
+           }
+    } yield newValueOpt
+  }
 
   /** update or insert atomically a record in the collection.
     * @param key
@@ -355,7 +444,18 @@ case class LMDBCollectionWriteOps[K, T](
     * @return
     *   the updated or inserted record
     */
-  def upsert(key: K, modifier: Option[T] => T): IO[UpsertErrors, T] = ops.upsert(collection.name, key, modifier)
+  def upsert(key: K, modifier: Option[T] => T): IO[UpsertErrors | IndexErrors, T] = {
+    for {
+      oldValueOpt <- ops.fetch(collection.name, key)
+      newValue    <- ops.upsert(collection.name, key, modifier)
+      _ <- ZIO.foreachDiscard(collection.indexUpdaters) { updater =>
+             oldValueOpt match {
+               case Some(oldVal) => updater.onUpdate(ops, key, oldVal, newValue)
+               case None         => updater.onInsert(ops, key, newValue)
+             }
+           }
+    } yield newValue
+  }
 
   /** Overwrite or insert a record in the collection.
     * @param key
@@ -363,7 +463,18 @@ case class LMDBCollectionWriteOps[K, T](
     * @param document
     *   the record content to upsert
     */
-  def upsertOverwrite(key: K, document: T): IO[UpsertErrors, Unit] = ops.upsertOverwrite(collection.name, key, document)
+  def upsertOverwrite(key: K, document: T): IO[UpsertErrors | IndexErrors, Unit] = {
+    for {
+      oldValueOpt <- ops.fetch(collection.name, key)
+      _           <- ops.upsertOverwrite(collection.name, key, document)
+      _ <- ZIO.foreachDiscard(collection.indexUpdaters) { updater =>
+             oldValueOpt match {
+               case Some(oldVal) => updater.onUpdate(ops, key, oldVal, document)
+               case None         => updater.onInsert(ops, key, document)
+             }
+           }
+    } yield ()
+  }
 
   /** Delete a record in the collection
     * @param key
@@ -371,5 +482,15 @@ case class LMDBCollectionWriteOps[K, T](
     * @return
     *   the deleted content
     */
-  def delete(key: K): IO[DeleteErrors, Option[T]] = ops.delete(collection.name, key)
+  def delete(key: K): IO[DeleteErrors | IndexErrors, Option[T]] = {
+    for {
+      deletedOpt <- ops.delete(collection.name, key)
+      _ <- ZIO.foreachDiscard(collection.indexUpdaters) { updater =>
+             deletedOpt match {
+               case Some(deleted) => updater.onDelete(ops, key, deleted)
+               case None          => ZIO.unit
+             }
+           }
+    } yield deletedOpt
+  }
 }

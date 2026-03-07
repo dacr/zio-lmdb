@@ -305,4 +305,10 @@ trait LMDBWriteOps extends LMDBReadOps {
     key: FROM_KEY,
     targetKey: TO_KEY
   )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean]
+
+  /** Remove all the content of an index
+    * @param name
+    *   the index name
+    */
+  def indexClear(name: IndexName): IO[IndexErrors, Unit]
 }

@@ -525,6 +525,12 @@ trait LMDB {
     targetKey: TO_KEY
   )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean]
 
+  /** Remove all the content of an index
+    * @param name
+    *   the index name
+    */
+  def indexClear(name: IndexName): IO[IndexErrors, Unit]
+
   /** Get a stream of target keys for a given key in an index
     * @param name
     *   the index name
@@ -1124,6 +1130,13 @@ object LMDB {
     targetKey: TO_KEY
   )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[LMDB, IndexErrors, Boolean] =
     ZIO.serviceWithZIO(_.unindex(name, key, targetKey))
+
+  /** Remove all the content of an index
+    * @param name
+    *   the index name
+    */
+  def indexClear(name: IndexName): ZIO[LMDB, IndexErrors, Unit] =
+    ZIO.serviceWithZIO(_.indexClear(name))
 
   /** Get a stream of target keys for a given key in an index
     * @param name

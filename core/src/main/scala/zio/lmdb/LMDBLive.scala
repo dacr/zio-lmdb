@@ -1264,6 +1264,21 @@ class LMDBLive(
     } yield res
   }
 
+  /** @inheritdoc */
+  override def indexClear(name: IndexName): IO[IndexErrors, Unit] = {
+    for {
+      dbi <- getIndexDbi(name)
+      _   <- reentrantLock.withWriteLock(
+               withWriteTransaction(name) { txn =>
+                 for {
+                   _ <- ZIO.attemptBlocking(dbi.drop(txn, false)).mapError(e => InternalError(s"Couldn't clear index $name: $e", Some(e)))
+                   _ <- ZIO.attemptBlocking(txn.commit()).mapError(e => InternalError(s"Commit error: $e", Some(e)))
+                 } yield ()
+               }
+             )
+    } yield ()
+  }
+
   /** logic for removing a mapping from an index
     * @param txn
     *   transaction
@@ -1586,6 +1601,14 @@ class LMDBLive(
         dbi <- getIndexDbi(name, Some(txn))
         res <- unindexLogic(txn, dbi, name, key, targetKey)
       } yield res
+    }
+
+    /** @inheritdoc */
+    override def indexClear(name: IndexName): IO[IndexErrors, Unit] = {
+      for {
+        dbi <- getIndexDbi(name, Some(txn))
+        _   <- ZIO.attemptBlocking(dbi.drop(txn, false)).mapError(e => InternalError(s"Couldn't clear index $name: $e", Some(e)))
+      } yield ()
     }
   }
 }
