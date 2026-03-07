@@ -106,6 +106,162 @@ case class QueryBuilder[K, T](
       case None    => stream
     }
   }
+
+  /** Join this query with another collection using a key extracted from the left value. This is useful for many-to-one or one-to-one relationships where the left record contains the primary key of the right record.
+    *
+    * @param rightCollection
+    *   The collection to join with
+    * @param extractKey
+    *   Function to extract the key for the right collection from the left value
+    * @tparam RK
+    *   The key type of the right collection
+    * @tparam RT
+    *   The value type of the right collection
+    * @return
+    *   A JoinedQueryBuilder that will yield pairs of (LeftValue, RightValue)
+    */
+  def joinByKey[RK, RT](rightCollection: LMDBCollection[RK, RT])(extractKey: T => RK): JoinedQueryBuilder[T, RT] = {
+    val joinedStream = toStream.mapZIO { leftValue =>
+      val rightKey = extractKey(leftValue)
+      rightCollection.fetch(rightKey).map {
+        case Some(rightValue) => Some((leftValue, rightValue))
+        case None             => None
+      }
+    }.collectSome
+
+    JoinedQueryBuilder(joinedStream)
+  }
+
+  /** Join this query with another collection using an index. This is useful for one-to-many relationships where an index maps the left record's key (or a value derived from it) to multiple keys in the right collection.
+    *
+    * @param rightCollection
+    *   The collection to join with
+    * @param index
+    *   The index to use for the join
+    * @param extractIndexKey
+    *   Function to extract the index key from the left value
+    * @tparam IK
+    *   The key type of the index
+    * @tparam RK
+    *   The target key type of the index (which is the primary key of the right collection)
+    * @tparam RT
+    *   The value type of the right collection
+    * @return
+    *   A JoinedQueryBuilder that will yield pairs of (LeftValue, RightValue)
+    */
+  def joinByIndex[IK, RK, RT](
+    rightCollection: LMDBCollection[RK, RT],
+    index: LMDBIndex[IK, RK]
+  )(extractIndexKey: T => IK): JoinedQueryBuilder[T, RT] = {
+    val joinedStream = toStream.flatMap { leftValue =>
+      val indexKey = extractIndexKey(leftValue)
+      index
+        .indexed(indexKey)
+        .mapZIO { case (_, rightKey) =>
+          rightCollection.fetch(rightKey).map {
+            case Some(rightValue) => Some((leftValue, rightValue))
+            case None             => None
+          }
+        }
+        .collectSome
+    }
+
+    JoinedQueryBuilder(joinedStream)
+  }
+}
+
+/** A builder for queries that have been joined.
+  *
+  * @param stream
+  *   The underlying stream of joined results
+  * @tparam L
+  *   The type of the left value
+  * @tparam R
+  *   The type of the right value
+  */
+case class JoinedQueryBuilder[L, R](stream: ZStream[Any, StorageUserError | StorageSystemError, (L, R)]) {
+
+  /** Filter the joined results.
+    * @param f
+    *   The predicate to apply to the joined pair
+    */
+  def filter(f: (L, R) => Boolean): JoinedQueryBuilder[L, R] =
+    copy(stream = stream.filter { case (l, r) => f(l, r) })
+
+  /** Execute the query and collect the results into a List.
+    * @return
+    *   A ZIO effect containing the list of matching pairs
+    */
+  def toList: IO[StorageUserError | StorageSystemError, List[(L, R)]] =
+    stream.runCollect.map(_.toList)
+
+  /** Execute the query and return a ZStream of the results.
+    * @return
+    *   A ZStream of matching pairs
+    */
+  def toStream: ZStream[Any, StorageUserError | StorageSystemError, (L, R)] = stream
+
+  /** Join this query with another collection using a key extracted from the current joined pair.
+    *
+    * @param rightCollection
+    *   The collection to join with
+    * @param extractKey
+    *   Function to extract the key for the right collection from the current pair
+    * @tparam RK
+    *   The key type of the right collection
+    * @tparam RT
+    *   The value type of the right collection
+    * @return
+    *   A JoinedQueryBuilder that will yield tuples of ((LeftValue, RightValue), NewRightValue)
+    */
+  def joinByKey[RK, RT](rightCollection: LMDBCollection[RK, RT])(extractKey: ((L, R)) => RK): JoinedQueryBuilder[(L, R), RT] = {
+    val joinedStream = stream.mapZIO { pair =>
+      val rightKey = extractKey(pair)
+      rightCollection.fetch(rightKey).map {
+        case Some(rightValue) => Some((pair, rightValue))
+        case None             => None
+      }
+    }.collectSome
+
+    JoinedQueryBuilder(joinedStream)
+  }
+
+  /** Join this query with another collection using an index.
+    *
+    * @param rightCollection
+    *   The collection to join with
+    * @param index
+    *   The index to use for the join
+    * @param extractIndexKey
+    *   Function to extract the index key from the current pair
+    * @tparam IK
+    *   The key type of the index
+    * @tparam RK
+    *   The target key type of the index (which is the primary key of the right collection)
+    * @tparam RT
+    *   The value type of the right collection
+    * @return
+    *   A JoinedQueryBuilder that will yield tuples of ((LeftValue, RightValue), NewRightValue)
+    */
+  def joinByIndex[IK, RK, RT](
+    rightCollection: LMDBCollection[RK, RT],
+    index: LMDBIndex[IK, RK]
+  )(extractIndexKey: ((L, R)) => IK): JoinedQueryBuilder[(L, R), RT] = {
+    val joinedStream = stream.flatMap { pair =>
+      val indexKey = extractIndexKey(pair)
+      index
+        .indexed(indexKey)
+        .mapZIO { case (_, rightKey) =>
+          rightCollection.fetch(rightKey).map {
+            case Some(rightValue) => Some((pair, rightValue))
+            case None             => None
+          }
+        }
+        .collectSome
+    }
+
+    JoinedQueryBuilder(joinedStream)
+  }
 }
 
 object QueryBuilder {
