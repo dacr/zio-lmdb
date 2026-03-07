@@ -121,6 +121,70 @@ object TransactionExample extends ZIOAppDefault {
 TransactionExample.main(Array.empty)
 ```
 
+### Query DSL example
+
+The `query-dsl` module provides a fluent API for querying and joining collections.
+
+```scala
+//> using scala 3.8.1
+//> using dep fr.janalyse::zio-lmdb:2.5.0
+//> using dep fr.janalyse::query-dsl:2.5.0
+//> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
+
+import zio.*, zio.json.*, zio.lmdb.*, zio.lmdb.json.LMDBCodecJson.given
+import zio.lmdb.query.QueryBuilder.*
+
+case class User(id: String, name: String, active: Boolean) derives JsonCodec
+case class Post(id: String, authorId: String, title: String) derives JsonCodec
+
+object QueryDslExample extends ZIOAppDefault {
+  override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-query-dsl-example"), zio.Scope.default)
+
+  val example = for {
+    lmdb     <- ZIO.service[LMDB]
+    usersCol <- lmdb.collectionCreate[String, User]("users", failIfExists = false)
+    postsCol <- lmdb.collectionCreate[String, Post]("posts", failIfExists = false)
+    
+    // Insert some data
+    _ <- usersCol.upsertOverwrite("u1", User("u1", "Alice", true))
+    _ <- usersCol.upsertOverwrite("u2", User("u2", "Bob", false))
+
+    // 1. Simple query with filtering and limits
+    activeUsers <- usersCol.query
+                     .whereValue(_.active == true)
+                     .limit(10)
+                     .toList
+    _ <- Console.printLine(s"Active users: $activeUsers")
+
+    // 2. Cross-collection join (Many-to-One)
+    // Find all posts and join with their authors
+    postsWithAuthors <- postsCol.query
+                          .joinByKey(usersCol)(post => post.authorId)
+                          .toList
+    _ <- Console.printLine(s"Posts with authors: $postsWithAuthors")
+
+    // 3. Cross-collection join using an Index (One-to-Many)
+    authorToPostIdx <- lmdb.indexCreate[String, String]("author_to_post", failIfExists = false)
+    
+    // We can link the index to the collection so it updates automatically
+    postsColWithIdx = postsCol.withIndex(authorToPostIdx)(post => List(post.authorId))
+    
+    // Insert some data using the collection with the linked index
+    _ <- postsColWithIdx.upsertOverwrite("p1", Post("p1", "u1", "Alice's first post"))
+    _ <- postsColWithIdx.upsertOverwrite("p2", Post("p2", "u1", "Alice's second post"))
+
+    // Find active users and join with their posts using the index
+    usersWithPosts <- usersCol.query
+                        .whereValue(_.active == true)
+                        .joinByIndex(postsColWithIdx, authorToPostIdx)(user => user.id)
+                        .toList
+    _ <- Console.printLine(s"Users with posts: $usersWithPosts")
+  } yield ()
+}
+
+QueryDslExample.main(Array.empty)
+```
+
 ### ZIO-LMDB based Applications
 - [sotohp - photos management][SOTOHP] which uses zio-lmdb intensively
 - [code-examples-manager - snippets/gists management][CEM] lmdb used for caching and data sharing
