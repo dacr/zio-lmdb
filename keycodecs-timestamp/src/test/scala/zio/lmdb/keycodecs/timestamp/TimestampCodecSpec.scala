@@ -29,18 +29,18 @@ object TimestampCodecSpec extends ZIOSpecDefault {
   def spec = suite("KeyCodec[Instant] spec")(
     test("roundtrip encoding/decoding") {
       check(Gen.instant) { instant =>
-        val codec = summon[KeyCodec[Instant]]
+        val codec   = summon[KeyCodec[Instant]]
         val encoded = codec.encode(instant)
-        val buffer = ByteBuffer.allocateDirect(encoded.length).put(encoded).flip()
+        val buffer  = ByteBuffer.allocateDirect(encoded.length).put(encoded).flip()
         val decoded = codec.decode(buffer)
-        
+
         assert(decoded)(isRight(equalTo(instant)))
       }
     },
     test("lexicographical sorting") {
-      val codec = summon[KeyCodec[Instant]]
+      val codec                                        = summon[KeyCodec[Instant]]
       def compare(a: Array[Byte], b: Array[Byte]): Int = Arrays.compareUnsigned(a, b)
-      
+
       // 1. Specific edge cases
       val t1 = Instant.MIN
       val t2 = Instant.ofEpochSecond(-100, 0)
@@ -50,7 +50,7 @@ object TimestampCodecSpec extends ZIOSpecDefault {
       val t6 = Instant.MAX
 
       val instants = List(t1, t2, t3, t4, t5, t6)
-      val encoded = instants.map(codec.encode)
+      val encoded  = instants.map(codec.encode)
 
       // Verify that the list is sorted in byte representation
       val isSortedInBytes = encoded.zip(encoded.tail).forall { case (a, b) =>
@@ -61,23 +61,21 @@ object TimestampCodecSpec extends ZIOSpecDefault {
       // 2. Random data verification
       check(Gen.setOfN(100)(Gen.instant)) { randomInstantsSet =>
         val sortedInstants = randomInstantsSet.toList.sorted
-        val encodedBytes = sortedInstants.map(codec.encode)
-        
+        val encodedBytes   = sortedInstants.map(codec.encode)
+
         // Sort using byte comparison
         val sortedEncodedBytes = encodedBytes.sorted(Ordering.fromLessThan((a, b) => compare(a, b) < 0))
-        
+
         // Decode sorted bytes
-        val decodedInstants = sortedEncodedBytes.map(bytes => 
-          codec.decode(ByteBuffer.wrap(bytes)).getOrElse(throw new RuntimeException("decode failed"))
-        )
-        
+        val decodedInstants = sortedEncodedBytes.map(bytes => codec.decode(ByteBuffer.wrap(bytes)).getOrElse(throw new RuntimeException("decode failed")))
+
         // The decoded instants should be in the same order as the original sorted instants
         assertTrue(decodedInstants == sortedInstants)
       }
     },
     test("decoding fails when buffer has insufficient bytes") {
-      val codec = summon[KeyCodec[Instant]]
-      val buffer = ByteBuffer.allocateDirect(11) // Instant requires 12 bytes
+      val codec   = summon[KeyCodec[Instant]]
+      val buffer  = ByteBuffer.allocateDirect(11) // Instant requires 12 bytes
       val decoded = codec.decode(buffer)
       assert(decoded)(isLeft(containsString("Not enough bytes for Instant")))
     }

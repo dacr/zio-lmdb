@@ -392,7 +392,12 @@ class LMDBLive(
     } yield result
   }
 
-  private def indexFetchAtLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, position: Long)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[Scope, FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
+  private def indexFetchAtLogic[FROM_KEY, TO_KEY](
+    txn: Txn[ByteBuffer],
+    dbi: Dbi[ByteBuffer],
+    name: IndexName,
+    position: Long
+  )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[Scope, FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
     for {
       cursor             <- ZIO.acquireRelease(
                               ZIO
@@ -405,11 +410,11 @@ class LMDBLive(
                             )
       seekFirstSuccess   <- ZIO
                               .attempt(cursor.seek(SeekOp.MDB_FIRST))
-                                .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
       seekAllNextSuccess <- if (position > 0) {
                               ZIO
                                 .attempt(cursor.seek(SeekOp.MDB_NEXT))
-                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
+                                .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
                                 .repeatN(position.toInt - 1)
                             } else ZIO.succeed(true)
       seeksSuccess        = seekAllNextSuccess && seekFirstSuccess
@@ -490,7 +495,7 @@ class LMDBLive(
       seekedKey   <- ZIO
                        .fromEither(kodec.decode(cursor.key()))
                        .when(seekSuccess)
-                        .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $colName: $err", None))
+                       .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $colName: $err", None))
       valBuffer   <- ZIO
                        .attempt(cursor.`val`())
                        .when(seekSuccess)
@@ -507,7 +512,6 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-
 
   override def head[K, T](collectionName: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
     seek(collectionName, None, SeekOp.MDB_FIRST)
@@ -602,7 +606,7 @@ class LMDBLive(
                          withWriteTransaction(colName) { txn =>
                            for {
                              _ <- upsertOverwriteLogic(txn, collectionDbi, colName, key, document)
-                             _   <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
+                             _ <- ZIO.attemptBlocking(txn.commit()).mapError(err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
                            } yield ()
                          }
                        )
@@ -1077,11 +1081,11 @@ class LMDBLive(
     for {
       keyBuffer <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       cursor    <- ZIO.acquireRelease(
-                       ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
+                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
                    )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
       found     <- ZIO
                      .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
-                       .mapError(e => InternalError(s"Get error: $e", Some(e)))
+                     .mapError(e => InternalError(s"Get error: $e", Some(e)))
     } yield found
   }
 
@@ -1105,7 +1109,10 @@ class LMDBLive(
     } yield result
   }
 
-  private def indexSeekLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, recordKey: Option[FROM_KEY], seekOperation: SeekOp)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[Scope, FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
+  private def indexSeekLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, recordKey: Option[FROM_KEY], seekOperation: SeekOp)(implicit
+    keyCodec: KeyCodec[FROM_KEY],
+    toKeyCodec: KeyCodec[TO_KEY]
+  ): ZIO[Scope, FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
     for {
       cursor      <- ZIO.acquireRelease(
                        ZIO
@@ -1128,7 +1135,7 @@ class LMDBLive(
       seekedKey   <- ZIO
                        .fromEither(keyCodec.decode(cursor.key()))
                        .when(seekSuccess)
-                        .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $name: $err", None))
+                       .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $name: $err", None))
       valBuffer   <- ZIO
                        .attempt(cursor.`val`())
                        .when(seekSuccess)
@@ -1224,7 +1231,7 @@ class LMDBLive(
       keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       cursor      <- ZIO.acquireRelease(
-                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
+                       ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
                      )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
       found       <- ZIO
                        .attemptBlocking {
@@ -1238,7 +1245,7 @@ class LMDBLive(
                          if (cursor.get(keyBuffer, GetOp.MDB_SET)) findValue()
                          else false
                        }
-                     .mapError(e => InternalError(s"Get error: $e", Some(e)))
+                       .mapError(e => InternalError(s"Get error: $e", Some(e)))
     } yield found
   }
 
@@ -1333,7 +1340,7 @@ class LMDBLive(
                     .fromEither(decoded)
                     .mapError(e => CodecFailure(e): IndexErrors)
                     .map(d => (Chunk(d), Some(false)))
-                case None =>
+                case None         =>
                   ZIO.succeed((Chunk.empty, None))
               }
           }

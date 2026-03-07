@@ -21,11 +21,10 @@ import java.time.Instant
 
 object TimestampCodec {
 
-  /**
-   * Encodes Instant into 12 bytes:
-   * - 8 bytes for epoch seconds (sign bit flipped for lexicographical sorting)
-   * - 4 bytes for nanoseconds
-   */
+  /** Encodes Instant into 12 bytes:
+    *   - 8 bytes for epoch seconds (sign bit flipped for lexicographical sorting)
+    *   - 4 bytes for nanoseconds
+    */
   given timestampKeyCodec: KeyCodec[Instant] = new KeyCodec[Instant] {
     override def encode(key: Instant): Array[Byte] = {
       val buffer = ByteBuffer.allocate(12)
@@ -39,9 +38,9 @@ object TimestampCodec {
       if (keyBytes.remaining() < 12) Left(s"Not enough bytes for Instant, expected 12 but got ${keyBytes.remaining()}")
       else {
         val secondsEncoded = keyBytes.getLong
-        val nanos = keyBytes.getInt
+        val nanos          = keyBytes.getInt
         // Restore original seconds by flipping sign bit again
-        val seconds = secondsEncoded ^ Long.MinValue
+        val seconds        = secondsEncoded ^ Long.MinValue
         Right(Instant.ofEpochSecond(seconds, nanos.toLong))
       }
     }

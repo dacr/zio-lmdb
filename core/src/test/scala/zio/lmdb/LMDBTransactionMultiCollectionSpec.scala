@@ -35,23 +35,23 @@ object LMDBTransactionMultiCollectionSpec extends ZIOSpecDefault with Commons {
         users    <- LMDB.collectionCreate[String, TxnUser]("users")
         accounts <- LMDB.collectionCreate[String, TxnAccount]("accounts")
 
-        userId = "user1"
+        userId    = "user1"
         accountId = "account1"
-        
+
         // Initial data
         _ <- users.upsertOverwrite(userId, TxnUser("Alice"))
         _ <- accounts.upsertOverwrite(accountId, TxnAccount(100))
 
         // Transactional update across both collections
         _ <- LMDB.readWrite { ops =>
-          val usersTxn = users.lift(ops)
-          val accountsTxn = accounts.lift(ops)
+               val usersTxn    = users.lift(ops)
+               val accountsTxn = accounts.lift(ops)
 
-          for {
-             _ <- usersTxn.update(userId, u => u.copy(name = "Bob"))
-             _ <- accountsTxn.update(accountId, a => a.copy(balance = 200))
-          } yield ()
-        }
+               for {
+                 _ <- usersTxn.update(userId, u => u.copy(name = "Bob"))
+                 _ <- accountsTxn.update(accountId, a => a.copy(balance = 200))
+               } yield ()
+             }
 
         alice <- users.fetch(userId)
         bal   <- accounts.fetch(accountId)

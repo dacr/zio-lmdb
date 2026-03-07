@@ -27,17 +27,17 @@ object ULIDCodecSpec extends ZIOSpecDefault {
 
   def spec = suite("KeyCodec[ULID] spec")(
     test("roundtrip encoding/decoding") {
-      val ulid = ULID.newULID
-      val codec = summon[KeyCodec[ULID]]
+      val ulid    = ULID.newULID
+      val codec   = summon[KeyCodec[ULID]]
       val encoded = codec.encode(ulid)
-      val buffer = ByteBuffer.allocateDirect(encoded.length).put(encoded).flip()
+      val buffer  = ByteBuffer.allocateDirect(encoded.length).put(encoded).flip()
       val decoded = codec.decode(buffer)
-      
+
       assert(decoded)(isRight(equalTo(ulid)))
     },
     test("decoding fails when buffer has insufficient bytes") {
-      val codec = summon[KeyCodec[ULID]]
-      val buffer = ByteBuffer.allocateDirect(15) // ULID requires 16 bytes
+      val codec   = summon[KeyCodec[ULID]]
+      val buffer  = ByteBuffer.allocateDirect(15) // ULID requires 16 bytes
       val decoded = codec.decode(buffer)
       assert(decoded)(isLeft(containsString("Not enough bytes for ULID")))
     }

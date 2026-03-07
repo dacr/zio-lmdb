@@ -45,10 +45,10 @@ trait KeyCodec[K] {
     */
   def decode(keyBytes: ByteBuffer): Either[String, K] // TODO Replace String by Throwable
 
-  /**
-   * The fixed width of the encoded key in bytes, if applicable.
-   * @return Some(width) if fixed width, None otherwise.
-   */
+  /** The fixed width of the encoded key in bytes, if applicable.
+    * @return
+    *   Some(width) if fixed width, None otherwise.
+    */
   def width: Option[Int] = None
 }
 
@@ -61,7 +61,7 @@ object KeyCodec {
 
     override def decode(keyBytes: ByteBuffer): Either[String, String] =
       Right(charset.decode(keyBytes).toString)
-      
+
     override def width: Option[Int] = None
   }
 
@@ -76,12 +76,12 @@ object KeyCodec {
         Right(new UUID(msb, lsb))
       }
     }
-    
+
     override def width: Option[Int] = Some(16)
   }
 
   given tuple2KeyCodec[A, B](using codecA: KeyCodec[A], codecB: KeyCodec[B]): KeyCodec[(A, B)] = new KeyCodec[(A, B)] {
-    override def width: Option[Int] = 
+    override def width: Option[Int] =
       for {
         wa <- codecA.width
         wb <- codecB.width
@@ -93,16 +93,16 @@ object KeyCodec {
       val bytesB = codecB.encode(b)
 
       codecA.width match {
-        case Some(_) => 
+        case Some(_) =>
           val out = new Array[Byte](bytesA.length + bytesB.length)
           System.arraycopy(bytesA, 0, out, 0, bytesA.length)
           System.arraycopy(bytesB, 0, out, bytesA.length, bytesB.length)
           out
-        case None =>
+        case None    =>
           // Variable width A: escape 0x00 -> 0x00 0xFF and append 0x00 separator
           val builder = Array.newBuilder[Byte]
           builder.sizeHint(bytesA.length + bytesB.length + 1) // Heuristic
-          
+
           bytesA.foreach {
             case 0 => builder += 0; builder += -1
             case b => builder += b
@@ -118,25 +118,25 @@ object KeyCodec {
         case Some(wa) =>
           if (keyBytes.remaining() < wa) Left(s"Not enough bytes for component A, expected $wa but got ${keyBytes.remaining()}")
           else {
-            val limit = keyBytes.limit()
+            val limit    = keyBytes.limit()
             val position = keyBytes.position()
-            
+
             // Decode A
             keyBytes.limit(position + wa)
             val resA = codecA.decode(keyBytes)
-            
+
             // Restore limit and advance to B
             keyBytes.limit(limit)
             keyBytes.position(position + wa)
-            
+
             for {
               a <- resA
               b <- codecB.decode(keyBytes)
             } yield (a, b)
           }
-        case None =>
+        case None     =>
           val startPos = keyBytes.position()
-          val limit = keyBytes.limit()
+          val limit    = keyBytes.limit()
 
           @tailrec
           def findSeparator(pos: Int): Either[String, Int] = {
@@ -154,9 +154,9 @@ object KeyCodec {
           findSeparator(startPos).flatMap { separatorPos =>
             // Unescape A
             val lengthA = separatorPos - startPos
-            val bytesA = new Array[Byte](lengthA) // Max size
-            val bufferA = ByteBuffer.wrap(bytesA) // Write wrapper
-            
+            val bytesA  = new Array[Byte](lengthA) // Max size
+            val bufferA = ByteBuffer.wrap(bytesA)  // Write wrapper
+
             @tailrec
             def unescape(pos: Int): Either[String, ByteBuffer] = {
               if (pos >= separatorPos) {

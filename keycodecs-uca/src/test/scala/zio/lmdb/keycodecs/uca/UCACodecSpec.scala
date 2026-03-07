@@ -31,15 +31,14 @@ object UCACodecSpec extends ZIOSpecDefault {
   def spec = suite("UCACodec spec")(
     test("SortKey generation and ordering") {
       val collator = Collator.getInstance(ULocale.FRENCH)
-      val words = List("cote", "côte", "coté", "côté")
+      val words    = List("cote", "côte", "coté", "côté")
       val sortKeys = words.map(w => UCAKey.from(w, collator))
-      
+
       // Verify ordering of SortKeys (byte comparison) matches collator comparison
-      val consistent = words.zip(sortKeys).zip(words.tail.zip(sortKeys.tail)).forall { 
-        case ((w1, sk1), (w2, sk2)) =>
-          val colCmp = collator.compare(w1, w2)
-          val skCmp = sk1.compare(sk2)
-          Integer.signum(colCmp) == Integer.signum(skCmp)
+      val consistent = words.zip(sortKeys).zip(words.tail.zip(sortKeys.tail)).forall { case ((w1, sk1), (w2, sk2)) =>
+        val colCmp = collator.compare(w1, w2)
+        val skCmp  = sk1.compare(sk2)
+        Integer.signum(colCmp) == Integer.signum(skCmp)
       }
       assertTrue(consistent)
     },
@@ -48,34 +47,34 @@ object UCACodecSpec extends ZIOSpecDefault {
       // It puts accents after base letters usually? No, it depends on weights.
       // UCA default: "coté" < "côte"?
       // Let's just verify it works and is consistent.
-      
-      val words = List("banana", "apple", "cherry")
+
+      val words    = List("banana", "apple", "cherry")
       val sortKeys = words.map(w => UCAKey.from(w)) // Using default collator
-      
+
       val expectedOrder = List("apple", "banana", "cherry")
-      val sortedWords = sortKeys.zip(words).sortBy(_._1.bytes)(Ordering.fromLessThan((a, b) => java.util.Arrays.compareUnsigned(a, b) < 0)).map(_._2)
-      
+      val sortedWords   = sortKeys.zip(words).sortBy(_._1.bytes)(Ordering.fromLessThan((a, b) => java.util.Arrays.compareUnsigned(a, b) < 0)).map(_._2)
+
       assertTrue(sortedWords == expectedOrder)
     },
     test("Default collator accent handling") {
-      val words = List("cote", "côte")
+      val words    = List("cote", "côte")
       val sortKeys = words.map(w => UCAKey.from(w))
-      
+
       // In UCA default, accents are significant at secondary level.
       // "cote" < "côte" usually.
       val sk1 = sortKeys(0)
       val sk2 = sortKeys(1)
-      
+
       assertTrue(sk1.compare(sk2) != 0) // Should not be equal
     },
     test("Base64 representation roundtrip") {
-      val word = "Hello World"
-      val sk = UCAKey.from(word)
-      val base64 = sk.toBase64
+      val word      = "Hello World"
+      val sk        = UCAKey.from(word)
+      val base64    = sk.toBase64
       val decodedSk = UCAKey.fromBase64(base64)
-      
+
       val isEqual = java.util.Arrays.equals(sk.bytes, decodedSk.bytes)
-      
+
       assertTrue(
         sk.compare(decodedSk) == 0,
         isEqual

@@ -26,12 +26,12 @@ object UUIDv7CodecSpec extends ZIOSpecDefault {
 
   def spec = suite("KeyCodec[UUIDv7] spec")(
     test("roundtrip encoding/decoding") {
-      val uuidv7 = UUIDv7.generate()
-      val codec = UUIDv7Codec.given_KeyCodec_UUIDv7
+      val uuidv7  = UUIDv7.generate()
+      val codec   = UUIDv7Codec.given_KeyCodec_UUIDv7
       val encoded = codec.encode(uuidv7)
-      val buffer = ByteBuffer.allocateDirect(encoded.length).put(encoded).flip()
+      val buffer  = ByteBuffer.allocateDirect(encoded.length).put(encoded).flip()
       val decoded = codec.decode(buffer)
-      
+
       assert(decoded)(isRight(equalTo(uuidv7)))
     },
     test("generated UUIDs are version 7") {
@@ -39,8 +39,8 @@ object UUIDv7CodecSpec extends ZIOSpecDefault {
       assertTrue(uuidv7.asUUID.version() == 7)
     },
     test("generate(instant) produces UUIDv7 with correct timestamp") {
-      val instant = Instant.ofEpochMilli(1700000000000L)
-      val uuidv7 = UUIDv7.generate(instant)
+      val instant   = Instant.ofEpochMilli(1700000000000L)
+      val uuidv7    = UUIDv7.generate(instant)
       assertTrue(uuidv7.asUUID.version() == 7)
       val timestamp = uuidv7.asUUID.getMostSignificantBits >>> 16
       assertTrue(timestamp == instant.toEpochMilli)

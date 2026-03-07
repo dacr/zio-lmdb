@@ -22,17 +22,17 @@ object GEOTools {
   // which provides the same functionality (named fields) and performance.
   final case class Location(latitude: Double, longitude: Double)
 
-  /**
-   * Converts a latitude/longitude pair to an 8-byte array using Morton coding (Z-order curve).
-   * The result is lexicographically sortable.
-   *
-   * @param location The latitude and longitude
-   * @return An 8-byte array representing the Morton code
-   */
+  /** Converts a latitude/longitude pair to an 8-byte array using Morton coding (Z-order curve). The result is lexicographically sortable.
+    *
+    * @param location
+    *   The latitude and longitude
+    * @return
+    *   An 8-byte array representing the Morton code
+    */
   def locationToBytes(location: Location): Array[Byte] = {
     val lat = location.latitude
     val lon = location.longitude
-    
+
     // Normalize coordinates to 32-bit integers
     // Latitude: [-90, 90] -> [0, 2^32 - 1]
     // Longitude: [-180, 180] -> [0, 2^32 - 1]
@@ -53,16 +53,17 @@ object GEOTools {
     buffer.array()
   }
 
-  /**
-   * Converts an 8-byte array (Morton code) back to a latitude/longitude pair.
-   *
-   * @param bytes The 8-byte array
-   * @return The latitude and longitude
-   */
+  /** Converts an 8-byte array (Morton code) back to a latitude/longitude pair.
+    *
+    * @param bytes
+    *   The 8-byte array
+    * @return
+    *   The latitude and longitude
+    */
   def bytesToLocation(bytes: Array[Byte]): Location = {
     val buffer = ByteBuffer.wrap(bytes)
     val morton = buffer.getLong
-    
+
     var latInt = 0L
     var lonInt = 0L
 

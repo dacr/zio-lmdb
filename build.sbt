@@ -33,7 +33,7 @@ lazy val root = (project in file("."))
     name           := "zio-lmdb-root",
     publish / skip := true
   )
-  .aggregate(core, keycodecs, keycodecsUlid, keycodecsUuidv7, keycodecsGeo, keycodecsTimestamp, keycodecsUca)
+  .aggregate(core, keycodecs, keycodecsUlid, keycodecsUuidv7, keycodecsGeo, keycodecsTimestamp, keycodecsUca, queryDsl)
 
 lazy val core = (project in file("core"))
   .settings(commonSettings)
@@ -134,6 +134,19 @@ lazy val keycodecsUuidv7 = (project in file("keycodecs-uuidv7"))
     )
   )
   .dependsOn(keycodecs)
+
+lazy val queryDsl = (project in file("query-dsl"))
+  .settings(commonSettings)
+  .settings(
+    name        := "query-dsl",
+    description := "Query DSL for ZIO LMDB",
+    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio-test"            % versions.zio % Test,
+      "dev.zio" %% "zio-test-sbt"        % versions.zio % Test,
+      "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
+    )
+  )
+  .dependsOn(core)
 
 homepage   := Some(new URL("https://github.com/dacr/zio-lmdb"))
 scmInfo    := Some(ScmInfo(url(s"https://github.com/dacr/zio-lmdb.git"), s"git@github.com:dacr/zio-lmdb.git"))
