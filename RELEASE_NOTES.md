@@ -1,5 +1,10 @@
 # ZIO-LMDB RELEASE NOTES
 
+## 2.5 - 2026-03-07
+
+- Add collection query DSL with basic join features
+- Support automatic index content update in sync with collection changes
+
 ## 2.4 - 2026-02-24
 
 - KeyCodec API consistency improvements
