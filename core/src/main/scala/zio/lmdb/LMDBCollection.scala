@@ -38,31 +38,43 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters:
     * @return A new collection facade with the index updater attached
     */
   def withIndex[IK](index: LMDBIndex[IK, K])(extractor: T => Iterable[IK]): LMDBCollection[K, T] = {
+    withIndexFull[IK, K](index)((k: K, t: T) => extractor(t).map(ik => (ik, k)))
+  }
+
+  /** Link an index to this collection, so that it is automatically updated when the collection is modified.
+    * This generic version allows computing both the index key and the index value from the collection key and record.
+    * @param index The index to link
+    * @param extractor A function to extract the (index key, index value) pairs from a collection key and record
+    * @tparam IK The index key type
+    * @tparam IV The index value type
+    * @return A new collection facade with the index updater attached
+    */
+  def withIndexFull[IK, IV](index: LMDBIndex[IK, IV])(extractor: (K, T) => Iterable[(IK, IV)]): LMDBCollection[K, T] = {
     val updater = new IndexUpdater[K, T] {
       override def onInsert(ops: LMDBWriteOps, key: K, newValue: T): IO[IndexErrors, Unit] = {
-        ZIO.foreachDiscard(extractor(newValue)) { ik =>
-          ops.index(index.name, ik, key)(index.keyCodec, index.toKeyCodec)
+        ZIO.foreachDiscard(extractor(key, newValue)) { case (ik, iv) =>
+          ops.index(index.name, ik, iv)(index.keyCodec, index.toKeyCodec)
         }
       }
 
       override def onDelete(ops: LMDBWriteOps, key: K, oldValue: T): IO[IndexErrors, Unit] = {
-        ZIO.foreachDiscard(extractor(oldValue)) { ik =>
-          ops.unindex(index.name, ik, key)(index.keyCodec, index.toKeyCodec)
+        ZIO.foreachDiscard(extractor(key, oldValue)) { case (ik, iv) =>
+          ops.unindex(index.name, ik, iv)(index.keyCodec, index.toKeyCodec)
         }
       }
 
       override def onUpdate(ops: LMDBWriteOps, key: K, oldValue: T, newValue: T): IO[IndexErrors, Unit] = {
-        val oldKeys = extractor(oldValue).toSet
-        val newKeys = extractor(newValue).toSet
-        val toRemove = oldKeys -- newKeys
-        val toAdd = newKeys -- oldKeys
+        val oldPairs = extractor(key, oldValue).toSet
+        val newPairs = extractor(key, newValue).toSet
+        val toRemove = oldPairs -- newPairs
+        val toAdd = newPairs -- oldPairs
 
         for {
-          _ <- ZIO.foreachDiscard(toRemove) { ik =>
-                 ops.unindex(index.name, ik, key)(index.keyCodec, index.toKeyCodec)
+          _ <- ZIO.foreachDiscard(toRemove) { case (ik, iv) =>
+                 ops.unindex(index.name, ik, iv)(index.keyCodec, index.toKeyCodec)
                }
-          _ <- ZIO.foreachDiscard(toAdd) { ik =>
-                 ops.index(index.name, ik, key)(index.keyCodec, index.toKeyCodec)
+          _ <- ZIO.foreachDiscard(toAdd) { case (ik, iv) =>
+                 ops.index(index.name, ik, iv)(index.keyCodec, index.toKeyCodec)
                }
         } yield ()
       }
