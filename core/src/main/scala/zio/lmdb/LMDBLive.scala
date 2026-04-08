@@ -76,7 +76,10 @@ class LMDBLive(
                                 }
     } yield dbi
 
-    reentrantLock.withWriteLock(logic).mapError(_ => CollectionNotFound(name))
+    txn match {
+      case Some(_) => logic.mapError(_ => CollectionNotFound(name))
+      case None    => reentrantLock.withWriteLock(logic).mapError(_ => CollectionNotFound(name))
+    }
   }
 
   /** @inheritdoc */
@@ -822,20 +825,37 @@ class LMDBLive(
     startAfter: Option[K] = None,
     backward: Boolean = false
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T] = {
-    def streamLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, T]] = for {
-      txn          <- ZIO.acquireRelease(
-                        ZIO
-                          .attemptBlocking(env.txnRead())
-                          .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
-                      )(txn =>
-                        ZIO
-                          .attemptBlocking(txn.close())
-                          .ignoreLogged
-                      )
+    val result =
+      for {
+        db  <- getCollectionDbi(colName)
+        txn <- ZIO.acquireRelease(
+                 ZIO
+                   .attemptBlocking(env.txnRead())
+                   .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
+               )(txn =>
+                 ZIO
+                   .attemptBlocking(txn.close())
+                   .ignoreLogged
+               )
+        s   <- streamLogic(txn, db, colName, keyFilter, startAfter, backward)
+      } yield s
+
+    ZStream.unwrapScoped(result)
+  }
+
+  private def streamLogic[K, T](
+    txn: Txn[ByteBuffer],
+    dbi: Dbi[ByteBuffer],
+    colName: CollectionName,
+    keyFilter: K => Boolean,
+    startAfter: Option[K],
+    backward: Boolean
+  )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, T]] = {
+    for {
       startAfterBB <- ZIO.foreach(startAfter)(makeKeyByteBuffer)
       iterable     <- ZIO.acquireRelease(
                         ZIO
-                          .attemptBlocking(colDbi.iterate(txn, makeRange(startAfterBB, backward)))
+                          .attemptBlocking(dbi.iterate(txn, makeRange(startAfterBB, backward)))
                           .mapError(err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
                       )(cursor =>
                         ZIO
@@ -852,14 +872,6 @@ class LMDBLive(
         case err: Throwable    => InternalError(s"Couldn't stream from $colName: $err", Some(err))
         case err               => InternalError(s"Couldn't stream from $colName : ${err.toString}", None)
       }
-
-    val result =
-      for {
-        db     <- getCollectionDbi(colName)
-        stream <- streamLogic(db)
-      } yield stream
-
-    ZStream.unwrapScoped(result) // TODO not sure this is the good way ???
   }
 
   /** @inheritdoc */
@@ -869,20 +881,37 @@ class LMDBLive(
     startAfter: Option[K] = None,
     backward: Boolean = false
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)] = {
-    def streamLogic(colDbi: Dbi[ByteBuffer]): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, (K, T)]] = for {
-      txn          <- ZIO.acquireRelease(
-                        ZIO
-                          .attemptBlocking(env.txnRead())
-                          .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
-                      )(txn =>
-                        ZIO
-                          .attemptBlocking(txn.close())
-                          .ignoreLogged
-                      )
+    val result =
+      for {
+        db  <- getCollectionDbi(colName)
+        txn <- ZIO.acquireRelease(
+                 ZIO
+                   .attemptBlocking(env.txnRead())
+                   .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
+               )(txn =>
+                 ZIO
+                   .attemptBlocking(txn.close())
+                   .ignoreLogged
+               )
+        s   <- streamWithKeysLogic(txn, db, colName, keyFilter, startAfter, backward)
+      } yield s
+
+    ZStream.unwrapScoped(result)
+  }
+
+  private def streamWithKeysLogic[K, T](
+    txn: Txn[ByteBuffer],
+    dbi: Dbi[ByteBuffer],
+    colName: CollectionName,
+    keyFilter: K => Boolean,
+    startAfter: Option[K],
+    backward: Boolean
+  )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, (K, T)]] = {
+    for {
       startAfterBB <- ZIO.foreach(startAfter)(makeKeyByteBuffer)
       iterable     <- ZIO.acquireRelease(
                         ZIO
-                          .attemptBlocking(colDbi.iterate(txn, makeRange(startAfterBB, backward)))
+                          .attemptBlocking(dbi.iterate(txn, makeRange(startAfterBB, backward)))
                           .mapError(err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
                       )(cursor =>
                         ZIO
@@ -898,14 +927,6 @@ class LMDBLive(
         case err: Throwable    => InternalError(s"Couldn't stream from $colName: $err", Some(err))
         case err               => InternalError(s"Couldn't stream from $colName : ${err.toString}", None)
       }
-
-    val result =
-      for {
-        db     <- getCollectionDbi(colName)
-        stream <- streamLogic(db)
-      } yield stream
-
-    ZStream.unwrapScoped(result) // TODO not sure this is the good way ???
   }
 
   /** Gets or opens an index DBI handle. */
@@ -926,7 +947,10 @@ class LMDBLive(
                                 }
     } yield dbi
 
-    reentrantLock.withWriteLock(logic).mapError(_ => IndexNotFound(name))
+    txn match {
+      case Some(_) => logic.mapError(_ => IndexNotFound(name))
+      case None    => reentrantLock.withWriteLock(logic).mapError(_ => IndexNotFound(name))
+    }
   }
 
   /** Internal logic to create an index. */
@@ -1382,20 +1406,24 @@ class LMDBLive(
   /** @inheritdoc */
   override def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A] = {
     reentrantLock.withWriteLock(
-      ZIO.scoped(
+      ZIO.scoped {
         for {
           txn <- ZIO.acquireRelease(
                    ZIO
                      .attemptBlocking(env.txnWrite())
                      .mapError(err => InternalError(s"Couldn't acquire write transaction: $err", Some(err)))
-                 )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+                 )(txn =>
+                   ZIO
+                     .attemptBlocking(txn.close())
+                     .ignoreLogged
+                 )
           ops  = new LMDBWriteOpsLive(txn)
           res <- f(ops)
           _   <- ZIO
                    .attemptBlocking(txn.commit())
                    .mapError(err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
         } yield res
-      )
+      }
     )
   }
 
@@ -1541,6 +1569,34 @@ class LMDBLive(
         db  <- getIndexDbi(name, Some(txn)).catchAll { case IndexNotFound(n) => ZIO.fail(CollectionNotFound(n): FetchErrors) }
         res <- ZIO.scoped(indexFetchAtLogic(txn, db, name, position)(keyCodec, toKeyCodec))
       } yield res
+    }
+
+    /** @inheritdoc */
+    override def stream[K, T](
+      collectionName: CollectionName,
+      keyFilter: K => Boolean = (_: K) => true,
+      startAfter: Option[K] = None,
+      backward: Boolean = false
+    )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T] = {
+      val result = for {
+        db     <- getCollectionDbi(collectionName, Some(txn))
+        stream <- streamLogic(txn, db, collectionName, keyFilter, startAfter, backward)
+      } yield stream
+      ZStream.unwrapScoped(result)
+    }
+
+    /** @inheritdoc */
+    override def streamWithKeys[K, T](
+      collectionName: CollectionName,
+      keyFilter: K => Boolean = (_: K) => true,
+      startAfter: Option[K] = None,
+      backward: Boolean = false
+    )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)] = {
+      val result = for {
+        db     <- getCollectionDbi(collectionName, Some(txn))
+        stream <- streamWithKeysLogic(txn, db, collectionName, keyFilter, startAfter, backward)
+      } yield stream
+      ZStream.unwrapScoped(result)
     }
   }
 

@@ -32,22 +32,30 @@ import zio.stream._
 case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters: List[IndexUpdater[K, T]] = Nil)(implicit val kodec: KeyCodec[K], val codec: LMDBCodec[T]) {
 
   /** Link an index to this collection, so that it is automatically updated when the collection is modified.
-    * @param index The index to link
-    * @param extractor A function to extract the index keys from a collection record
-    * @tparam IK The index key type
-    * @return A new collection facade with the index updater attached
+    * @param index
+    *   The index to link
+    * @param extractor
+    *   A function to extract the index keys from a collection record
+    * @tparam IK
+    *   The index key type
+    * @return
+    *   A new collection facade with the index updater attached
     */
   def withIndex[IK](index: LMDBIndex[IK, K])(extractor: T => Iterable[IK]): LMDBCollection[K, T] = {
     withIndexFull[IK, K](index)((k: K, t: T) => extractor(t).map(ik => (ik, k)))
   }
 
-  /** Link an index to this collection, so that it is automatically updated when the collection is modified.
-    * This generic version allows computing both the index key and the index value from the collection key and record.
-    * @param index The index to link
-    * @param extractor A function to extract the (index key, index value) pairs from a collection key and record
-    * @tparam IK The index key type
-    * @tparam IV The index value type
-    * @return A new collection facade with the index updater attached
+  /** Link an index to this collection, so that it is automatically updated when the collection is modified. This generic version allows computing both the index key and the index value from the collection key and record.
+    * @param index
+    *   The index to link
+    * @param extractor
+    *   A function to extract the (index key, index value) pairs from a collection key and record
+    * @tparam IK
+    *   The index key type
+    * @tparam IV
+    *   The index value type
+    * @return
+    *   A new collection facade with the index updater attached
     */
   def withIndexFull[IK, IV](index: LMDBIndex[IK, IV])(extractor: (K, T) => Iterable[(IK, IV)]): LMDBCollection[K, T] = {
     val updater = new IndexUpdater[K, T] {
@@ -67,7 +75,7 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters:
         val oldPairs = extractor(key, oldValue).toSet
         val newPairs = extractor(key, newValue).toSet
         val toRemove = oldPairs -- newPairs
-        val toAdd = newPairs -- oldPairs
+        val toAdd    = newPairs -- oldPairs
 
         for {
           _ <- ZIO.foreachDiscard(toRemove) { case (ik, iv) =>
@@ -93,25 +101,24 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters:
     */
   def size(): IO[SizeErrors, Long] = lmdb.collectionSize(name)
 
-  /** Rebuild all attached indices by clearing them and re-indexing all existing records in the collection.
-    * This is useful when indices are added after the collection has already been populated.
+  /** Rebuild all attached indices by clearing them and re-indexing all existing records in the collection. This is useful when indices are added after the collection has already been populated.
     */
   def rebuildIndexes(): IO[IndexErrors | StreamErrors | ClearErrors, Unit] = {
     if (indexUpdaters.isEmpty) ZIO.unit
     else {
-      for {
-        _ <- ZIO.foreachDiscard(indexUpdaters) { updater =>
-               lmdb.readWrite(ops => updater.onClear(ops))
-             }
-        _ <- streamWithKeys().runForeach { case (key, value) =>
-               ZIO.foreachDiscard(indexUpdaters) { updater =>
-                 lmdb.readWrite(ops => updater.onInsert(ops, key, value))
+      readWrite { ops =>
+        for {
+          _ <- ZIO.foreachDiscard(indexUpdaters)(_.onClear(ops.ops))
+          _ <- ops.streamWithKeys().runForeachChunk { chunk =>
+                 ZIO.foreachDiscard(chunk) { case (key, value) =>
+                   ZIO.foreachDiscard(indexUpdaters)(_.onInsert(ops.ops, key, value))
+                 }
                }
-             }
-      } yield ()
+        } yield ()
+      }
     }
   }
-  def clear(): IO[ClearErrors | IndexErrors, Unit] = {
+  def clear(): IO[ClearErrors | IndexErrors, Unit]                         = {
     if (indexUpdaters.isEmpty) lmdb.collectionClear(name)
     else readWrite(_.clear())
   }
@@ -400,6 +407,40 @@ case class LMDBCollectionReadOps[K, T](
     limit: Option[Int] = None
   ): IO[CollectErrors, List[T]] =
     ops.collect(collection.name, keyFilter, valueFilter, startAfter, backward, limit)
+
+  /** Stream collection records.
+    * @param keyFilter
+    *   filter lambda to select only the keys you want
+    * @param startAfter
+    *   start the stream after the given key
+    * @param backward
+    *   going in reverse key order
+    * @return
+    *   the stream of records
+    */
+  def stream(
+    keyFilter: K => Boolean = _ => true,
+    startAfter: Option[K] = None,
+    backward: Boolean = false
+  ): ZStream[Any, StreamErrors, T] =
+    ops.stream(collection.name, keyFilter, startAfter, backward)
+
+  /** stream collection Key/record tuples.
+    * @param keyFilter
+    *   filter lambda to select only the keys you want
+    * @param startAfter
+    *   start the stream after the given key
+    * @param backward
+    *   going in reverse key order
+    * @return
+    *   the tuple of key and record stream
+    */
+  def streamWithKeys(
+    keyFilter: K => Boolean = _ => true,
+    startAfter: Option[K] = None,
+    backward: Boolean = false
+  ): ZStream[Any, StreamErrors, (K, T)] =
+    ops.streamWithKeys(collection.name, keyFilter, startAfter, backward)
 }
 
 /** Collection-specific read-write operations available within a transaction.
@@ -437,14 +478,14 @@ case class LMDBCollectionWriteOps[K, T](
     for {
       oldValueOpt <- ops.fetch(collection.name, key)
       newValueOpt <- ops.update(collection.name, key, modifier)
-      _ <- ZIO.foreachDiscard(collection.indexUpdaters) { updater =>
-             (oldValueOpt, newValueOpt) match {
-               case (Some(oldVal), Some(newVal)) => updater.onUpdate(ops, key, oldVal, newVal)
-               case (None, Some(newVal))         => updater.onInsert(ops, key, newVal)
-               case (Some(oldVal), None)         => updater.onDelete(ops, key, oldVal)
-               case (None, None)                 => ZIO.unit
-             }
-           }
+      _           <- ZIO.foreachDiscard(collection.indexUpdaters) { updater =>
+                       (oldValueOpt, newValueOpt) match {
+                         case (Some(oldVal), Some(newVal)) => updater.onUpdate(ops, key, oldVal, newVal)
+                         case (None, Some(newVal))         => updater.onInsert(ops, key, newVal)
+                         case (Some(oldVal), None)         => updater.onDelete(ops, key, oldVal)
+                         case (None, None)                 => ZIO.unit
+                       }
+                     }
     } yield newValueOpt
   }
 
@@ -460,12 +501,12 @@ case class LMDBCollectionWriteOps[K, T](
     for {
       oldValueOpt <- ops.fetch(collection.name, key)
       newValue    <- ops.upsert(collection.name, key, modifier)
-      _ <- ZIO.foreachDiscard(collection.indexUpdaters) { updater =>
-             oldValueOpt match {
-               case Some(oldVal) => updater.onUpdate(ops, key, oldVal, newValue)
-               case None         => updater.onInsert(ops, key, newValue)
-             }
-           }
+      _           <- ZIO.foreachDiscard(collection.indexUpdaters) { updater =>
+                       oldValueOpt match {
+                         case Some(oldVal) => updater.onUpdate(ops, key, oldVal, newValue)
+                         case None         => updater.onInsert(ops, key, newValue)
+                       }
+                     }
     } yield newValue
   }
 
@@ -479,12 +520,12 @@ case class LMDBCollectionWriteOps[K, T](
     for {
       oldValueOpt <- ops.fetch(collection.name, key)
       _           <- ops.upsertOverwrite(collection.name, key, document)
-      _ <- ZIO.foreachDiscard(collection.indexUpdaters) { updater =>
-             oldValueOpt match {
-               case Some(oldVal) => updater.onUpdate(ops, key, oldVal, document)
-               case None         => updater.onInsert(ops, key, document)
-             }
-           }
+      _           <- ZIO.foreachDiscard(collection.indexUpdaters) { updater =>
+                       oldValueOpt match {
+                         case Some(oldVal) => updater.onUpdate(ops, key, oldVal, document)
+                         case None         => updater.onInsert(ops, key, document)
+                       }
+                     }
     } yield ()
   }
 
@@ -497,12 +538,12 @@ case class LMDBCollectionWriteOps[K, T](
   def delete(key: K): IO[DeleteErrors | IndexErrors, Option[T]] = {
     for {
       deletedOpt <- ops.delete(collection.name, key)
-      _ <- ZIO.foreachDiscard(collection.indexUpdaters) { updater =>
-             deletedOpt match {
-               case Some(deleted) => updater.onDelete(ops, key, deleted)
-               case None          => ZIO.unit
-             }
-           }
+      _          <- ZIO.foreachDiscard(collection.indexUpdaters) { updater =>
+                      deletedOpt match {
+                        case Some(deleted) => updater.onDelete(ops, key, deleted)
+                        case None          => ZIO.unit
+                      }
+                    }
     } yield deletedOpt
   }
 }

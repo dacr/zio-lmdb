@@ -221,6 +221,44 @@ trait LMDBReadOps {
     *   some (key,targetKey) tuple or none if the index is empty
     */
   def indexFetchAt[FROM_KEY, TO_KEY](name: IndexName, position: Long)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
+
+  /** Stream collection records.
+    * @param collectionName
+    *   the collection name
+    * @param keyFilter
+    *   filter lambda to select only the keys you want
+    * @param startAfter
+    *   start the stream after the given key
+    * @param backward
+    *   going in reverse key order
+    * @return
+    *   the stream of records
+    */
+  def stream[K, T](
+    collectionName: CollectionName,
+    keyFilter: K => Boolean = (_: K) => true,
+    startAfter: Option[K] = None,
+    backward: Boolean = false
+  )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): zio.stream.ZStream[Any, StreamErrors, T]
+
+  /** stream collection Key/record tuples.
+    * @param collectionName
+    *   the collection name
+    * @param keyFilter
+    *   filter lambda to select only the keys you want
+    * @param startAfter
+    *   start the stream after the given key
+    * @param backward
+    *   going in reverse key order
+    * @return
+    *   the tuple of key and record stream
+    */
+  def streamWithKeys[K, T](
+    collectionName: CollectionName,
+    keyFilter: K => Boolean = (_: K) => true,
+    startAfter: Option[K] = None,
+    backward: Boolean = false
+  )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): zio.stream.ZStream[Any, StreamErrors, (K, T)]
 }
 
 /** LMDB operations available within a read-write transaction context. */
