@@ -1,9 +1,9 @@
 ThisBuild / scalaVersion := "3.3.7"
 
 lazy val versions = new {
-  val zio        = "2.1.24"
+  val zio        = "2.1.25"
   val zionio     = "2.0.2"
-  val ziojson    = "0.9.0"
+  val ziojson    = "0.9.1"
   val zioconfig  = "4.0.7"
   val ziologging = "2.5.3"
   val lmdb       = "0.9.3"
@@ -99,7 +99,7 @@ lazy val keycodecsUca = (project in file("keycodecs-uca"))
     name        := "keycodecs-uca",
     description := "UCA Sort Key tools for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "com.ibm.icu" % "icu4j"               % "78.2",
+      "com.ibm.icu" % "icu4j"               % "78.3",
       "dev.zio"    %% "zio-test"            % versions.zio % Test,
       "dev.zio"    %% "zio-test-sbt"        % versions.zio % Test,
       "dev.zio"    %% "zio-test-scalacheck" % versions.zio % Test
@@ -113,7 +113,7 @@ lazy val keycodecsUlid = (project in file("keycodecs-ulid"))
     name        := "keycodecs-ulid",
     description := "ULID support for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "org.wvlet.airframe" %% "airframe-ulid"       % "2026.1.1",
+      "org.wvlet.airframe" %% "airframe-ulid"       % "2026.1.5",
       "dev.zio"            %% "zio-test"            % versions.zio % Test,
       "dev.zio"            %% "zio-test-sbt"        % versions.zio % Test,
       "dev.zio"            %% "zio-test-scalacheck" % versions.zio % Test
