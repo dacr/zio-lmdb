@@ -24,6 +24,8 @@ import zio.lmdb._
   *
   * @param collection
   *   The collection to query
+  * @param ops
+  *   Optional read operations context for shared transactions
   * @param keyPredicate
   *   Filter applied to keys before deserializing values
   * @param valuePredicate
@@ -37,6 +39,7 @@ import zio.lmdb._
   */
 case class QueryBuilder[K, T](
   collection: LMDBCollection[K, T],
+  ops: Option[LMDBReadOps] = None,
   keyPredicate: K => Boolean = (_: K) => true,
   valuePredicate: T => Boolean = (_: T) => true,
   startKey: Option[K] = None,
@@ -81,14 +84,20 @@ case class QueryBuilder[K, T](
     *   A ZIO effect containing the list of matching values
     */
   def toList: IO[CollectErrors, List[T]] =
-    collection.collect(keyPredicate, valuePredicate, startKey, isBackward, maxLimit)
+    ops match {
+      case Some(o) => o.collect(collection.name, keyPredicate, valuePredicate, startKey, isBackward, maxLimit)(collection.kodec, collection.codec)
+      case None    => collection.collect(keyPredicate, valuePredicate, startKey, isBackward, maxLimit)
+    }
 
   /** Execute the query and return a ZStream of the results. Note: The stream does not currently support the `limit` parameter directly at the LMDB level, so it applies the limit using ZStream.take if a limit is set.
     * @return
     *   A ZStream of matching values
     */
   def toStream: ZStream[Any, StreamErrors, T] = {
-    val stream = collection.stream(keyPredicate, startKey, isBackward).filter(valuePredicate)
+    val stream = ops match {
+      case Some(o) => o.stream(collection.name, keyPredicate, startKey, isBackward)(collection.kodec, collection.codec).filter(valuePredicate)
+      case None    => collection.stream(keyPredicate, startKey, isBackward).filter(valuePredicate)
+    }
     maxLimit match {
       case Some(n) => stream.take(n)
       case None    => stream
@@ -100,7 +109,10 @@ case class QueryBuilder[K, T](
     *   A ZStream of matching key-value pairs
     */
   def toStreamWithKeys: ZStream[Any, StreamErrors, (K, T)] = {
-    val stream = collection.streamWithKeys(keyPredicate, startKey, isBackward).filter { case (_, v) => valuePredicate(v) }
+    val stream = ops match {
+      case Some(o) => o.streamWithKeys(collection.name, keyPredicate, startKey, isBackward)(collection.kodec, collection.codec).filter { case (_, v) => valuePredicate(v) }
+      case None    => collection.streamWithKeys(keyPredicate, startKey, isBackward).filter { case (_, v) => valuePredicate(v) }
+    }
     maxLimit match {
       case Some(n) => stream.take(n)
       case None    => stream
@@ -123,13 +135,17 @@ case class QueryBuilder[K, T](
   def joinByKey[RK, RT](rightCollection: LMDBCollection[RK, RT])(extractKey: T => RK): JoinedQueryBuilder[T, RT] = {
     val joinedStream = toStream.mapZIO { leftValue =>
       val rightKey = extractKey(leftValue)
-      rightCollection.fetch(rightKey).map {
+      val fetchResult = ops match {
+        case Some(o) => o.fetch(rightCollection.name, rightKey)(rightCollection.kodec, rightCollection.codec)
+        case None    => rightCollection.fetch(rightKey)
+      }
+      fetchResult.map {
         case Some(rightValue) => Some((leftValue, rightValue))
         case None             => None
       }
     }.collectSome
 
-    JoinedQueryBuilder(joinedStream)
+    JoinedQueryBuilder(joinedStream, ops)
   }
 
   /** Join this query with another collection using an index. This is useful for one-to-many relationships where an index maps the left record's key (or a value derived from it) to multiple keys in the right collection.
@@ -155,10 +171,17 @@ case class QueryBuilder[K, T](
   )(extractIndexKey: T => IK): JoinedQueryBuilder[T, RT] = {
     val joinedStream = toStream.flatMap { leftValue =>
       val indexKey = extractIndexKey(leftValue)
-      index
-        .indexed(indexKey)
+      val indexedStream = ops match {
+        case Some(o) => o.indexed(index.name, indexKey)(index.keyCodec, index.toKeyCodec)
+        case None    => index.indexed(indexKey)
+      }
+      indexedStream
         .mapZIO { case (_, rightKey) =>
-          rightCollection.fetch(rightKey).map {
+          val fetchResult = ops match {
+            case Some(o) => o.fetch(rightCollection.name, rightKey)(rightCollection.kodec, rightCollection.codec)
+            case None    => rightCollection.fetch(rightKey)
+          }
+          fetchResult.map {
             case Some(rightValue) => Some((leftValue, rightValue))
             case None             => None
           }
@@ -166,7 +189,7 @@ case class QueryBuilder[K, T](
         .collectSome
     }
 
-    JoinedQueryBuilder(joinedStream)
+    JoinedQueryBuilder(joinedStream, ops)
   }
 }
 
@@ -174,12 +197,17 @@ case class QueryBuilder[K, T](
   *
   * @param stream
   *   The underlying stream of joined results
+  * @param ops
+  *   Optional read operations context for shared transactions
   * @tparam L
   *   The type of the left value
   * @tparam R
   *   The type of the right value
   */
-case class JoinedQueryBuilder[L, R](stream: ZStream[Any, StorageUserError | StorageSystemError, (L, R)]) {
+case class JoinedQueryBuilder[L, R](
+  stream: ZStream[Any, StorageUserError | StorageSystemError, (L, R)],
+  ops: Option[LMDBReadOps] = None
+) {
 
   /** Filter the joined results.
     * @param f
@@ -217,13 +245,17 @@ case class JoinedQueryBuilder[L, R](stream: ZStream[Any, StorageUserError | Stor
   def joinByKey[RK, RT](rightCollection: LMDBCollection[RK, RT])(extractKey: ((L, R)) => RK): JoinedQueryBuilder[(L, R), RT] = {
     val joinedStream = stream.mapZIO { pair =>
       val rightKey = extractKey(pair)
-      rightCollection.fetch(rightKey).map {
+      val fetchResult = ops match {
+        case Some(o) => o.fetch(rightCollection.name, rightKey)(rightCollection.kodec, rightCollection.codec)
+        case None    => rightCollection.fetch(rightKey)
+      }
+      fetchResult.map {
         case Some(rightValue) => Some((pair, rightValue))
         case None             => None
       }
     }.collectSome
 
-    JoinedQueryBuilder(joinedStream)
+    JoinedQueryBuilder(joinedStream, ops)
   }
 
   /** Join this query with another collection using an index.
@@ -249,10 +281,17 @@ case class JoinedQueryBuilder[L, R](stream: ZStream[Any, StorageUserError | Stor
   )(extractIndexKey: ((L, R)) => IK): JoinedQueryBuilder[(L, R), RT] = {
     val joinedStream = stream.flatMap { pair =>
       val indexKey = extractIndexKey(pair)
-      index
-        .indexed(indexKey)
+      val indexedStream = ops match {
+        case Some(o) => o.indexed(index.name, indexKey)(index.keyCodec, index.toKeyCodec)
+        case None    => index.indexed(indexKey)
+      }
+      indexedStream
         .mapZIO { case (_, rightKey) =>
-          rightCollection.fetch(rightKey).map {
+          val fetchResult = ops match {
+            case Some(o) => o.fetch(rightCollection.name, rightKey)(rightCollection.kodec, rightCollection.codec)
+            case None    => rightCollection.fetch(rightKey)
+          }
+          fetchResult.map {
             case Some(rightValue) => Some((pair, rightValue))
             case None             => None
           }
@@ -260,7 +299,7 @@ case class JoinedQueryBuilder[L, R](stream: ZStream[Any, StorageUserError | Stor
         .collectSome
     }
 
-    JoinedQueryBuilder(joinedStream)
+    JoinedQueryBuilder(joinedStream, ops)
   }
 }
 
@@ -271,5 +310,19 @@ object QueryBuilder {
 
     /** Start building a query for this collection */
     def query: QueryBuilder[K, T] = QueryBuilder(collection)
+  }
+
+  /** Extension methods to easily create a QueryBuilder from an LMDBCollectionReadOps */
+  implicit class LMDBCollectionReadOpsQueryOps[K, T](val readOps: LMDBCollectionReadOps[K, T]) extends AnyVal {
+
+    /** Start building a query for this collection within an existing transaction */
+    def query: QueryBuilder[K, T] = QueryBuilder(readOps.collection, Some(readOps.ops))
+  }
+
+  /** Extension methods to easily create a QueryBuilder from an LMDBCollectionWriteOps */
+  implicit class LMDBCollectionWriteOpsQueryOps[K, T](val writeOps: LMDBCollectionWriteOps[K, T]) extends AnyVal {
+
+    /** Start building a query for this collection within an existing transaction */
+    def query: QueryBuilder[K, T] = QueryBuilder(writeOps.collection, Some(writeOps.ops))
   }
 }

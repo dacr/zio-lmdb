@@ -212,7 +212,7 @@ trait LMDBReadOps {
     */
   def indexFetch[FROM_KEY, TO_KEY](name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[TO_KEY]]
 
-  /** Get an index record at a specific position
+  /** Get index record at a specific position
     * @param name
     *   the index name
     * @param position
@@ -221,6 +221,26 @@ trait LMDBReadOps {
     *   some (key,targetKey) tuple or none if the index is empty
     */
   def indexFetchAt[FROM_KEY, TO_KEY](name: IndexName, position: Long)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
+
+  /** Get a stream of target keys for a given key in an index
+    * @param name
+    *   the index name
+    * @param key
+    *   the key to look for
+    * @param limitToKey
+    *   limit results to values belonging to the given key only (no key jump), default is true
+    * @tparam FROM_KEY
+    *   the type of the key
+    * @tparam TO_KEY
+    *   the type of the target key
+    * @return
+    *   a stream of target keys
+    */
+  def indexed[FROM_KEY, TO_KEY](
+    name: IndexName,
+    key: FROM_KEY,
+    limitToKey: Boolean = true
+  )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): zio.stream.ZStream[Any, IndexErrors, (FROM_KEY, TO_KEY)]
 
   /** Stream collection records.
     * @param collectionName

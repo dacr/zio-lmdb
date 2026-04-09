@@ -234,6 +234,31 @@ object QueryBuilderSpec extends ZIOSpecDefault {
         results.count { case ((user, _), _) => user.name == "Diana" } == 1,
         results.exists { case ((_, post), comment) => post.id == "p1" && comment.text == "Great post!" }
       )
+    },
+    test("can query within an existing transaction (shared txn)") {
+      for {
+        lmdb     <- ZIO.service[LMDB]
+        usersCol <- lmdb.collectionGet[String, User]("users")
+        postsCol <- lmdb.collectionGet[String, Post]("posts")
+
+        authorToPostIdx <- lmdb.indexGet[String, String]("author_to_post")
+
+        // Use readOnly to share the transaction
+        results <- lmdb.readOnly { ops =>
+          val users = usersCol.lift(ops)
+
+          // Start query from lifted ops
+          users.query
+            .whereValue(_.active)
+            .joinByIndex(postsCol, authorToPostIdx)(_.id)
+            .toList
+        }
+      } yield assertTrue(
+        results.size == 4,
+        results.count { case (user, _) => user.name == "Alice" } == 2,
+        results.count { case (user, _) => user.name == "Charlie" } == 1,
+        results.count { case (user, _) => user.name == "Diana" } == 1
+      )
     }
   ).provideShared(
     Scope.default,
