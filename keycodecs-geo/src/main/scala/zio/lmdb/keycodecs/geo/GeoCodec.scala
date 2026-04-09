@@ -17,13 +17,15 @@ package zio.lmdb.keycodecs.geo
 
 import zio.lmdb.keycodecs.KeyCodec
 import java.nio.ByteBuffer
+import zio.lmdb.keycodecs.KeyCodecError
+import zio.lmdb.keycodecs.KeyCodecError._
 
 object GeoCodec {
   given locationKeyCodec: KeyCodec[GEOTools.Location] = new KeyCodec[GEOTools.Location] {
     override def encode(key: GEOTools.Location): Array[Byte] = GEOTools.locationToBytes(key)
 
-    override def decode(keyBytes: ByteBuffer): Either[String, GEOTools.Location] = {
-      if (keyBytes.remaining() < 8) Left(s"Not enough bytes for Location, expected 8 but got ${keyBytes.remaining()}")
+    override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, GEOTools.Location] = {
+      if (keyBytes.remaining() < 8) Left(InsufficientBytes(8, keyBytes.remaining()))
       else {
         val bytes = new Array[Byte](8)
         keyBytes.get(bytes)

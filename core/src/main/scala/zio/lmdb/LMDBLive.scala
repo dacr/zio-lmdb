@@ -15,6 +15,7 @@
  */
 package zio.lmdb
 import zio.lmdb.keycodecs.KeyCodec
+import zio.lmdb.keycodecs.KeyCodecError
 
 import zio._
 import zio.stm._
@@ -61,26 +62,39 @@ class LMDBLive(
 
   /** Gets or opens a collection DBI handle. */
   private def getCollectionDbi(name: CollectionName, txn: Option[Txn[ByteBuffer]] = None): IO[CollectionNotFound, Dbi[ByteBuffer]] = {
-    val logic = for {
-      openedCollectionDbis <- openedCollectionDbisRef.get
-      dbi                  <- ZIO
-                                .fromOption(openedCollectionDbis.get(name))
-                                .orElse {
-                                  for {
-                                    newDbi <- txn match {
-                                                case Some(t) => ZIO.attempt(env.openDbi(t, name.getBytes(StandardCharsets.UTF_8), null, false))
-                                                case None    => ZIO.attemptBlocking(env.openDbi(name))
-                                              }
-                                    _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
-                                  } yield newDbi
-                                }
+    for {
+      // 1. First Check (Outside the Lock): High-performance path for already opened collections.
+      opened <- openedCollectionDbisRef.get
+      dbi    <- opened.get(name) match {
+                  case Some(d) => ZIO.succeed(d)
+                  case None    =>
+                    // 2. The Lock: Ensure that only one fiber at a time can attempt to open a new collection.
+                    // This is critical because LMDB's openDbi requires serialized execution.
+                    reentrantLock.withWriteLock {
+                      for {
+                        // 3. Second Check (Double-Checked Locking): While this fiber was waiting for the lock,
+                        // another fiber might have already opened the collection and updated the Ref.
+                        openedAgain <- openedCollectionDbisRef.get
+                        d           <- openedAgain.get(name) match {
+                                         case Some(alreadyOpened) => ZIO.succeed(alreadyOpened)
+                                         case None                =>
+                                           for {
+                                             // 4. The Work: Call LMDB to open the DBI handle.
+                                             // Note: Opening a DBI handle initiates an internal write transaction.
+                                             // We use attemptBlocking to offload this to the blocking thread pool
+                                             // and avoid deadlocks with the current fiber's potential transactions.
+                                             newDbi <- txn match {
+                                                         case Some(t) => ZIO.attempt(env.openDbi(t, name.getBytes(StandardCharsets.UTF_8), null, false))
+                                                         case None    => ZIO.attemptBlocking(env.openDbi(name))
+                                                       }
+                                             _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                                           } yield newDbi
+                                       }
+                      } yield d
+                    }
+                }
     } yield dbi
-
-    txn match {
-      case Some(_) => logic.mapError(_ => CollectionNotFound(name))
-      case None    => reentrantLock.withWriteLock(logic).mapError(_ => CollectionNotFound(name))
-    }
-  }
+  }.mapError(_ => CollectionNotFound(name))
 
   /** @inheritdoc */
   override def collectionExists(name: CollectionName): IO[StorageSystemError, Boolean] = {
@@ -801,7 +815,7 @@ class LMDBLive(
 //    }
 //  }
 
-  case class KeyValue[K, T](key: Either[String, K], value: Either[String, T])
+  case class KeyValue[K, T](key: Either[KeyCodecError, K], value: Either[String, T])
 
   case class KeyValueIterator[K, T](jiterator: java.util.Iterator[KeyVal[ByteBuffer]])(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]) extends Iterator[KeyValue[K, T]] {
 
@@ -864,7 +878,7 @@ class LMDBLive(
                       )
     } yield ZStream
       .fromIterator(KeyValueIterator[K, T](iterable.iterator()))
-      .map(kv => kv.key.flatMap(key => kv.value.map(value => (key, value))))
+      .map(kv => kv.key.left.map(_.toString).flatMap(key => kv.value.map(value => (key, value))))
       .collect { case either if either.isLeft || either.exists((k, v) => keyFilter(k)) => either.map((k, v) => v) }
       .mapZIO { valueEither => ZIO.fromEither(valueEither).mapError(err => CodecFailure(err)) }
       .mapError {
@@ -921,7 +935,7 @@ class LMDBLive(
     } yield ZStream
       .fromIterator(KeyValueIterator[K, T](iterable.iterator()))
       .filter { entry => entry.key.exists(keyFilter) }
-      .mapZIO { entry => ZIO.fromEither(entry.value.flatMap(value => entry.key.map(key => key -> value))).mapError(err => CodecFailure(err)) }
+      .mapZIO { entry => ZIO.fromEither(entry.value.flatMap(value => entry.key.left.map(_.toString).map(key => key -> value))).mapError(err => CodecFailure(err)) }
       .mapError {
         case err: CodecFailure => err
         case err: Throwable    => InternalError(s"Couldn't stream from $colName: $err", Some(err))
@@ -931,27 +945,39 @@ class LMDBLive(
 
   /** Gets or opens an index DBI handle. */
   private def getIndexDbi(name: IndexName, txn: Option[Txn[ByteBuffer]] = None): IO[IndexNotFound, Dbi[ByteBuffer]] = {
-    val logic = for {
-      openedCollectionDbis <- openedCollectionDbisRef.get
-      dbi                  <- ZIO
-                                .fromOption(openedCollectionDbis.get(name))
-                                .orElse {
-                                  for {
-                                    newDbi <- txn match {
-                                                case Some(t) =>
-                                                  ZIO.attempt(env.openDbi(t, name.getBytes(StandardCharsets.UTF_8), null, false, DbiFlags.MDB_DUPSORT))
-                                                case None    => ZIO.attemptBlocking(env.openDbi(name, DbiFlags.MDB_DUPSORT))
-                                              }
-                                    _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
-                                  } yield newDbi
-                                }
+    for {
+      // 1. First Check (Outside the Lock): High-performance path for already opened indices.
+      opened <- openedCollectionDbisRef.get
+      dbi    <- opened.get(name) match {
+                  case Some(d) => ZIO.succeed(d)
+                  case None    =>
+                    // 2. The Lock: Ensure that only one fiber at a time can attempt to open a new index.
+                    // LMDB's openDbi requires serialized execution to prevent internal resource contention.
+                    reentrantLock.withWriteLock {
+                      for {
+                        // 3. Second Check (Double-Checked Locking): Verify if another fiber already
+                        // opened the index while this one was waiting for the lock.
+                        openedAgain <- openedCollectionDbisRef.get
+                        d           <- openedAgain.get(name) match {
+                                         case Some(alreadyOpened) => ZIO.succeed(alreadyOpened)
+                                         case None                =>
+                                           for {
+                                             // 4. The Work: Call LMDB to open the index DBI handle.
+                                             // We use attemptBlocking to offload the internal write transaction
+                                             // to the blocking pool, avoiding deadlocks with active read transactions.
+                                             newDbi <- txn match {
+                                                         case Some(t) =>
+                                                           ZIO.attempt(env.openDbi(t, name.getBytes(StandardCharsets.UTF_8), null, false, DbiFlags.MDB_DUPSORT))
+                                                         case None    => ZIO.attemptBlocking(env.openDbi(name, DbiFlags.MDB_DUPSORT))
+                                                       }
+                                             _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                                           } yield newDbi
+                                       }
+                      } yield d
+                    }
+                }
     } yield dbi
-
-    txn match {
-      case Some(_) => logic.mapError(_ => IndexNotFound(name))
-      case None    => reentrantLock.withWriteLock(logic).mapError(_ => IndexNotFound(name))
-    }
-  }
+  }.mapError(_ => IndexNotFound(name))
 
   /** Internal logic to create an index. */
   private def indexCreateLogic(name: IndexName): ZIO[Any, StorageSystemError, Unit] = reentrantLock.withWriteLock {

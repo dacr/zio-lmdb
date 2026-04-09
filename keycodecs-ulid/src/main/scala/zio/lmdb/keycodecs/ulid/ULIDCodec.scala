@@ -18,13 +18,15 @@ package zio.lmdb.keycodecs.ulid
 import wvlet.airframe.ulid.ULID
 import zio.lmdb.keycodecs.KeyCodec
 import java.nio.ByteBuffer
+import zio.lmdb.keycodecs.KeyCodecError
+import zio.lmdb.keycodecs.KeyCodecError._
 
 object ULIDCodec {
   given KeyCodec[ULID] = new KeyCodec[ULID] {
     override def encode(key: ULID): Array[Byte] = key.toBytes
 
-    override def decode(keyBytes: ByteBuffer): Either[String, ULID] = {
-      if (keyBytes.remaining() < 16) Left(s"Not enough bytes for ULID, expected 16 but got ${keyBytes.remaining()}")
+    override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, ULID] = {
+      if (keyBytes.remaining() < 16) Left(InsufficientBytes(16, keyBytes.remaining()))
       else {
         val bytes = new Array[Byte](16)
         keyBytes.get(bytes)

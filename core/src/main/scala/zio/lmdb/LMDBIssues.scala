@@ -16,13 +16,15 @@
 
 package zio.lmdb
 
+import zio.lmdb.keycodecs.KeyCodecError
+
 /** Errors that can be triggered by user actions or invalid data. */
 enum StorageUserError {
   case CollectionAlreadExists(name: CollectionName)
   case CollectionNotFound(name: CollectionName)
   case IndexAlreadyExists(name: IndexName)
   case IndexNotFound(name: IndexName)
-  case CodecFailure(issue: String)
+  case CodecFailure(issue: String | KeyCodecError)
   case OverSizedKey(id: String, expandedSize: Int, limit: Int)
 }
 

@@ -17,7 +17,8 @@ package zio.lmdb.keycodecs
 
 import zio.*
 import zio.test.*
-import zio.test.Assertion.*
+import zio.test.Assertion._
+import zio.lmdb.keycodecs.KeyCodecError
 import java.nio.ByteBuffer
 import java.util.UUID
 import java.util.Arrays
@@ -50,7 +51,7 @@ object KeyCodecSpec extends ZIOSpecDefault {
         val codec   = summon[KeyCodec[UUID]]
         val buffer  = ByteBuffer.allocateDirect(15) // UUID requires 16 bytes
         val decoded = codec.decode(buffer)
-        assert(decoded)(isLeft(containsString("Not enough bytes for UUID")))
+        assert(decoded)(isLeft(equalTo(KeyCodecError.InsufficientBytes(16, 15))))
       }
     ),
     suite("Tuple2 codec")(

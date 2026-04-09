@@ -18,6 +18,7 @@ package zio.lmdb.keycodecs.timestamp
 import zio.*
 import zio.test.*
 import zio.test.Assertion.*
+import zio.lmdb.keycodecs.KeyCodecError
 import zio.lmdb.keycodecs.KeyCodec
 import zio.lmdb.keycodecs.timestamp.TimestampCodec.given
 import java.time.Instant
@@ -77,7 +78,7 @@ object TimestampCodecSpec extends ZIOSpecDefault {
       val codec   = summon[KeyCodec[Instant]]
       val buffer  = ByteBuffer.allocateDirect(11) // Instant requires 12 bytes
       val decoded = codec.decode(buffer)
-      assert(decoded)(isLeft(containsString("Not enough bytes for Instant")))
+      assert(decoded)(isLeft(equalTo(KeyCodecError.InsufficientBytes(12, 11))))
     }
   )
 }

@@ -18,6 +18,7 @@ package zio.lmdb.keycodecs.ulid
 import zio.*
 import zio.test.*
 import zio.test.Assertion.*
+import zio.lmdb.keycodecs.KeyCodecError
 import zio.lmdb.keycodecs.KeyCodec
 import zio.lmdb.keycodecs.ulid.ULIDCodec.given
 import wvlet.airframe.ulid.ULID
@@ -39,7 +40,7 @@ object ULIDCodecSpec extends ZIOSpecDefault {
       val codec   = summon[KeyCodec[ULID]]
       val buffer  = ByteBuffer.allocateDirect(15) // ULID requires 16 bytes
       val decoded = codec.decode(buffer)
-      assert(decoded)(isLeft(containsString("Not enough bytes for ULID")))
+      assert(decoded)(isLeft(equalTo(KeyCodecError.InsufficientBytes(16, 15))))
     }
   )
 }

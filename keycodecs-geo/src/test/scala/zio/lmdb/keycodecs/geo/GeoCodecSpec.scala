@@ -18,6 +18,7 @@ package zio.lmdb.keycodecs.geo
 import zio.*
 import zio.test.*
 import zio.test.Assertion.*
+import zio.lmdb.keycodecs.KeyCodecError
 import zio.lmdb.keycodecs.KeyCodec
 import zio.lmdb.keycodecs.geo.GeoCodec.given
 import java.nio.ByteBuffer
@@ -41,7 +42,7 @@ object GeoCodecSpec extends ZIOSpecDefault {
       val codec   = summon[KeyCodec[GEOTools.Location]]
       val buffer  = ByteBuffer.allocateDirect(7) // Location requires 8 bytes
       val decoded = codec.decode(buffer)
-      assert(decoded)(isLeft(containsString("Not enough bytes for Location")))
+      assert(decoded)(isLeft(equalTo(KeyCodecError.InsufficientBytes(8, 7))))
     }
   )
 }

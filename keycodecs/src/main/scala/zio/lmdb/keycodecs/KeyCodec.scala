@@ -19,7 +19,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import scala.annotation.tailrec
-import scala.util.{Try, Success, Failure}
+import zio.lmdb.keycodecs.KeyCodecError._
 
 /** A codec abstraction for encoding and decoding keys of type `K` into a byte array representation for use with an LMDB database. The trait provides methods for serialization and deserialization, allowing a bidirectional mapping between `K` and its
   * byte representation.
@@ -41,9 +41,9 @@ trait KeyCodec[K] {
     * @param keyBytes
     *   the byte buffer containing the encoded key
     * @return
-    *   the decoded key or an error message
+    *   the decoded key or a structured error
     */
-  def decode(keyBytes: ByteBuffer): Either[String, K] // TODO Replace String by Throwable
+  def decode(keyBytes: ByteBuffer): Either[KeyCodecError, K]
 
   /** The fixed width of the encoded key in bytes, if applicable.
     * @return
@@ -59,8 +59,12 @@ object KeyCodec {
 
     override def encode(key: String): Array[Byte] = key.getBytes(charset)
 
-    override def decode(keyBytes: ByteBuffer): Either[String, String] =
-      Right(charset.decode(keyBytes).toString)
+    override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, String] =
+      try {
+        Right(charset.decode(keyBytes).toString)
+      } catch {
+        case e: Exception => Left(InternalFailure(e.getMessage))
+      }
 
     override def width: Option[Int] = None
   }
@@ -68,8 +72,8 @@ object KeyCodec {
   given uuidKeyCodec: KeyCodec[UUID] = new KeyCodec[UUID] {
     override def encode(key: UUID): Array[Byte] = UUIDTools.uuidToBytes(key)
 
-    override def decode(keyBytes: ByteBuffer): Either[String, UUID] = {
-      if (keyBytes.remaining() < 16) Left(s"Not enough bytes for UUID, expected 16 but got ${keyBytes.remaining()}")
+    override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, UUID] = {
+      if (keyBytes.remaining() < 16) Left(InsufficientBytes(16, keyBytes.remaining()))
       else {
         val msb = keyBytes.getLong
         val lsb = keyBytes.getLong
@@ -113,10 +117,10 @@ object KeyCodec {
       }
     }
 
-    override def decode(keyBytes: ByteBuffer): Either[String, (A, B)] = {
+    override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, (A, B)] = {
       codecA.width match {
         case Some(wa) =>
-          if (keyBytes.remaining() < wa) Left(s"Not enough bytes for component A, expected $wa but got ${keyBytes.remaining()}")
+          if (keyBytes.remaining() < wa) Left(InsufficientBytes(wa, keyBytes.remaining()))
           else {
             val limit    = keyBytes.limit()
             val position = keyBytes.position()
@@ -139,8 +143,8 @@ object KeyCodec {
           val limit    = keyBytes.limit()
 
           @tailrec
-          def findSeparator(pos: Int): Either[String, Int] = {
-            if (pos >= limit) Left("Separator 0x00 not found for variable width component A")
+          def findSeparator(pos: Int): Either[KeyCodecError, Int] = {
+            if (pos >= limit) Left(MissingSeparator(pos))
             else {
               val b = keyBytes.get(pos)
               if (b == 0) {
@@ -158,7 +162,7 @@ object KeyCodec {
             val bufferA = ByteBuffer.wrap(bytesA)  // Write wrapper
 
             @tailrec
-            def unescape(pos: Int): Either[String, ByteBuffer] = {
+            def unescape(pos: Int): Either[KeyCodecError, ByteBuffer] = {
               if (pos >= separatorPos) {
                 bufferA.flip()
                 Right(bufferA)
@@ -168,7 +172,7 @@ object KeyCodec {
                   if (pos + 1 < limit && keyBytes.get(pos + 1) == -1.toByte) {
                     bufferA.put(0.toByte)
                     unescape(pos + 2)
-                  } else Left("Unexpected 0x00 encountered during unescaping") // Should be unreachable given findSeparator logic
+                  } else Left(UnescapedZero(pos))
                 } else {
                   bufferA.put(b)
                   unescape(pos + 1)

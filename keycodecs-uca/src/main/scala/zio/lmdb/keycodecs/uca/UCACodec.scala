@@ -20,6 +20,7 @@ import zio.lmdb.keycodecs.KeyCodec
 
 import java.nio.ByteBuffer
 import com.ibm.icu.util.ULocale
+import zio.lmdb.keycodecs.KeyCodecError
 
 opaque type UCAKey = Array[Byte]
 
@@ -48,7 +49,7 @@ object UCAKeyCodec {
   given ucaKeyCodec: KeyCodec[UCAKey] = new KeyCodec[UCAKey] {
     override def encode(key: UCAKey): Array[Byte] = key.bytes
 
-    override def decode(keyBytes: ByteBuffer): Either[String, UCAKey] = {
+    override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, UCAKey] = {
       val bytes = new Array[Byte](keyBytes.remaining())
       keyBytes.get(bytes)
       Right(UCAKey(bytes))

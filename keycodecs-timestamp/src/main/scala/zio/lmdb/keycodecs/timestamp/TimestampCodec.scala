@@ -18,6 +18,8 @@ package zio.lmdb.keycodecs.timestamp
 import zio.lmdb.keycodecs.KeyCodec
 import java.nio.ByteBuffer
 import java.time.Instant
+import zio.lmdb.keycodecs.KeyCodecError
+import zio.lmdb.keycodecs.KeyCodecError._
 
 object TimestampCodec {
 
@@ -34,8 +36,8 @@ object TimestampCodec {
       buffer.array()
     }
 
-    override def decode(keyBytes: ByteBuffer): Either[String, Instant] = {
-      if (keyBytes.remaining() < 12) Left(s"Not enough bytes for Instant, expected 12 but got ${keyBytes.remaining()}")
+    override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, Instant] = {
+      if (keyBytes.remaining() < 12) Left(InsufficientBytes(12, keyBytes.remaining()))
       else {
         val secondsEncoded = keyBytes.getLong
         val nanos          = keyBytes.getInt

@@ -20,6 +20,7 @@ import zio.lmdb.keycodecs.KeyCodec
 import java.nio.ByteBuffer
 import java.util.UUID
 import com.github.f4b6a3.uuid.UuidCreator
+import zio.lmdb.keycodecs.KeyCodecError
 
 import java.time.Instant
 
@@ -41,7 +42,7 @@ object UUIDv7Codec {
 
     override def encode(key: UUIDv7): Array[Byte] = codec.encode(key.asUUID)
 
-    override def decode(keyBytes: ByteBuffer): Either[String, UUIDv7] =
+    override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, UUIDv7] =
       codec.decode(keyBytes).map(UUIDv7.apply)
 
     override def width: Option[Int] = Some(16)
