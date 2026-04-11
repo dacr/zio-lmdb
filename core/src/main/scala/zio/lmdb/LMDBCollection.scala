@@ -59,6 +59,8 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters:
     */
   def withIndexFull[IK, IV](index: LMDBIndex[IK, IV])(extractor: (K, T) => Iterable[(IK, IV)]): LMDBCollection[K, T] = {
     val updater = new IndexUpdater[K, T] {
+      override val indexName: IndexName = index.name
+
       override def onInsert(ops: LMDBWriteOps, key: K, newValue: T): IO[IndexErrors, Unit] = {
         ZIO.foreachDiscard(extractor(key, newValue)) { case (ik, iv) =>
           ops.index(index.name, ik, iv)(index.keyCodec, index.toKeyCodec)
@@ -106,16 +108,20 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters:
   def rebuildIndexes(): IO[IndexErrors | StreamErrors | ClearErrors, Unit] = {
     if (indexUpdaters.isEmpty) ZIO.unit
     else {
-      readWrite { ops =>
-        for {
-          _ <- ZIO.foreachDiscard(indexUpdaters)(_.onClear(ops.ops))
-          _ <- ops.streamWithKeys().runForeachChunk { chunk =>
-                 ZIO.foreachDiscard(chunk) { case (key, value) =>
-                   ZIO.foreachDiscard(indexUpdaters)(_.onInsert(ops.ops, key, value))
-                 }
-               }
-        } yield ()
-      }
+      for {
+        _ <- lmdb.collectionExists(name).ignore
+        _ <- ZIO.foreachDiscard(indexUpdaters)(updater => lmdb.indexExists(updater.indexName).ignore)
+        _ <- readWrite { ops =>
+               for {
+                 _ <- ZIO.foreachDiscard(indexUpdaters)(_.onClear(ops.ops))
+                 _ <- ops.streamWithKeys().runForeachChunk { chunk =>
+                        ZIO.foreachDiscard(chunk) { case (key, value) =>
+                          ZIO.foreachDiscard(indexUpdaters)(_.onInsert(ops.ops, key, value))
+                        }
+                      }
+               } yield ()
+             }
+      } yield ()
     }
   }
   def clear(): IO[ClearErrors | IndexErrors, Unit]                         = {
