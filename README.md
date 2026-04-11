@@ -179,6 +179,14 @@ object QueryDslExample extends ZIOAppDefault {
                         .joinByIndex(postsColWithIdx, authorToPostIdx)(user => user.id)
                         .toList
     _ <- Console.printLine(s"Users with posts: $usersWithPosts")
+
+    // 4. Start query from an Index (Alternative entry point)
+    // Find all Alice's posts directly from the author_to_post index
+    alicePosts <- authorToPostIdx.query("u1")
+                    .whereTargetKey(_.startsWith("p"))
+                    .join(postsCol)
+                    .toList
+    _ <- Console.printLine(s"Alice posts from index: $alicePosts")
   } yield ()
 }
 

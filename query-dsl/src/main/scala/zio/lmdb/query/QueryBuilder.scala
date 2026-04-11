@@ -193,6 +193,96 @@ case class QueryBuilder[K, T](
   }
 }
 
+/** A fluent builder for querying LMDB indexes.
+  *
+  * @param index
+  *   The index to query
+  * @param indexKey
+  *   The key to start the index query from
+  * @param limitToKey
+  *   Whether to limit results to the specified index key
+  * @param ops
+  *   Optional read operations context for shared transactions
+  * @param targetKeyPredicate
+  *   Filter applied to the target keys found in the index
+  * @param maxLimit
+  *   Maximum number of results to return
+  */
+case class IndexQueryBuilder[IK, RK](
+  index: LMDBIndex[IK, RK],
+  indexKey: IK,
+  limitToKey: Boolean = true,
+  ops: Option[LMDBReadOps] = None,
+  targetKeyPredicate: RK => Boolean = (_: RK) => true,
+  maxLimit: Option[Int] = None
+) {
+
+  /** Add a filter condition on the target key. Multiple calls are combined with AND.
+    * @param f
+    *   The predicate to apply to the target key
+    */
+  def whereTargetKey(f: RK => Boolean): IndexQueryBuilder[IK, RK] =
+    copy(targetKeyPredicate = rk => targetKeyPredicate(rk) && f(rk))
+
+  /** Limit the maximum number of results returned.
+    * @param n
+    *   The maximum number of results
+    */
+  def limit(n: Int): IndexQueryBuilder[IK, RK] =
+    copy(maxLimit = Some(n))
+
+  /** Allow the query to continue past the initial index key to subsequent keys. */
+  def continue(): IndexQueryBuilder[IK, RK] =
+    copy(limitToKey = false)
+
+  /** Execute the query and return a ZStream of the target keys.
+    * @return
+    *   A ZStream of matching target keys
+    */
+  def toStream: ZStream[Any, IndexErrors, RK] = {
+    val stream = ops match {
+      case Some(o) => o.indexed(index.name, indexKey, limitToKey)(index.keyCodec, index.toKeyCodec)
+      case None    => index.indexed(indexKey, limitToKey)
+    }
+    val filtered = stream.map(_._2).filter(targetKeyPredicate)
+    maxLimit match {
+      case Some(n) => filtered.take(n)
+      case None    => filtered
+    }
+  }
+
+  /** Execute the query and collect the target keys into a List.
+    * @return
+    *   A ZIO effect containing the list of matching target keys
+    */
+  def toList: IO[IndexErrors, List[RK]] =
+    toStream.runCollect.map(_.toList)
+
+  /** Join this index query with a collection to fetch the actual records.
+    *
+    * @param collection
+    *   The collection to join with
+    * @tparam T
+    *   The value type of the collection
+    * @return
+    *   A JoinedQueryBuilder that will yield pairs of (TargetKey, Record)
+    */
+  def join[T](collection: LMDBCollection[RK, T]): JoinedQueryBuilder[RK, T] = {
+    val joinedStream = toStream.mapZIO { rk =>
+      val fetchResult = ops match {
+        case Some(o) => o.fetch(collection.name, rk)(collection.kodec, collection.codec)
+        case None    => collection.fetch(rk)
+      }
+      fetchResult.map {
+        case Some(t) => Some((rk, t))
+        case None    => None
+      }
+    }.collectSome
+
+    JoinedQueryBuilder(joinedStream, ops)
+  }
+}
+
 /** A builder for queries that have been joined.
   *
   * @param stream
@@ -324,5 +414,26 @@ object QueryBuilder {
 
     /** Start building a query for this collection within an existing transaction */
     def query: QueryBuilder[K, T] = QueryBuilder(writeOps.collection, Some(writeOps.ops))
+  }
+
+  /** Extension methods to easily create an IndexQueryBuilder from an LMDBIndex */
+  implicit class LMDBIndexQueryOps[IK, RK](val index: LMDBIndex[IK, RK]) extends AnyVal {
+
+    /** Start building a query for this index starting at the specified key */
+    def query(key: IK): IndexQueryBuilder[IK, RK] = IndexQueryBuilder(index, key)
+  }
+
+  /** Extension methods to easily create an IndexQueryBuilder from an LMDBIndexReadOps */
+  implicit class LMDBIndexReadOpsQueryOps[IK, RK](val indexOps: LMDBIndexReadOps[IK, RK]) extends AnyVal {
+
+    /** Start building a query for this index within an existing transaction starting at the specified key */
+    def query(key: IK): IndexQueryBuilder[IK, RK] = IndexQueryBuilder(indexOps.index, key, ops = Some(indexOps.ops))
+  }
+
+  /** Extension methods to easily create an IndexQueryBuilder from an LMDBIndexWriteOps */
+  implicit class LMDBIndexWriteOpsQueryOps[IK, RK](val indexOps: LMDBIndexWriteOps[IK, RK]) extends AnyVal {
+
+    /** Start building a query for this index within an existing transaction starting at the specified key */
+    def query(key: IK): IndexQueryBuilder[IK, RK] = IndexQueryBuilder(indexOps.index, key, ops = Some(indexOps.ops))
   }
 }

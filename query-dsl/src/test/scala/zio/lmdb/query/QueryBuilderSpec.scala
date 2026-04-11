@@ -235,6 +235,42 @@ object QueryBuilderSpec extends ZIOSpecDefault {
         results.exists { case ((_, post), comment) => post.id == "p1" && comment.text == "Great post!" }
       )
     },
+    test("can start query from an index and join with a collection") {
+      for {
+        lmdb     <- ZIO.service[LMDB]
+        usersCol <- lmdb.collectionGet[String, User]("users")
+        postsCol <- lmdb.collectionGet[String, Post]("posts")
+
+        authorToPostIdx <- lmdb.indexGet[String, String]("author_to_post")
+
+        // Find all posts by Alice (authorId = "1") via the index
+        results <- authorToPostIdx.query("1")
+                     .join(postsCol)
+                     .toList
+      } yield assertTrue(
+        results.size == 2,
+        results.forall { case (postId, post) => post.authorId == "1" },
+        results.map(_._2.title).toSet == Set("Alice's first post", "Alice's second post")
+      )
+    },
+    test("can filter and limit index query") {
+      for {
+        lmdb     <- ZIO.service[LMDB]
+        postsCol <- lmdb.collectionGet[String, Post]("posts")
+
+        authorToPostIdx <- lmdb.indexGet[String, String]("author_to_post")
+
+        // Find Alice's posts, but only those whose ID ends with "1"
+        results <- authorToPostIdx.query("1")
+                     .whereTargetKey(_.endsWith("1"))
+                     .join(postsCol)
+                     .toList
+      } yield assertTrue(
+        results.size == 1,
+        results.head._1 == "p1",
+        results.head._2.title == "Alice's first post"
+      )
+    },
     test("can query within an existing transaction (shared txn)") {
       for {
         lmdb     <- ZIO.service[LMDB]
