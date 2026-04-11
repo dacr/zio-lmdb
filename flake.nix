@@ -45,7 +45,7 @@
           shellHook = ''
             echo "🤖 Dev Environment Loaded"
             echo "Run 'gemini' or 'OpenCode' to sync your Pro subscription if not already logged in."
-            echo "   `opencode auth login`"
+            echo "   (opencode auth login)"
           '';
         };
       }
