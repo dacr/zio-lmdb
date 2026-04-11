@@ -1,33 +1,52 @@
 {
-  description = "AI Coding Environment with Gemini 3";
+  description = "AI Coding Environment with Gemini or OpenCode";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixstable.url      = "github:NixOS/nixpkgs/nixos-25.11";
+    nixunstable.url    = "github:nixos/nixpkgs/nixos-unstable";
+    flake-utils.url    = "github:numtide/flake-utils";
   };
+  outputs = { self, nixstable, nixunstable, flake-utils }:
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        stable = nixstable.legacyPackages.${system};
+        unstable = nixunstable.legacyPackages.${system};
 
-  outputs = { self, nixpkgs }:
-    let
-      system = "x86_64-linux"; # Change to "aarch64-darwin" for Apple Silicon
-      pkgs = import nixpkgs { inherit system; config.allowUnfree = true; };
-    in
-    {
-      devShells.${system}.default = pkgs.mkShell {
-        buildInputs = with pkgs; [
-          opencode      # The AI Agent
-          gemini-cli    # The Auth Bridge
-          nodejs_22     # Required for the auth plugin
-          
-          # Scala Development
-          jdk21         # Java Runtime
-          sbt           # Build Tool
-          mill          # Build Tool
-          scalafmt      # Formatter
-        ];
+        jdk = stable.jdk21;
 
-        shellHook = ''
-          echo "🤖 Gemini 3 Dev Environment Loaded"
-          echo "Run 'gemini' to sync your Pro subscription if not already logged in."
-        '';
-      };
-    };
+        sbt = stable.sbt.override {
+          jre = jdk;
+        };
+        scl = unstable.scala-cli.override {
+          jre = jdk;
+        };
+        mvn = stable.maven.override {
+          jdk_headless = jdk;
+        };
+        mill = unstable.mill.override {
+          jre = jdk;
+        };
+      in
+      {
+        devShells.default = stable.mkShell {
+          packages = [
+            unstable.opencode      # The AI Agent
+            unstable.gemini-cli    # The Auth Bridge
+            stable.nodejs_22       # Required for the auth plugin
+
+            # Scala Development
+            jdk              # Java Runtime
+            sbt           # Build Tool
+            mill          # Build Tool
+            scl              # Build Tool
+            stable.scalafmt  # Formatter
+          ];
+
+          shellHook = ''
+            echo "🤖 Gemini 3 Dev Environment Loaded"
+            echo "Run 'gemini' to sync your Pro subscription if not already logged in."
+          '';
+        };
+      }
+    );
 }
