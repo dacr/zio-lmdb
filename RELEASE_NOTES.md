@@ -1,5 +1,21 @@
 # ZIO-LMDB RELEASE NOTES
 
+## 2.7 - 2026-04-12
+
+- Add advanced index query support with filtering, limiting, and joins
+- Add `indexName` to `IndexUpdater` trait to support indexing metadata
+- Resolve concurrency freeze and optimize index rebuild
+- Replace `TReentrantLock` with `Semaphore` for improved concurrency handling
+- Enhance dev environment
+
+## 2.6 - 2026-04-09
+
+- Add generic index support with `withIndexFull`
+- Enhance `LMDBCollection` with high-performance `rebuildIndexes` and transactional streaming
+- Enhance `QueryBuilder` with transactional support and indexed streaming methods
+- Resolve concurrency deadlock and optimize codec errors
+- Update dependencies
+
 ## 2.5 - 2026-03-07
 
 - Add collection query DSL with basic join features
