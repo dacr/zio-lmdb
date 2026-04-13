@@ -20,6 +20,7 @@ import zio.test.*
 import zio.test.Assertion.*
 import zio.test.TestAspect.*
 import zio.lmdb.json.stringCodec
+import zio.lmdb.json.intCodec
 
 object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
 
@@ -108,6 +109,122 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
         v1 <- collection.fetch("key1")
         v2 <- collection.fetch("key2")
       } yield assertTrue(v1.contains("val1"), v2.contains("val1"))
+    },
+    test("concurrent readWrite transactions are serialized") {
+      for {
+        collectionName <- Random.nextUUID.map(_.toString)
+        _              <- LMDB.collectionCreate[String, Int](collectionName)
+        _              <- LMDB.upsert[String, Int](collectionName, "counter", _ => 0)
+        
+        // Run 100 concurrent transactions that increment the counter
+        _ <- ZIO.foreachPar(1 to 100) { _ =>
+               LMDB.readWrite { txn =>
+                 for {
+                   v <- txn.fetch[String, Int](collectionName, "counter")
+                   _ <- txn.upsert[String, Int](collectionName, "counter", _ => v.getOrElse(0) + 1)
+                 } yield ()
+               }
+             }
+             
+        finalValue <- LMDB.fetch[String, Int](collectionName, "counter")
+      } yield assertTrue(finalValue.contains(100))
+    },
+    test("large transaction commits successfully") {
+      for {
+        collectionName <- Random.nextUUID.map(_.toString)
+        _              <- LMDB.collectionCreate[String, String](collectionName)
+        
+        _ <- LMDB.readWrite { txn =>
+               ZIO.foreachDiscard(1 to 10000) { i =>
+                 txn.upsert[String, String](collectionName, s"key$i", _ => s"val$i")
+               }
+             }
+             
+        size <- LMDB.collectionSize(collectionName)
+        v1   <- LMDB.fetch[String, String](collectionName, "key1")
+        vLast <- LMDB.fetch[String, String](collectionName, "key10000")
+      } yield assertTrue(size == 10000L, v1.contains("val1"), vLast.contains("val10000"))
+    },
+    test("delete operations in transaction") {
+      for {
+        collectionName <- Random.nextUUID.map(_.toString)
+        _              <- LMDB.collectionCreate[String, String](collectionName)
+        _              <- LMDB.upsert[String, String](collectionName, "key1", _ => "val1")
+        _              <- LMDB.upsert[String, String](collectionName, "key2", _ => "val2")
+        
+        _ <- LMDB.readWrite { txn =>
+               for {
+                 _ <- txn.delete[String, String](collectionName, "key1")
+                 v <- txn.fetch[String, String](collectionName, "key1")
+                 _ <- ZIO.fromOption(v).flip // ensure it's deleted within txn
+               } yield ()
+             }
+             
+        v1 <- LMDB.fetch[String, String](collectionName, "key1")
+        v2 <- LMDB.fetch[String, String](collectionName, "key2")
+      } yield assertTrue(v1.isEmpty, v2.contains("val2"))
+    },
+    test("delete operations rollback on error") {
+      for {
+        collectionName <- Random.nextUUID.map(_.toString)
+        _              <- LMDB.collectionCreate[String, String](collectionName)
+        _              <- LMDB.upsert[String, String](collectionName, "key1", _ => "val1")
+        
+        _ <- LMDB.readWrite { txn =>
+               for {
+                 _ <- txn.delete[String, String](collectionName, "key1")
+                 _ <- ZIO.fail(new Exception("Boom"))
+               } yield ()
+             }.ignore
+             
+        v1 <- LMDB.fetch[String, String](collectionName, "key1")
+      } yield assertTrue(v1.contains("val1"))
+    },
+    test("read-your-own-writes in transaction") {
+      for {
+        collectionName <- Random.nextUUID.map(_.toString)
+        _              <- LMDB.collectionCreate[String, String](collectionName)
+        
+        _ <- LMDB.readWrite { txn =>
+               for {
+                 _  <- txn.upsert[String, String](collectionName, "key1", _ => "val1")
+                 v1 <- txn.fetch[String, String](collectionName, "key1")
+                 _  <- txn.upsert[String, String](collectionName, "key2", _ => v1.getOrElse("") + "-val2")
+                 v2 <- txn.fetch[String, String](collectionName, "key2")
+                 _  <- txn.delete[String, String](collectionName, "key1")
+                 v3 <- txn.fetch[String, String](collectionName, "key1")
+               } yield assertTrue(v1.contains("val1"), v2.contains("val1-val2"), v3.isEmpty)
+             }
+      } yield assertTrue(true)
+    },
+    test("transaction isolation: readOnly does not see uncommitted changes") {
+      for {
+        collectionName <- Random.nextUUID.map(_.toString)
+        _              <- LMDB.collectionCreate[String, String](collectionName)
+        _              <- LMDB.upsert[String, String](collectionName, "key1", _ => "init")
+        
+        promise1 <- Promise.make[Nothing, Unit]
+        promise2 <- Promise.make[Nothing, Unit]
+        
+        writer <- LMDB.readWrite { txn =>
+                    for {
+                      _ <- txn.upsert[String, String](collectionName, "key1", _ => "updated")
+                      _ <- promise1.succeed(()) // signal that write is done but not committed
+                      _ <- promise2.await       // wait for reader to check
+                    } yield ()
+                  }.fork
+                  
+        _ <- promise1.await // wait for writer to update
+        
+        readerResult <- LMDB.readOnly { txn =>
+                          txn.fetch[String, String](collectionName, "key1")
+                        }
+                        
+        _ <- promise2.succeed(()) // let writer commit
+        _ <- writer.join
+        
+        finalResult <- LMDB.fetch[String, String](collectionName, "key1")
+      } yield assertTrue(readerResult.contains("init"), finalResult.contains("updated"))
     }
   ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom @@ timed
 }

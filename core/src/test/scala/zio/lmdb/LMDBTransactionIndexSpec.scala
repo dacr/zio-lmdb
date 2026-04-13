@@ -86,6 +86,37 @@ object LMDBTransactionIndexSpec extends ZIOSpecDefault with Commons {
                  ops.contains("key1", "val1")
                }
       } yield assertTrue(res)
+    },
+    test("index rollback on error") {
+      for {
+        idx <- LMDB.indexCreate[String, String]("rollback_idx")
+        _   <- idx.index("key1", "val1")
+        
+        _ <- idx.readWrite { ops =>
+               for {
+                 _ <- ops.index("key2", "val2")
+                 _ <- ZIO.fail(new Exception("Boom"))
+               } yield ()
+             }.ignore
+             
+        res1 <- idx.indexContains("key1", "val1")
+        res2 <- idx.indexContains("key2", "val2")
+      } yield assertTrue(res1, !res2)
+    },
+    test("concurrent index updates are serialized") {
+      for {
+        idx <- LMDB.indexCreate[String, String]("concurrent_idx")
+        
+        _ <- ZIO.foreachPar(1 to 100) { i =>
+               idx.readWrite { ops =>
+                 ops.index(s"key$i", s"val$i")
+               }
+             }
+             
+        results <- ZIO.foreach(1 to 100) { i =>
+                     idx.indexContains(s"key$i", s"val$i")
+                   }
+      } yield assertTrue(results.forall(_ == true))
     }
   ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom @@ timed
 }

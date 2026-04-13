@@ -60,6 +60,69 @@ object LMDBTransactionMultiCollectionSpec extends ZIOSpecDefault with Commons {
         alice.exists(_.name == "Bob"),
         bal.exists(_.balance == 200)
       )
+    },
+    test("multi-collection rollback on error") {
+      for {
+        users    <- LMDB.collectionCreate[String, TxnUser]("users_rollback")
+        accounts <- LMDB.collectionCreate[String, TxnAccount]("accounts_rollback")
+
+        userId    = "user1"
+        accountId = "account1"
+
+        _ <- users.upsertOverwrite(userId, TxnUser("Alice"))
+        _ <- accounts.upsertOverwrite(accountId, TxnAccount(100))
+
+        _ <- LMDB.readWrite { ops =>
+               val usersTxn    = users.lift(ops)
+               val accountsTxn = accounts.lift(ops)
+
+               for {
+                 _ <- usersTxn.update(userId, u => u.copy(name = "Bob"))
+                 _ <- accountsTxn.update(accountId, a => a.copy(balance = 200))
+                 _ <- ZIO.fail(new Exception("Boom"))
+               } yield ()
+             }.ignore
+
+        alice <- users.fetch(userId)
+        bal   <- accounts.fetch(accountId)
+
+      } yield assertTrue(
+        alice.exists(_.name == "Alice"),
+        bal.exists(_.balance == 100)
+      )
+    },
+    test("concurrent multi-collection updates are serialized") {
+      for {
+        users    <- LMDB.collectionCreate[String, TxnUser]("users_concurrent")
+        accounts <- LMDB.collectionCreate[String, TxnAccount]("accounts_concurrent")
+
+        userId    = "user1"
+        accountId = "account1"
+
+        _ <- users.upsertOverwrite(userId, TxnUser("Alice"))
+        _ <- accounts.upsertOverwrite(accountId, TxnAccount(0))
+
+        _ <- ZIO.foreachPar(1 to 100) { _ =>
+               LMDB.readWrite { ops =>
+                 val usersTxn    = users.lift(ops)
+                 val accountsTxn = accounts.lift(ops)
+
+                 for {
+                   u <- usersTxn.fetch(userId)
+                   a <- accountsTxn.fetch(accountId)
+                   _ <- usersTxn.upsertOverwrite(userId, TxnUser(u.map(_.name).getOrElse("") + "."))
+                   _ <- accountsTxn.upsertOverwrite(accountId, TxnAccount(a.map(_.balance).getOrElse(0L) + 1))
+                 } yield ()
+               }
+             }
+
+        alice <- users.fetch(userId)
+        bal   <- accounts.fetch(accountId)
+
+      } yield assertTrue(
+        alice.exists(_.name.length == 5 + 100), // "Alice" + 100 dots
+        bal.exists(_.balance == 100)
+      )
     }
   ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom @@ timed
 }
