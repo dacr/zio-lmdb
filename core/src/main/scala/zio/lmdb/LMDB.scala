@@ -568,7 +568,7 @@ trait LMDB {
     * @return
     *   result of the function
     */
-  def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError | StorageUserError.NestedTransactionError, A]
+  def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError | StorageUserError.NestedWriteTransactionError, A]
 
 }
 
@@ -1177,6 +1177,6 @@ object LMDB {
     * @return
     *   result of the function
     */
-  def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[LMDB & R, E | StorageSystemError | StorageUserError.NestedTransactionError, A] =
+  def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[LMDB & R, E | StorageSystemError | StorageUserError.NestedWriteTransactionError, A] =
     ZIO.serviceWithZIO[LMDB](_.readWrite(f))
 }

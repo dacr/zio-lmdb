@@ -6,6 +6,8 @@
 - Add `indexName` to `IndexUpdater` trait to support indexing metadata
 - Resolve concurrency freeze and optimize index rebuild
 - Replace `TReentrantLock` with `Semaphore` for improved concurrency handling
+  - fully relying on LMDB Multi-Version Concurrency Control (MVCC) mechanism
+- Forbid nested write transaction
 - Enhance dev environment
 
 ## 2.6 - 2026-04-09

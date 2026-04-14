@@ -319,7 +319,7 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters:
     * @return
     *   result of the function
     */
-  def readWrite[R, E, A](f: LMDBCollectionWriteOps[K, T] => ZIO[R, E, A]): ZIO[R, E | StorageSystemError | StorageUserError.NestedTransactionError, A] =
+  def readWrite[R, E, A](f: LMDBCollectionWriteOps[K, T] => ZIO[R, E, A]): ZIO[R, E | StorageSystemError | StorageUserError.NestedWriteTransactionError, A] =
     lmdb.readWrite { ops =>
       f(LMDBCollectionWriteOps(this, ops))
     }

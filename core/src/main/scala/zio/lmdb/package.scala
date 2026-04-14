@@ -25,16 +25,16 @@ package object lmdb {
 
   type KeyErrors      = OverSizedKey | StorageSystemError
   type SizeErrors     = CollectionNotFound | StorageSystemError
-  type ClearErrors    = CollectionNotFound | NestedTransactionError | StorageSystemError
+  type ClearErrors    = CollectionNotFound | NestedWriteTransactionError | StorageSystemError
   type DropErrors     = CollectionNotFound | StorageSystemError
   type GetErrors      = CollectionNotFound | StorageSystemError
   type CreateErrors   = CollectionAlreadExists | StorageSystemError
   type FetchErrors    = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
   type ContainsErrors = OverSizedKey | CollectionNotFound | StorageSystemError
-  type UpdateErrors   = OverSizedKey | CollectionNotFound | CodecFailure | NestedTransactionError | StorageSystemError
-  type UpsertErrors   = OverSizedKey | CollectionNotFound | CodecFailure | NestedTransactionError | StorageSystemError
-  type DeleteErrors   = OverSizedKey | CollectionNotFound | CodecFailure | NestedTransactionError | StorageSystemError
+  type UpdateErrors   = OverSizedKey | CollectionNotFound | CodecFailure | NestedWriteTransactionError | StorageSystemError
+  type UpsertErrors   = OverSizedKey | CollectionNotFound | CodecFailure | NestedWriteTransactionError | StorageSystemError
+  type DeleteErrors   = OverSizedKey | CollectionNotFound | CodecFailure | NestedWriteTransactionError | StorageSystemError
   type CollectErrors  = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
   type StreamErrors   = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
-  type IndexErrors    = IndexNotFound | IndexAlreadyExists | OverSizedKey | CodecFailure | NestedTransactionError | StorageSystemError
+  type IndexErrors    = IndexNotFound | IndexAlreadyExists | OverSizedKey | CodecFailure | NestedWriteTransactionError | StorageSystemError
 }

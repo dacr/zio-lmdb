@@ -163,7 +163,7 @@ case class LMDBIndex[FROM_KEY, TO_KEY](
     * @return
     *   result of the function
     */
-  def readWrite[R, E, A](f: LMDBIndexWriteOps[FROM_KEY, TO_KEY] => ZIO[R, E, A]): ZIO[R, E | StorageSystemError | StorageUserError.NestedTransactionError, A] =
+  def readWrite[R, E, A](f: LMDBIndexWriteOps[FROM_KEY, TO_KEY] => ZIO[R, E, A]): ZIO[R, E | StorageSystemError | StorageUserError.NestedWriteTransactionError, A] =
     lmdb.readWrite { ops =>
       f(LMDBIndexWriteOps(this, ops))
     }

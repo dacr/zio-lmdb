@@ -39,13 +39,12 @@ import zio.lmdb.StorageSystemError._
 /** LMDB ZIO abstraction layer, provides standard atomic operations implementations
   * @param env
   * @param openedCollectionDbisRef
-
   */
 class LMDBLive(
   env: Env[ByteBuffer],
   openedCollectionDbisRef: Ref[Map[String, Dbi[ByteBuffer]]],
   writeMutex: TSemaphore,
-  activeTransactionRef: FiberRef[Option[ActiveTransaction]],
+  activeWriteTransactionRef: FiberRef[Option[ActiveTransaction]],
   writeExecutor: Executor,
   /** @inheritdoc */
   val databasePath: String
@@ -185,7 +184,8 @@ class LMDBLive(
   /** Scoped read transaction. */
   private def withReadTransaction(colName: CollectionName): ZIO.Release[Any, StorageSystemError, Txn[ByteBuffer]] =
     ZIO.acquireReleaseWith(
-      ZIO.attemptBlocking(env.txnRead())
+      ZIO
+        .attemptBlocking(env.txnRead())
         .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
     )(txn =>
       ZIO
@@ -525,7 +525,6 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-
   override def head[K, T](collectionName: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
     seek(collectionName, None, SeekOp.MDB_FIRST)
   }
@@ -828,6 +827,7 @@ class LMDBLive(
     }
   }
 
+  /** @inheritdoc  */
   override def stream[K, T](
     colName: CollectionName,
     keyFilter: K => Boolean = (_: K) => true,
@@ -883,6 +883,7 @@ class LMDBLive(
       }
   }
 
+  /** @inheritdoc  */
   override def streamWithKeys[K, T](
     colName: CollectionName,
     keyFilter: K => Boolean = (_: K) => true,
@@ -1421,12 +1422,12 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError | StorageUserError.NestedTransactionError, A] = {
-    activeTransactionRef.get.flatMap {
-      case Some(active) => ZIO.fail(NestedTransactionError(active))
+  override def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError | StorageUserError.NestedWriteTransactionError, A] = {
+    activeWriteTransactionRef.get.flatMap {
+      case Some(active) => ZIO.fail(NestedWriteTransactionError(active))
       case None         =>
         Clock.currentDateTime.flatMap { now =>
-          activeTransactionRef.locally(Some(ActiveTransaction(now))) {
+          activeWriteTransactionRef.locally(Some(ActiveTransaction(now))) {
             withWriteLock(
               ZIO
                 .scoped {
