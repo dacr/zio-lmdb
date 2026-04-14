@@ -26,6 +26,7 @@ enum StorageUserError {
   case IndexNotFound(name: IndexName)
   case CodecFailure(issue: String | KeyCodecError)
   case OverSizedKey(id: String, expandedSize: Int, limit: Int)
+  case NestedTransactionError(activeTransaction: ActiveTransaction)
 }
 
 /** Errors indicating a failure within the underlying storage system or library. */

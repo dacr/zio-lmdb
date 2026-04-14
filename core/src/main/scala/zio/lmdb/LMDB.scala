@@ -20,6 +20,9 @@ import zio.lmdb.keycodecs.KeyCodec
 import zio._
 import zio.stream.ZStream
 import zio.config._
+import java.time.OffsetDateTime
+
+case class ActiveTransaction(createdAt: OffsetDateTime)
 
 /** Lightning Memory-Mapped Database (LMDB) abstraction layer for ZIO. */
 trait LMDB {
@@ -565,7 +568,7 @@ trait LMDB {
     * @return
     *   result of the function
     */
-  def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A]
+  def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError | StorageUserError.NestedTransactionError, A]
 
 }
 
@@ -1174,6 +1177,6 @@ object LMDB {
     * @return
     *   result of the function
     */
-  def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[LMDB & R, E | StorageSystemError, A] =
+  def readWrite[R, E, A](f: LMDBWriteOps => ZIO[R, E, A]): ZIO[LMDB & R, E | StorageSystemError | StorageUserError.NestedTransactionError, A] =
     ZIO.serviceWithZIO[LMDB](_.readWrite(f))
 }
