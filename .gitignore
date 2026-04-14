@@ -30,6 +30,9 @@ test*.log
 null
 .attach_pid*
 LMDBFreezeReproductionSpec.scala
+LMDBThreadCrashSpec.scala
+ExecutorTest.scala
+TMP_*.md
 
 # Security purposes
 .envrc
