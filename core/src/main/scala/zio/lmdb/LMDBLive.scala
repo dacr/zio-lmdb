@@ -33,6 +33,7 @@ import java.nio.ByteBuffer
 import java.time.OffsetDateTime
 import java.util.concurrent.TimeUnit
 import scala.jdk.CollectionConverters._
+import zio.lmdb.json._
 import zio.lmdb.StorageUserError._
 import zio.lmdb.StorageSystemError._
 
@@ -47,8 +48,34 @@ class LMDBLive(
   activeWriteTransactionRef: FiberRef[Option[ActiveTransaction]],
   writeExecutor: Executor,
   /** @inheritdoc */
-  val databasePath: String
+  val databasePath: String,
+  val config: LMDBConfig
 ) extends LMDB {
+
+  private[lmdb] def initializeMetadata(): ZIO[Any, StorageSystemError, Unit] = {
+    collectionCreateLogic(config.metaDataCollectionName)
+  }
+
+  private def metadataUpdate(name: String, kind: CollectionKind): ZIO[Any, StorageSystemError, Unit] = {
+    val entry = MetaDataEntry(name, kind, None, None)
+    upsertOverwrite(config.metaDataCollectionName, name, entry)
+      .mapError {
+        case e: StorageSystemError => e
+        case e: StorageUserError   => InternalError(s"Metadata update failed for $name: $e")
+      }
+      .when(name != config.metaDataCollectionName)
+      .unit
+  }
+
+  private def metadataRemove(name: String): ZIO[Any, StorageSystemError, Unit] = {
+    delete[String, MetaDataEntry](config.metaDataCollectionName, name)
+      .mapError {
+        case e: StorageSystemError => e
+        case e: StorageUserError   => InternalError(s"Metadata removal failed for $name: $e")
+      }
+      .when(name != config.metaDataCollectionName)
+      .unit
+  }
 
   private def withWriteLock[R, E, A](effect: ZIO[R, E, A]): ZIO[R, E, A] =
     ZIO.scoped(writeMutex.withPermit(effect)).onExecutor(writeExecutor)
@@ -137,6 +164,7 @@ class LMDBLive(
       exists <- collectionExists(name)
       _      <- ZIO.cond[CollectionAlreadExists, Unit](!exists, (), CollectionAlreadExists(name))
       _      <- collectionCreateLogic(name)
+      _      <- metadataUpdate(name, CollectionKind.Regular).mapError(e => e: CreateErrors)
     } yield ()
   }
 
@@ -146,7 +174,8 @@ class LMDBLive(
       collectionAllocate(name)
     } else {
       collectionAllocate(name).catchSome { case CollectionAlreadExists(_) =>
-        getCollectionDbi(name).ignore
+        metadataUpdate(name, CollectionKind.Regular).mapError(e => e: CreateErrors) *>
+          getCollectionDbi(name).ignore
       }
     }
     allocateLogic.as(LMDBCollection[K, T](name, this))
@@ -237,6 +266,7 @@ class LMDBLive(
       collectionDbi <- getCollectionDbi(colName)
       _             <- collectionClearOrDropLogic(collectionDbi, colName, true)
       _             <- openedCollectionDbisRef.updateAndGet(_.removed(colName))
+      _             <- metadataRemove(colName).mapError(e => e: DropErrors)
     } yield ()
   }
 
@@ -827,7 +857,7 @@ class LMDBLive(
     }
   }
 
-  /** @inheritdoc  */
+  /** @inheritdoc */
   override def stream[K, T](
     colName: CollectionName,
     keyFilter: K => Boolean = (_: K) => true,
@@ -883,7 +913,7 @@ class LMDBLive(
       }
   }
 
-  /** @inheritdoc  */
+  /** @inheritdoc */
   override def streamWithKeys[K, T](
     colName: CollectionName,
     keyFilter: K => Boolean = (_: K) => true,
@@ -989,6 +1019,7 @@ class LMDBLive(
       exists <- indexExists(name)
       _      <- ZIO.cond[IndexAlreadyExists, Unit](!exists, (), IndexAlreadyExists(name))
       _      <- indexCreateLogic(name)
+      _      <- metadataUpdate(name, CollectionKind.Index).mapError(e => e: IndexErrors)
     } yield ()
   }
 
@@ -998,7 +1029,8 @@ class LMDBLive(
       indexAllocate(name)
     } else {
       indexAllocate(name).catchSome { case IndexAlreadyExists(_) =>
-        getIndexDbi(name).ignore
+        metadataUpdate(name, CollectionKind.Index).mapError(e => e: IndexErrors) *>
+          getIndexDbi(name).ignore
       }
     }
     allocateLogic.as(LMDBIndex[FROM_KEY, TO_KEY](name, None, this))
@@ -1028,6 +1060,7 @@ class LMDBLive(
       _   <- collectionClearOrDropLogic(dbi, name, true)
                .mapError(e => e: IndexErrors)
       _   <- openedCollectionDbisRef.updateAndGet(_.removed(name))
+      _   <- metadataRemove(name).mapError(e => e: IndexErrors)
     } yield ()
   }
 
@@ -1747,6 +1780,8 @@ object LMDBLive {
                                 ZIO.attempt(java.util.concurrent.Executors.newSingleThreadExecutor())
                               )(es => ZIO.attempt(es.shutdown()).ignoreLogged)
       writeExecutor         = Executor.fromJavaExecutor(executorService)
-    } yield new LMDBLive(environment, openedCollectionDbis, writeMutex, activeTransactionRef, writeExecutor, databasePath.toString)
+      lmdb                  = new LMDBLive(environment, openedCollectionDbis, writeMutex, activeTransactionRef, writeExecutor, databasePath.toString, config)
+      _                    <- lmdb.initializeMetadata().mapError(e => new RuntimeException(s"Failed to initialize metadata: $e"))
+    } yield lmdb
   }
 }

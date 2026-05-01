@@ -47,7 +47,7 @@ object LMDBConcurrencySpec extends ZIOSpecDefault with Commons {
   val recordsLimit    = 1_000
 
   override def spec = suite("concurrency behavior checks")(
-    List(1, 5, 10, 20).map { parallelism =>
+    List(1, 5, 10, 25, 50, 100).map { parallelism =>
       // -----------------------------------------------------------------------------
       test(s"many collections writes in parallel ${recordsLimit * collectionLimit} records through $collectionLimit collections - parallelism=$parallelism") {
         val strategy = ExecutionStrategy.ParallelN(parallelism)

@@ -30,9 +30,11 @@ import zio._
   * @param maxReaders
   *   The maximum number of readers
   * @param maxCollections
-  *   The maximum number of collections which can be created
+  *   The maximum number of collections that can be created
   * @param mapSize
   *   The maximum size of the whole database including metadata
+  * @param metaDataCollectionName
+  *   The name of the collection used for storing collection metadata (Collection is regular or an index, typing information, ...)
   */
 case class LMDBConfig(
   databaseName: String,
@@ -40,7 +42,8 @@ case class LMDBConfig(
   fileSystemSynchronized: Boolean,
   maxReaders: Int,
   maxCollections: Int,
-  mapSize: BigInt
+  mapSize: BigInt,
+  metaDataCollectionName: String
 )
 
 object LMDBConfig {
@@ -51,6 +54,7 @@ object LMDBConfig {
       fileSystemSynchronized = false,
       maxReaders = 1_000,
       mapSize = BigInt(100_000_000_000L),
-      maxCollections = 10_000
+      maxCollections = 10_000,
+      metaDataCollectionName = "meta-data"
     )
 }
