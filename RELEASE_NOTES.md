@@ -1,5 +1,10 @@
 # ZIO-LMDB RELEASE NOTES
 
+## 2.8 - 2026-05-10
+
+- introduce console with basic operations
+- Add meta-collection collection to store metadata about collections and indices
+
 ## 2.7 - 2026-04-12
 
 - Add advanced index query support with filtering, limiting, and joins

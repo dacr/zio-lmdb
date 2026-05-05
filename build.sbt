@@ -33,7 +33,17 @@ lazy val root = (project in file("."))
     name           := "zio-lmdb-root",
     publish / skip := true
   )
-  .aggregate(core, keycodecs, keycodecsUlid, keycodecsUuidv7, keycodecsGeo, keycodecsTimestamp, keycodecsUca, queryDsl)
+  .aggregate(
+    core,
+    keycodecs,
+    keycodecsUlid,
+    keycodecsUuidv7,
+    keycodecsGeo,
+    keycodecsTimestamp,
+    keycodecsUca,
+    queryDsl,
+    console
+  )
 
 lazy val core = (project in file("core"))
   .settings(commonSettings)
@@ -147,6 +157,28 @@ lazy val queryDsl = (project in file("query-dsl"))
     )
   )
   .dependsOn(core)
+
+lazy val console = (project in file("console"))
+  .settings(commonSettings)
+  .settings(
+    name        := "zio-lmdb-console",
+    description := "REPL for ZIO LMDB",
+    libraryDependencies ++= Seq(
+      "org.jline"   % "jline"       % "3.29.0",
+      "dev.zio"    %% "zio"         % versions.zio,
+      "dev.zio"    %% "zio-json"    % versions.ziojson,
+      "dev.zio"    %% "zio-logging" % versions.ziologging
+    ),
+    assembly / mainClass := Some("zio.lmdb.console.Main"),
+    assembly / assemblyJarName := "zio-lmdb-console.jar",
+    assembly / assemblyMergeStrategy := {
+      case PathList("module-info.class") => MergeStrategy.discard
+      case x                             =>
+        val oldStrategy = (assembly / assemblyMergeStrategy).value
+        oldStrategy(x)
+    }
+  )
+  .dependsOn(core, queryDsl, keycodecsUlid, keycodecsUuidv7, keycodecsGeo, keycodecsTimestamp, keycodecsUca)
 
 homepage   := Some(new URL("https://github.com/dacr/zio-lmdb"))
 scmInfo    := Some(ScmInfo(url(s"https://github.com/dacr/zio-lmdb.git"), s"git@github.com:dacr/zio-lmdb.git"))

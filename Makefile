@@ -8,3 +8,4 @@ unit-tests:
 
 readme-test:
 	scala-cli README.md
+
