@@ -3,10 +3,11 @@ ThisBuild / scalaVersion := "3.3.7"
 lazy val versions = new {
   val zio        = "2.1.25"
   val zionio     = "2.0.2"
-  val ziojson    = "0.9.1"
+  val ziojson    = "0.9.2"
   val zioconfig  = "4.0.7"
   val ziologging = "2.5.3"
   val lmdb       = "0.9.3"
+  val airframe   = "2026.1.6"
 }
 
 lazy val commonSettings = Seq(
@@ -123,7 +124,7 @@ lazy val keycodecsUlid = (project in file("keycodecs-ulid"))
     name        := "keycodecs-ulid",
     description := "ULID support for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "org.wvlet.airframe" %% "airframe-ulid"       % "2026.1.5",
+      "org.wvlet.airframe" %% "airframe-ulid"       % versions.airframe,
       "dev.zio"            %% "zio-test"            % versions.zio % Test,
       "dev.zio"            %% "zio-test-sbt"        % versions.zio % Test,
       "dev.zio"            %% "zio-test-scalacheck" % versions.zio % Test
@@ -164,7 +165,7 @@ lazy val console = (project in file("console"))
     name        := "zio-lmdb-console",
     description := "REPL for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "org.jline"   % "jline"       % "3.29.0",
+      "org.jline"   % "jline"       % "4.0.15",
       "dev.zio"    %% "zio"         % versions.zio,
       "dev.zio"    %% "zio-json"    % versions.ziojson,
       "dev.zio"    %% "zio-logging" % versions.ziologging
