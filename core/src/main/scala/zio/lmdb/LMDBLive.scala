@@ -145,10 +145,10 @@ class LMDBLive(
   override def collectionSize(name: CollectionName): IO[SizeErrors, Long] = {
     for {
       collectionDbi <- getCollectionDbi(name)
-      stats         <- withReadTransaction(name) { txn =>
+      count         <- withReadTransaction(name) { txn =>
                          collectionSizeLogic(txn, collectionDbi, name)
                        }
-    } yield stats
+    } yield count
   }
 
   private def collectionSizeLogic(txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: CollectionName): IO[SizeErrors, Long] = {
@@ -156,6 +156,34 @@ class LMDBLive(
       .attempt(dbi.stat(txn))
       .mapError(err => InternalError(s"Couldn't get $name size: $err", Some(err)))
       .map(_.entries)
+  }
+
+  /** @inheritdoc */
+  override def stats(): IO[StorageSystemError, LMDBStats] = {
+    for {
+      info          <- ZIO.attemptBlocking(env.info()).mapError(err => InternalError(s"Couldn't get env info: $err", Some(err)))
+      stat          <- ZIO.attemptBlocking(env.stat()).mapError(err => InternalError(s"Couldn't get env stat: $err", Some(err)))
+      metas         <- collect[String, MetaDataEntry](config.metaDataCollectionName).catchAll(_ => ZIO.succeed(Nil))
+      numCollections = metas.count(_.collectionKind == CollectionKind.Regular)
+      numIndexes     = metas.count(_.collectionKind == CollectionKind.Index)
+    } yield LMDBStats(
+      databasePath = databasePath,
+      mapSize = info.mapSize,
+      lastPageNumber = info.lastPageNumber,
+      lastTransactionId = info.lastTransactionId,
+      maxReaders = info.maxReaders,
+      numReaders = info.numReaders,
+      numCollections = numCollections,
+      numIndexes = numIndexes,
+      envStats = LMDBEnvStats(
+        pageSize = stat.pageSize,
+        depth = stat.depth,
+        branchPages = stat.branchPages,
+        leafPages = stat.leafPages,
+        overflowPages = stat.overflowPages,
+        entries = stat.entries
+      )
+    )
   }
 
   /** @inheritdoc */
@@ -1066,7 +1094,14 @@ class LMDBLive(
 
   /** @inheritdoc */
   override def indexes(): IO[IndexErrors, List[IndexName]] = {
-    collectionsAvailable().mapError(e => e)
+    for {
+      metas <- collect[String, MetaDataEntry](config.metaDataCollectionName).mapError {
+                 case e: OverSizedKey       => e: IndexErrors
+                 case e: CollectionNotFound => InternalError(s"Metadata collection not found: ${config.metaDataCollectionName}", Some(new RuntimeException(e.toString))): IndexErrors
+                 case e: CodecFailure       => e: IndexErrors
+                 case e: StorageSystemError => e: IndexErrors
+               }
+    } yield metas.filter(_.collectionKind == CollectionKind.Index).map(_.collectionName)
   }
 
   /** @inheritdoc */

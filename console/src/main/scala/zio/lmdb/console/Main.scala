@@ -249,7 +249,29 @@ object Main extends ZIOAppDefault {
   }
 
   def showStats(lmdb: LMDB, ctx: ConsoleContext): ZIO[Any, Throwable, Unit] = {
-    ZIO.attempt(ctx.terminal.writer().println(s"Database Path: ${lmdb.databasePath}"))
+    for {
+      stats <- lmdb.stats().mapError(e => new RuntimeException(e.toString))
+      w = ctx.terminal.writer()
+      _ <- ZIO.attempt {
+        w.println(new AttributedStringBuilder().style(AttributedStyle.DEFAULT.bold().foreground(AttributedStyle.CYAN)).append("Database Statistics").toAnsi)
+        w.println(f"  Path:                    ${stats.databasePath}")
+        w.println(f"  Map Size:                ${stats.mapSize} bytes")
+        w.println(f"  Last Page Number:        ${stats.lastPageNumber}")
+        w.println(f"  Last Transaction ID:     ${stats.lastTransactionId}")
+        w.println(f"  Max Readers:             ${stats.maxReaders}")
+        w.println(f"  Current Readers:         ${stats.numReaders}")
+        w.println(f"  Number of Collections:   ${stats.numCollections}")
+        w.println(f"  Number of Indexes:       ${stats.numIndexes}")
+
+        w.println(new AttributedStringBuilder().style(AttributedStyle.DEFAULT.bold().foreground(AttributedStyle.YELLOW)).append("Environment Statistics").toAnsi)
+        w.println(f"  Page Size:               ${stats.envStats.pageSize}")
+        w.println(f"  Tree Depth:              ${stats.envStats.depth}")
+        w.println(f"  Branch Pages:            ${stats.envStats.branchPages}")
+        w.println(f"  Leaf Pages:              ${stats.envStats.leafPages}")
+        w.println(f"  Overflow Pages:          ${stats.envStats.overflowPages}")
+        w.println(f"  Total Entries:           ${stats.envStats.entries}")
+      }
+    } yield ()
   }
 
   def inspectCollection(name: String, lmdb: LMDB, ctx: ConsoleContext): ZIO[Any, Throwable, Unit] = {

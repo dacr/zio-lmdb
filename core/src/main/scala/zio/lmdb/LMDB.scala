@@ -24,8 +24,35 @@ import java.time.OffsetDateTime
 
 case class ActiveTransaction(createdAt: OffsetDateTime)
 
+case class LMDBEnvStats(
+  pageSize: Int,
+  depth: Int,
+  branchPages: Long,
+  leafPages: Long,
+  overflowPages: Long,
+  entries: Long
+)
+
+case class LMDBStats(
+  databasePath: String,
+  mapSize: Long,
+  lastPageNumber: Long,
+  lastTransactionId: Long,
+  maxReaders: Int,
+  numReaders: Int,
+  numCollections: Int,
+  numIndexes: Int,
+  envStats: LMDBEnvStats
+)
+
 /** Lightning Memory-Mapped Database (LMDB) abstraction layer for ZIO. */
 trait LMDB {
+
+  /** Get database statistics
+    * @return
+    *   database statistics
+    */
+  def stats(): IO[StorageSystemError, LMDBStats]
 
   /** Get the used storage directory in your file system.
     * @return
@@ -617,6 +644,13 @@ object LMDB {
       lmdb   <- LMDBLive.setup(config)
     } yield lmdb
   )
+
+  /** Get database statistics
+    *
+    * @return
+    *   database statistics
+    */
+  def stats(): ZIO[LMDB, StorageSystemError, LMDBStats] = ZIO.serviceWithZIO(_.stats())
 
   /** Get the used storage directory in your file system.
     *

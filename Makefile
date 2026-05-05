@@ -9,3 +9,5 @@ unit-tests:
 readme-test:
 	scala-cli README.md
 
+console-assembly:
+	sbt console/assembly

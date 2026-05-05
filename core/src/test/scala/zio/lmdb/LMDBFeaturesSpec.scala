@@ -44,6 +44,19 @@ object LMDBFeaturesSpec extends ZIOSpecDefault with Commons {
       )
     ), // @@ ignore, // AS IT HAS A GLOBAL IMPACT ON THE DATABASE IF IT HAS BEEN SHARED BETWEEN ALL TESTS !!
     // -----------------------------------------------------------------------------
+    test("database stats")(
+      for {
+        colName <- randomCollectionName
+        _       <- LMDB.collectionCreate[String, String](colName)
+        stats   <- LMDB.stats()
+      } yield assertTrue(
+        stats.databasePath.nonEmpty,
+        stats.mapSize > 0,
+        stats.numCollections >= 1,
+        stats.envStats.pageSize > 0
+      )
+    ),
+    // -----------------------------------------------------------------------------
     test("create collection")(
       for {
         colName               <- randomCollectionName
