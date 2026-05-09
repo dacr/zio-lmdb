@@ -161,11 +161,11 @@ class LMDBLive(
   /** @inheritdoc */
   override def stats(): IO[StorageSystemError, LMDBStats] = {
     for {
-      info          <- ZIO.attemptBlocking(env.info()).mapError(err => InternalError(s"Couldn't get env info: $err", Some(err)))
-      stat          <- ZIO.attemptBlocking(env.stat()).mapError(err => InternalError(s"Couldn't get env stat: $err", Some(err)))
-      metas         <- collect[String, MetaDataEntry](config.metaDataCollectionName).catchAll(_ => ZIO.succeed(Nil))
-      numCollections = metas.count(_.collectionKind == CollectionKind.Regular)
-      numIndexes     = metas.count(_.collectionKind == CollectionKind.Index)
+      info               <- ZIO.attemptBlocking(env.info()).mapError(err => InternalError(s"Couldn't get env info: $err", Some(err)))
+      stat               <- ZIO.attemptBlocking(env.stat()).mapError(err => InternalError(s"Couldn't get env stat: $err", Some(err)))
+      metas              <- collect[String, MetaDataEntry](config.metaDataCollectionName).catchAll(_ => ZIO.succeed(Nil))
+      numCollections      = metas.count(_.collectionKind == CollectionKind.Regular)
+      numIndexes          = metas.count(_.collectionKind == CollectionKind.Index)
       numMultiCollections = metas.count(_.collectionKind == CollectionKind.Multi)
     } yield LMDBStats(
       databasePath = databasePath,
@@ -365,7 +365,7 @@ class LMDBLive(
   private def fetchLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Any, FetchErrors, Option[T]] = {
     for {
       keyBB         <- makeKeyByteBuffer(key)
-      found         <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[FetchErrors](err => InternalError(s"Couldn't fetch $key on $colName: $err", Some(err)))
+      found         <- ZIO.attempt(Option(dbi.get(txn, keyBB))).mapError[FetchErrors](err => InternalError(s"Couldn't fetch $key on $colName: $err", Some(err)))
       mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
       document      <- ZIO
                          .foreach(mayBeRawValue) { rawValue =>
@@ -451,8 +451,8 @@ class LMDBLive(
     for {
       keyBuffer <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       cursor    <- ZIO.acquireRelease(
-                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
-                   )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
+                     ZIO.attempt(dbi.openCursor(txn)).mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
+                   )(c => ZIO.attempt(c.close()).ignoreLogged)
       found     <- ZIO
                      .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
                      .mapError[FetchErrors](e => InternalError(s"Get error: $e", Some(e)))
@@ -617,7 +617,7 @@ class LMDBLive(
   private def containsLogic[K](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): ZIO[Any, ContainsErrors, Boolean] = {
     for {
       keyBB <- makeKeyByteBuffer(key)
-      found <- ZIO.attemptBlocking(Option(dbi.get(txn, keyBB))).mapError[ContainsErrors](err => InternalError(s"Couldn't check $key on $colName: $err", Some(err)))
+      found <- ZIO.attempt(Option(dbi.get(txn, keyBB))).mapError[ContainsErrors](err => InternalError(s"Couldn't check $key on $colName: $err", Some(err)))
     } yield found.isDefined
   }
 
@@ -1153,7 +1153,7 @@ class LMDBLive(
                           ZIO
                             .attemptBlocking(env.txnRead())
                             .mapError(err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
-                        )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+                        )(txn => ZIO.attempt(txn.close()).ignoreLogged)
                  res <- indexContainsLogic(txn, dbi, name, key, targetKey)
                } yield res
              })
@@ -1170,7 +1170,7 @@ class LMDBLive(
                           ZIO
                             .attemptBlocking(env.txnRead())
                             .mapError(err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
-                        )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+                        )(txn => ZIO.attempt(txn.close()).ignoreLogged)
                  res <- indexHasKeyLogic(txn, dbi, name, key)
                } yield res
              })
@@ -1181,8 +1181,8 @@ class LMDBLive(
     for {
       keyBuffer <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       cursor    <- ZIO.acquireRelease(
-                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
-                   )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
+                     ZIO.attempt(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
+                   )(c => ZIO.attempt(c.close()).ignoreLogged)
       found     <- ZIO
                      .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
                      .mapError(e => InternalError(s"Get error: $e", Some(e)))
@@ -1331,8 +1331,8 @@ class LMDBLive(
       keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       cursor      <- ZIO.acquireRelease(
-                       ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
-                     )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
+                       ZIO.attempt(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
+                     )(c => ZIO.attempt(c.close()).ignoreLogged)
       found       <- ZIO
                        .attemptBlocking {
                          @scala.annotation.tailrec
@@ -1412,7 +1412,7 @@ class LMDBLive(
                  ZIO
                    .attemptBlocking(env.txnRead())
                    .mapError(err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
-               )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+               )(txn => ZIO.attempt(txn.close()).ignoreLogged)
         s   <- indexedLogic(txn, db, name, key, limitToKey)(keyCodec, toKeyCodec)
       } yield s
     }
@@ -1432,7 +1432,7 @@ class LMDBLive(
                   ZIO
                     .attemptBlocking(dbi.openCursor(txn))
                     .mapError(err => InternalError(s"Couldn't acquire cursor on $name: $err", Some(err)))
-                )(cursor => ZIO.attemptBlocking(cursor.close()).ignoreLogged)
+                )(cursor => ZIO.attempt(cursor.close()).ignoreLogged)
 
       found <- ZIO
                  .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
@@ -1590,25 +1590,27 @@ class LMDBLive(
     for {
       keyBuffer <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       cursor    <- ZIO.acquireRelease(
-                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
-                   )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
+                     ZIO.attempt(dbi.openCursor(txn)).mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
+                   )(c => ZIO.attempt(c.close()).ignoreLogged)
       found     <- ZIO
                      .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
                      .mapError[FetchErrors](e => InternalError(s"Get error: $e", Some(e)))
       result    <- if (found) {
-                     ZIO.attemptBlocking {
-                       val builder = List.newBuilder[T]
-                       var hasNext = true
-                       while (hasNext) {
-                         val valBuffer = cursor.`val`()
-                         codec.decode(valBuffer) match {
-                           case Right(v) => builder += v
-                           case Left(e)  => () // Ignore or fail? Let's ignore for now or we could fail. Actually, we should fail if codec fails.
+                     ZIO
+                       .attempt {
+                         val builder = List.newBuilder[T]
+                         var hasNext = true
+                         while (hasNext) {
+                           val valBuffer = cursor.`val`()
+                           codec.decode(valBuffer) match {
+                             case Right(v) => builder += v
+                             case Left(e)  => () // Ignore or fail? Let's ignore for now or we could fail. Actually, we should fail if codec fails.
+                           }
+                           hasNext = cursor.seek(SeekOp.MDB_NEXT_DUP)
                          }
-                         hasNext = cursor.seek(SeekOp.MDB_NEXT_DUP)
+                         builder.result()
                        }
-                       builder.result()
-                     }.mapError[FetchErrors](e => InternalError(s"Iteration error: $e", Some(e)))
+                       .mapError[FetchErrors](e => InternalError(s"Iteration error: $e", Some(e)))
                    } else ZIO.succeed(Nil)
     } yield result
   }
@@ -1622,7 +1624,7 @@ class LMDBLive(
                           ZIO
                             .attemptBlocking(env.txnRead())
                             .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
-                        )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+                        )(txn => ZIO.attempt(txn.close()).ignoreLogged)
                  res <- multiFetchLogic(txn, db, colName, key)
                } yield res
              })
@@ -1707,7 +1709,7 @@ class LMDBLive(
                    ZIO
                      .attemptBlocking(env.txnRead())
                      .mapError(err => InternalError(s"Couldn't acquire read transaction: $err", Some(err)))
-                 )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+                 )(txn => ZIO.attempt(txn.close()).ignoreLogged)
           ops  = new LMDBReadOpsLive(txn)
           res <- f(ops)
         } yield res
@@ -1932,6 +1934,7 @@ class LMDBLive(
       } yield stream
       ZStream.unwrapScoped(result)
     }
+
     /** @inheritdoc */
     override def multiExists(name: CollectionName): IO[StorageSystemError, Boolean] = {
       getMultiDbi(name, Some(txn)).as(true).catchAll(_ => ZIO.succeed(false))

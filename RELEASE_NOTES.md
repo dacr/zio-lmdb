@@ -6,6 +6,7 @@
 - Add meta-collection collection to store metadata about collections and indices
 - Add multi collection type to support collection with several values for the same key
 - provide a protobuf usage example through a dedicated test spec
+- performance enhancements under heavy concurrency
 
 ## 2.7 - 2026-04-12
 
