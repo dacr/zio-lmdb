@@ -279,6 +279,32 @@ trait LMDBReadOps {
     startAfter: Option[K] = None,
     backward: Boolean = false
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): zio.stream.ZStream[Any, StreamErrors, (K, T)]
+
+  /** check if a multi-collection exists
+    * @param name
+    *   the collection name
+    * @return
+    *   true if the collection exists
+    */
+  def multiExists(name: CollectionName): IO[StorageSystemError, Boolean]
+
+  /** Get how many items a multi-collection contains
+    * @param name
+    *   the collection name
+    * @return
+    *   the collection size
+    */
+  def multiSize(name: CollectionName): IO[SizeErrors, Long]
+
+  /** Get all records for a given key in a multi-collection
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the records to get
+    * @return
+    *   a list of records
+    */
+  def multiFetch[K, T](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, List[T]]
 }
 
 /** LMDB operations available within a read-write transaction context. */
@@ -369,4 +395,42 @@ trait LMDBWriteOps extends LMDBReadOps {
     *   the index name
     */
   def indexClear(name: IndexName): IO[IndexErrors, Unit]
+
+  /** Remove all the content of a multi-collection
+    * @param name
+    *   the collection name
+    */
+  def multiClear(name: CollectionName): IO[ClearErrors, Unit]
+
+  /** Insert a record in a multi-collection.
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key for the record
+    * @param document
+    *   the record content to insert
+    */
+  def multiPut[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit]
+
+  /** Delete a specific record in a multi-collection
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the record to delete
+    * @param document
+    *   the specific document to delete
+    * @return
+    *   true if the record was deleted
+    */
+  def multiDelete[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Boolean]
+
+  /** Delete all records for a given key in a multi-collection
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the records to delete
+    * @return
+    *   true if any records were deleted
+    */
+  def multiDeleteAll[K](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): IO[DeleteErrors, Boolean]
 }

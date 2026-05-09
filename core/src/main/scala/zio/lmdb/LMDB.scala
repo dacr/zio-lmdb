@@ -17,33 +17,12 @@
 package zio.lmdb
 import zio.lmdb.keycodecs.KeyCodec
 
-import zio._
+import zio.*
 import zio.stream.ZStream
-import zio.config._
+import zio.config.*
 import java.time.OffsetDateTime
 
 case class ActiveTransaction(createdAt: OffsetDateTime)
-
-case class LMDBEnvStats(
-  pageSize: Int,
-  depth: Int,
-  branchPages: Long,
-  leafPages: Long,
-  overflowPages: Long,
-  entries: Long
-)
-
-case class LMDBStats(
-  databasePath: String,
-  mapSize: Long,
-  lastPageNumber: Long,
-  lastTransactionId: Long,
-  maxReaders: Int,
-  numReaders: Int,
-  numCollections: Int,
-  numIndexes: Int,
-  envStats: LMDBEnvStats
-)
 
 /** Lightning Memory-Mapped Database (LMDB) abstraction layer for ZIO. */
 trait LMDB {
@@ -128,6 +107,116 @@ trait LMDB {
     *   the collection name
     */
   def collectionDrop(name: CollectionName): IO[DropErrors, Unit]
+
+  /** Create a multi-collection and return the collection helper facade.
+    * @param name
+    *   the collection name
+    * @param failIfExists
+    *   raise an error if the collection already exists, default to true
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the records
+    * @return
+    *   the multi-collection helper facade
+    */
+  def multiCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CreateErrors, LMDBMulti[K, T]]
+
+  /** Get a multi-collection helper facade.
+    * @param name
+    *   the collection name
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the records
+    * @return
+    *   the multi-collection helper facade
+    */
+  def multiGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[GetErrors, LMDBMulti[K, T]]
+
+  /** Get how many items a multi-collection contains
+    * @param name
+    *   the collection name
+    * @return
+    *   the collection size
+    */
+  def multiSize(name: CollectionName): IO[SizeErrors, Long]
+
+  /** Remove all the content of a multi-collection
+    * @param name
+    *   the collection name
+    */
+  def multiClear(name: CollectionName): IO[ClearErrors, Unit]
+
+  /** Drop a multi-collection
+    * @param name
+    *   the collection name
+    */
+  def multiDrop(name: CollectionName): IO[DropErrors, Unit]
+
+  /** check if a multi-collection exists
+    * @param name
+    *   the collection name
+    * @return
+    *   true if the collection exists
+    */
+  def multiExists(name: CollectionName): IO[StorageSystemError, Boolean]
+
+  /** Get all records for a given key in a multi-collection
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the records to get
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the record
+    * @return
+    *   a list of records
+    */
+  def multiFetch[K, T](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, List[T]]
+
+  /** Insert a record in a multi-collection.
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key for the record
+    * @param document
+    *   the record content to insert
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    */
+  def multiPut[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit]
+
+  /** Delete a specific record in a multi-collection
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the record to delete
+    * @param document
+    *   the specific document to delete
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    * @return
+    *   true if the record was deleted
+    */
+  def multiDelete[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Boolean]
+
+  /** Delete all records for a given key in a multi-collection
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the records to delete
+    * @tparam K
+    *   key type
+    * @return
+    *   true if any records were deleted
+    */
+  def multiDeleteAll[K](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): IO[DeleteErrors, Boolean]
 
   /** Get a collection record
     * @param collectionName
@@ -732,6 +821,126 @@ object LMDB {
     *   the collection name
     */
   def collectionDrop(name: CollectionName): ZIO[LMDB, DropErrors, Unit] = ZIO.serviceWithZIO(_.collectionDrop(name))
+
+  /** Create a multi-collection and return the collection helper facade.
+    *
+    * @param name
+    *   the collection name
+    * @param failIfExists
+    *   raise an error if the collection already exists, default to true
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the records
+    * @return
+    *   the multi-collection helper facade
+    */
+  def multiCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, CreateErrors, LMDBMulti[K, T]] = ZIO.serviceWithZIO(_.multiCreate(name, failIfExists))
+
+  /** Get a multi-collection helper facade.
+    *
+    * @param name
+    *   the collection name
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the records
+    * @return
+    *   the multi-collection helper facade
+    */
+  def multiGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, GetErrors, LMDBMulti[K, T]] = ZIO.serviceWithZIO(_.multiGet(name))
+
+  /** Get how many items a multi-collection contains
+    *
+    * @param name
+    *   the collection name
+    * @return
+    *   the collection size
+    */
+  def multiSize(name: CollectionName): ZIO[LMDB, SizeErrors, Long] = ZIO.serviceWithZIO(_.multiSize(name))
+
+  /** Remove all the content of a multi-collection
+    *
+    * @param name
+    *   the collection name
+    */
+  def multiClear(name: CollectionName): ZIO[LMDB, ClearErrors, Unit] = ZIO.serviceWithZIO(_.multiClear(name))
+
+  /** Drop a multi-collection
+    *
+    * @param name
+    *   the collection name
+    */
+  def multiDrop(name: CollectionName): ZIO[LMDB, DropErrors, Unit] = ZIO.serviceWithZIO(_.multiDrop(name))
+
+  /** check if a multi-collection exists
+    *
+    * @param name
+    *   the collection name
+    * @return
+    *   true if the collection exists
+    */
+  def multiExists(name: CollectionName): ZIO[LMDB, StorageSystemError, Boolean] = ZIO.serviceWithZIO(_.multiExists(name))
+
+  /** Get all records for a given key in a multi-collection
+    *
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the records to get
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   the data type of the record
+    * @return
+    *   a list of records
+    */
+  def multiFetch[K, T](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, List[T]] = ZIO.serviceWithZIO(_.multiFetch(collectionName, key))
+
+  /** Insert a record in a multi-collection.
+    *
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key for the record
+    * @param document
+    *   the record content to insert
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    */
+  def multiPut[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, UpsertErrors, Unit] = ZIO.serviceWithZIO(_.multiPut(collectionName, key, document))
+
+  /** Delete a specific record in a multi-collection
+    *
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the record to delete
+    * @param document
+    *   the specific document to delete
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    * @return
+    *   true if the record was deleted
+    */
+  def multiDelete[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, DeleteErrors, Boolean] = ZIO.serviceWithZIO(_.multiDelete(collectionName, key, document))
+
+  /** Delete all records for a given key in a multi-collection
+    *
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the records to delete
+    * @tparam K
+    *   key type
+    * @return
+    *   true if any records were deleted
+    */
+  def multiDeleteAll[K](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): ZIO[LMDB, DeleteErrors, Boolean] = ZIO.serviceWithZIO(_.multiDeleteAll(collectionName, key))
 
   /** Get a collection record
     *

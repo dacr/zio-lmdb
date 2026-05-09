@@ -24,7 +24,7 @@ import zio.lmdb.json.*
 case class TxnUser(name: String) derives LMDBCodecJson
 case class TxnAccount(balance: Long) derives LMDBCodecJson
 
-object LMDBTransactionMultiCollectionSpec extends ZIOSpecDefault with Commons {
+object LMDBTransactionSeveralCollectionsSpec extends ZIOSpecDefault with Commons {
 
   override val bootstrap: ZLayer[Any, Any, TestEnvironment] = logger >>> testEnvironment
 

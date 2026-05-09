@@ -8,6 +8,7 @@ import zio.lmdb.json.LMDBCodecJson
 enum CollectionKind derives JsonCodec {
   case Regular
   case Index
+  case Multi
 }
 
 case class MetaDataEntry(

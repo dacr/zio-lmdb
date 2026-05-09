@@ -166,6 +166,7 @@ class LMDBLive(
       metas         <- collect[String, MetaDataEntry](config.metaDataCollectionName).catchAll(_ => ZIO.succeed(Nil))
       numCollections = metas.count(_.collectionKind == CollectionKind.Regular)
       numIndexes     = metas.count(_.collectionKind == CollectionKind.Index)
+      numMultiCollections = metas.count(_.collectionKind == CollectionKind.Multi)
     } yield LMDBStats(
       databasePath = databasePath,
       mapSize = info.mapSize,
@@ -175,6 +176,7 @@ class LMDBLive(
       numReaders = info.numReaders,
       numCollections = numCollections,
       numIndexes = numIndexes,
+      numMultis = numMultiCollections,
       envStats = LMDBEnvStats(
         pageSize = stat.pageSize,
         depth = stat.depth,
@@ -1472,6 +1474,230 @@ class LMDBLive(
     }
   }
 
+  /** Gets or opens a multi-collection DBI handle. */
+  private def getMultiDbi(name: CollectionName, txn: Option[Txn[ByteBuffer]] = None): IO[CollectionNotFound, Dbi[ByteBuffer]] = {
+    openedCollectionDbisRef.get.flatMap { opened =>
+      opened.get(name) match {
+        case Some(d) => ZIO.succeed(d)
+        case None    =>
+          txn match {
+            case Some(t) =>
+              for {
+                newDbi <- ZIO.attempt(env.openDbi(t, name.getBytes(StandardCharsets.UTF_8), null, false, DbiFlags.MDB_DUPSORT))
+                _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+              } yield newDbi
+            case None    =>
+              withWriteLock {
+                openedCollectionDbisRef.get.flatMap { openedAgain =>
+                  openedAgain.get(name) match {
+                    case Some(alreadyOpened) => ZIO.succeed(alreadyOpened)
+                    case None                =>
+                      for {
+                        newDbi <- ZIO.attempt(env.openDbi(name, DbiFlags.MDB_DUPSORT))
+                        _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                      } yield newDbi
+                  }
+                }
+              }
+          }
+      }
+    }
+  }.mapError(_ => CollectionNotFound(name))
+
+  private def multiCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = withWriteLock {
+    for {
+      openedCollectionDbis <- openedCollectionDbisRef.get
+      _                    <- ZIO.when(!openedCollectionDbis.contains(name)) {
+                                for {
+                                  newDbi <- ZIO
+                                              .attempt(env.openDbi(name, DbiFlags.MDB_CREATE, DbiFlags.MDB_DUPSORT))
+                                              .mapError(err => InternalError(s"Couldn't create MultiCollection $name: $err", Some(err)))
+                                  _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                                } yield ()
+                              }
+    } yield ()
+  }
+
+  private def multiAllocate(name: CollectionName): IO[CreateErrors, Unit] = {
+    for {
+      exists <- multiExists(name)
+      _      <- ZIO.cond[CollectionAlreadExists, Unit](!exists, (), CollectionAlreadExists(name))
+      _      <- multiCreateLogic(name)
+      _      <- metadataUpdate(name, CollectionKind.Multi).mapError(e => e: CreateErrors)
+    } yield ()
+  }
+
+  override def multiCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CreateErrors, LMDBMulti[K, T]] = {
+    val allocateLogic = if (failIfExists) {
+      multiAllocate(name)
+    } else {
+      multiAllocate(name).catchSome { case CollectionAlreadExists(_) =>
+        metadataUpdate(name, CollectionKind.Multi).mapError(e => e: CreateErrors) *>
+          getMultiDbi(name).ignore
+      }
+    }
+    allocateLogic.as(LMDBMulti[K, T](name, this))
+  }
+
+  override def multiGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[GetErrors, LMDBMulti[K, T]] = {
+    for {
+      exists <- multiExists(name)
+      _      <- ZIO.cond[CollectionNotFound, Unit](exists, (), CollectionNotFound(name))
+    } yield LMDBMulti[K, T](name, this)
+  }
+
+  override def multiExists(name: CollectionName): IO[StorageSystemError, Boolean] = {
+    for {
+      openedCollectionDbis <- openedCollectionDbisRef.get
+      found                <- if (openedCollectionDbis.contains(name)) ZIO.succeed(true)
+                              else collectionsAvailable().map(_.contains(name))
+    } yield found
+  }
+
+  override def multiSize(name: CollectionName): IO[SizeErrors, Long] = {
+    for {
+      collectionDbi <- getMultiDbi(name)
+      count         <- withReadTransaction(name) { txn =>
+                         collectionSizeLogic(txn, collectionDbi, name)
+                       }
+    } yield count
+  }
+
+  override def multiClear(name: CollectionName): IO[ClearErrors, Unit] = {
+    for {
+      collectionDbi <- getMultiDbi(name)
+      _             <- withWriteLock(
+                         withWriteTransaction(name) { txn =>
+                           for {
+                             _ <- collectionClearLogic(txn, collectionDbi, name)
+                             _ <- ZIO.attempt(txn.commit()).mapError[ClearErrors](err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
+                           } yield ()
+                         }
+                       )
+    } yield ()
+  }
+
+  override def multiDrop(name: CollectionName): IO[DropErrors, Unit] = {
+    for {
+      collectionDbi <- getMultiDbi(name)
+      _             <- collectionClearOrDropLogic(collectionDbi, name, true)
+      _             <- openedCollectionDbisRef.updateAndGet(_.removed(name))
+      _             <- metadataRemove(name).mapError(e => e: DropErrors)
+    } yield ()
+  }
+
+  private def multiFetchLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, FetchErrors, List[T]] = {
+    for {
+      keyBuffer <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      cursor    <- ZIO.acquireRelease(
+                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
+                   )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
+      found     <- ZIO
+                     .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
+                     .mapError[FetchErrors](e => InternalError(s"Get error: $e", Some(e)))
+      result    <- if (found) {
+                     ZIO.attemptBlocking {
+                       val builder = List.newBuilder[T]
+                       var hasNext = true
+                       while (hasNext) {
+                         val valBuffer = cursor.`val`()
+                         codec.decode(valBuffer) match {
+                           case Right(v) => builder += v
+                           case Left(e)  => () // Ignore or fail? Let's ignore for now or we could fail. Actually, we should fail if codec fails.
+                         }
+                         hasNext = cursor.seek(SeekOp.MDB_NEXT_DUP)
+                       }
+                       builder.result()
+                     }.mapError[FetchErrors](e => InternalError(s"Iteration error: $e", Some(e)))
+                   } else ZIO.succeed(Nil)
+    } yield result
+  }
+
+  override def multiFetch[K, T](colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, List[T]] = {
+    for {
+      db  <- getMultiDbi(colName)
+      res <- withReadLock(ZIO.scoped {
+               for {
+                 txn <- ZIO.acquireRelease(
+                          ZIO
+                            .attemptBlocking(env.txnRead())
+                            .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
+                        )(txn => ZIO.attemptBlocking(txn.close()).ignoreLogged)
+                 res <- multiFetchLogic(txn, db, colName, key)
+               } yield res
+             })
+    } yield res
+  }
+
+  private def multiPutLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
+    for {
+      keyBB       <- makeKeyByteBuffer(key)
+      docBytes     = codec.encode(document)
+      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
+      _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
+      _           <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't multiPut $key into $colName: $err", Some(err)))
+    } yield ()
+  }
+
+  override def multiPut[K, T](colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
+    for {
+      collectionDbi <- getMultiDbi(colName)
+      _             <- withWriteLock(
+                         withWriteTransaction(colName) { txn =>
+                           for {
+                             _ <- multiPutLogic(txn, collectionDbi, colName, key, document)
+                             _ <- ZIO.attempt(txn.commit()).mapError(err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
+                           } yield ()
+                         }
+                       )
+    } yield ()
+  }
+
+  private def multiDeleteLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Boolean] = {
+    for {
+      keyBB       <- makeKeyByteBuffer(key)
+      docBytes     = codec.encode(document)
+      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
+      _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
+      deleted     <- ZIO.attempt(dbi.delete(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't multiDelete $key from $colName: $err", Some(err)))
+    } yield deleted
+  }
+
+  override def multiDelete[K, T](colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Boolean] = {
+    for {
+      db  <- getMultiDbi(colName)
+      res <- withWriteLock(
+               withWriteTransaction(colName) { txn =>
+                 for {
+                   res <- multiDeleteLogic(txn, db, colName, key, document)
+                   _   <- ZIO.attempt(txn.commit()).mapError[DeleteErrors](err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
+                 } yield res
+               }
+             )
+    } yield res
+  }
+
+  private def multiDeleteAllLogic[K](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): IO[DeleteErrors, Boolean] = {
+    for {
+      keyBB   <- makeKeyByteBuffer(key)
+      deleted <- ZIO.attempt(dbi.delete(txn, keyBB)).mapError(err => InternalError(s"Couldn't multiDeleteAll $key from $colName: $err", Some(err)))
+    } yield deleted
+  }
+
+  override def multiDeleteAll[K](colName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): IO[DeleteErrors, Boolean] = {
+    for {
+      db  <- getMultiDbi(colName)
+      res <- withWriteLock(
+               withWriteTransaction(colName) { txn =>
+                 for {
+                   res <- multiDeleteAllLogic(txn, db, colName, key)
+                   _   <- ZIO.attempt(txn.commit()).mapError[DeleteErrors](err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
+                 } yield res
+               }
+             )
+    } yield res
+  }
+
   /** @inheritdoc */
   override def readOnly[R, E, A](f: LMDBReadOps => ZIO[R, E, A]): ZIO[R, E | StorageSystemError, A] = {
     withReadLock(
@@ -1706,6 +1932,26 @@ class LMDBLive(
       } yield stream
       ZStream.unwrapScoped(result)
     }
+    /** @inheritdoc */
+    override def multiExists(name: CollectionName): IO[StorageSystemError, Boolean] = {
+      getMultiDbi(name, Some(txn)).as(true).catchAll(_ => ZIO.succeed(false))
+    }
+
+    /** @inheritdoc */
+    override def multiSize(name: CollectionName): IO[SizeErrors, Long] = {
+      for {
+        collectionDbi <- getMultiDbi(name, Some(txn))
+        size          <- collectionSizeLogic(txn, collectionDbi, name)
+      } yield size
+    }
+
+    /** @inheritdoc */
+    override def multiFetch[K, T](colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, List[T]] = {
+      for {
+        db  <- getMultiDbi(colName, Some(txn))
+        res <- ZIO.scoped(multiFetchLogic(txn, db, colName, key))
+      } yield res
+    }
   }
 
   /** Live implementation of read-write operations using a shared transaction. */
@@ -1773,6 +2019,38 @@ class LMDBLive(
         dbi <- getIndexDbi(name, Some(txn))
         _   <- ZIO.attempt(dbi.drop(txn, false)).mapError(e => InternalError(s"Couldn't clear index $name: $e", Some(e)))
       } yield ()
+    }
+
+    /** @inheritdoc */
+    override def multiClear(name: CollectionName): IO[ClearErrors, Unit] = {
+      for {
+        collectionDbi <- getMultiDbi(name, Some(txn))
+        _             <- collectionClearLogic(txn, collectionDbi, name)
+      } yield ()
+    }
+
+    /** @inheritdoc */
+    override def multiPut[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
+      for {
+        collectionDbi <- getMultiDbi(collectionName, Some(txn))
+        _             <- multiPutLogic(txn, collectionDbi, collectionName, key, document)
+      } yield ()
+    }
+
+    /** @inheritdoc */
+    override def multiDelete[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Boolean] = {
+      for {
+        db  <- getMultiDbi(collectionName, Some(txn))
+        res <- multiDeleteLogic(txn, db, collectionName, key, document)
+      } yield res
+    }
+
+    /** @inheritdoc */
+    override def multiDeleteAll[K](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): IO[DeleteErrors, Boolean] = {
+      for {
+        db  <- getMultiDbi(collectionName, Some(txn))
+        res <- multiDeleteAllLogic(txn, db, collectionName, key)
+      } yield res
     }
   }
 }
