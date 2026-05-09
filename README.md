@@ -11,8 +11,12 @@ Choices have been made to make the developer experience as simple as possible :
 - JSON-based default storage using zio-json,
   - *Custom serialization is supported*
 - Safe update by using a lambda which will be called with the previous value if it exists and returns the new value,
-- Identifiers are managed by the developer, just use [UUID][UUID] or [ULID][ZIO-ULID].
+- Identifiers are managed by the developer, using, for example, [UUID][UUID] or [ULID][ZIO-ULID].
   - Remember that identifiers are automatically lexicographically sorted :)
+- Several collection kinds are supported with their own dedicated API facades:
+  - regular: one key ⇒ one value
+  - multi: one key ⇒ N values
+  - index: one key ⇒ N keys
 
 API is designed to not lie. All functions signatures describe precisely
 what you must expect from them, thanks to [ZIO][ZIO] and [Scala3][Scala3].  
@@ -20,20 +24,20 @@ what you must expect from them, thanks to [ZIO][ZIO] and [Scala3][Scala3].
 ## Definitions
 
 For a better understanding, this library uses slightly different vocabulary from LMDB original one :  
-- **Database** : (*LMDB talk about Environment*)
+- **Database**: (*LMDB talk about Environment*)
   - The place where the database file is stored on your file system
   - A set of configurations for this database (expected maximum size, expected collection number)
-- **Collection** : (*LMDB talk about Database*) 
+- **Collection**: (*LMDB talk about Database*) 
   - A sorted Map ([B+ Tree][btree]) where your data is stored
-  - One database contains multiple collection
-- **Transaction** : (*the same for LMDB*)
+  - One database contains multiple collections
+- **Transaction**: (*the same for LMDB*)
   - for global coherency within the same database
   - only one simultaneous write access is possible within the same database
 
 ## Configuration
 
 Configuration is based on the standard ZIO config mechanism, the default configuration provider uses environnment variables
-or java properties to resolve this library configuration parameters.
+or java properties to resolve these library configuration parameters.
 
  
 | Configuration key   | Environment variable | Description                                                    | Default value    |
@@ -55,8 +59,8 @@ Available LMDB layers :
 ### CRUD example
 
 ```scala
-//> using scala 3.8.1
-//> using dep fr.janalyse::zio-lmdb:2.3.3
+//> using scala 3.8.3
+//> using dep fr.janalyse::zio-lmdb:2.8.0
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 
 import zio.*, zio.json.*, zio.lmdb.*, zio.lmdb.json.*
@@ -91,8 +95,8 @@ CrudExample.main(Array.empty)
 ### Transaction example
 
 ```scala
-//> using scala 3.8.1
-//> using dep fr.janalyse::zio-lmdb:2.3.3
+//> using scala 3.8.3
+//> using dep fr.janalyse::zio-lmdb:2.8.0
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 
 import zio.*, zio.json.*, zio.lmdb.*, zio.lmdb.json.*
@@ -126,9 +130,8 @@ TransactionExample.main(Array.empty)
 The `query-dsl` module provides a fluent API for querying and joining collections.
 
 ```scala
-//> using scala 3.8.1
-//> using dep fr.janalyse::zio-lmdb:2.5.0
-//> using dep fr.janalyse::query-dsl:2.5.0
+//> using scala 3.8.3
+//> using dep fr.janalyse::query-dsl:2.8.0
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 
 import zio.*, zio.json.*, zio.lmdb.*, zio.lmdb.json.LMDBCodecJson.given
