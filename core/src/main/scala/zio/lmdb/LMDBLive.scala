@@ -163,7 +163,7 @@ class LMDBLive(
     for {
       info               <- ZIO.attemptBlocking(env.info()).mapError(err => InternalError(s"Couldn't get env info: $err", Some(err)))
       stat               <- ZIO.attemptBlocking(env.stat()).mapError(err => InternalError(s"Couldn't get env stat: $err", Some(err)))
-      metas              <- collect[String, MetaDataEntry](config.metaDataCollectionName).catchAll(_ => ZIO.succeed(Nil))
+      metas              <- collect[String, MetaDataEntry](config.metaDataCollectionName, limit = None).catchAll(_ => ZIO.succeed(Nil))
       numCollections      = metas.count(_.collectionKind == CollectionKind.Regular)
       numIndexes          = metas.count(_.collectionKind == CollectionKind.Index)
       numMultiCollections = metas.count(_.collectionKind == CollectionKind.Multi)
@@ -244,11 +244,11 @@ class LMDBLive(
   private def withReadTransaction(colName: CollectionName): ZIO.Release[Any, StorageSystemError, Txn[ByteBuffer]] =
     ZIO.acquireReleaseWith(
       ZIO
-        .attemptBlocking(env.txnRead())
+        .attempt(env.txnRead())
         .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
     )(txn =>
       ZIO
-        .attemptBlocking(txn.close())
+        .attempt(txn.close())
         .ignoreLogged
     )
 
@@ -382,11 +382,11 @@ class LMDBLive(
                   for {
                     txn <- ZIO.acquireRelease(
                              ZIO
-                               .attemptBlocking(env.txnRead())
+                               .attempt(env.txnRead())
                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
                            )(txn =>
                              ZIO
-                               .attemptBlocking(txn.close())
+                               .attempt(txn.close())
                                .ignoreLogged
                            )
                     res <- fetchAtLogic(txn, db, colName, index)
@@ -411,22 +411,24 @@ class LMDBLive(
     for {
       cursor             <- ZIO.acquireRelease(
                               ZIO
-                                .attemptBlocking(dbi.openCursor(txn))
+                                .attempt(dbi.openCursor(txn))
                                 .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
                             )(cursor =>
                               ZIO
-                                .attemptBlocking(cursor.close())
+                                .attempt(cursor.close())
                                 .ignoreLogged
                             )
       seekFirstSuccess   <- ZIO
                               .attempt(cursor.seek(SeekOp.MDB_FIRST))
                               .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName: $err", Some(err)))
-      seekAllNextSuccess <- ZIO
-                              .attempt(cursor.seek(SeekOp.MDB_NEXT))
-                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName: $err", Some(err)))
-                              .repeatN(index.toInt) // TODO review and optimize (support long, start from first or from last
-                              .when(seekFirstSuccess)
-      seeksSuccess        = seekAllNextSuccess.contains(true) || (index == 0 && seekFirstSuccess)
+      finalState         <- ZIO
+                              .iterate((0L, seekFirstSuccess))(state => state._1 < index && state._2) { case (i, _) =>
+                                ZIO
+                                  .attempt(cursor.seek(SeekOp.MDB_NEXT))
+                                  .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName: $err", Some(err)))
+                                  .map(success => (i + 1, success))
+                              }
+      seeksSuccess        = finalState._1 == index && finalState._2
       seekedKey          <- ZIO
                               .fromEither(kodec.decode(cursor.key()))
                               .when(seeksSuccess)
@@ -454,7 +456,7 @@ class LMDBLive(
                      ZIO.attempt(dbi.openCursor(txn)).mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
                    )(c => ZIO.attempt(c.close()).ignoreLogged)
       found     <- ZIO
-                     .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
+                     .attempt(cursor.get(keyBuffer, GetOp.MDB_SET))
                      .mapError[FetchErrors](e => InternalError(s"Get error: $e", Some(e)))
       result    <- if (found) {
                      for {
@@ -474,23 +476,24 @@ class LMDBLive(
     for {
       cursor             <- ZIO.acquireRelease(
                               ZIO
-                                .attemptBlocking(dbi.openCursor(txn))
+                                .attempt(dbi.openCursor(txn))
                                 .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $name: $err", Some(err)))
                             )(cursor =>
                               ZIO
-                                .attemptBlocking(cursor.close())
+                                .attempt(cursor.close())
                                 .ignoreLogged
                             )
       seekFirstSuccess   <- ZIO
                               .attempt(cursor.seek(SeekOp.MDB_FIRST))
                               .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
-      seekAllNextSuccess <- if (position > 0) {
-                              ZIO
-                                .attempt(cursor.seek(SeekOp.MDB_NEXT))
-                                .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
-                                .repeatN(position.toInt - 1)
-                            } else ZIO.succeed(true)
-      seeksSuccess        = seekAllNextSuccess && seekFirstSuccess
+      finalState         <- ZIO
+                              .iterate((0L, seekFirstSuccess))(state => state._1 < position && state._2) { case (i, _) =>
+                                ZIO
+                                  .attempt(cursor.seek(SeekOp.MDB_NEXT))
+                                  .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
+                                  .map(success => (i + 1, success))
+                              }
+      seeksSuccess        = finalState._1 == position && finalState._2
       seekedKey          <- ZIO
                               .fromEither(keyCodec.decode(cursor.key()))
                               .when(seeksSuccess)
@@ -518,11 +521,11 @@ class LMDBLive(
                   for {
                     txn <- ZIO.acquireRelease(
                              ZIO
-                               .attemptBlocking(env.txnRead())
+                               .attempt(env.txnRead())
                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
                            )(txn =>
                              ZIO
-                               .attemptBlocking(txn.close())
+                               .attempt(txn.close())
                                .ignoreLogged
                            )
                     res <- seekLogic(txn, db, colName, recordKey, seekOperation)
@@ -549,11 +552,11 @@ class LMDBLive(
     for {
       cursor      <- ZIO.acquireRelease(
                        ZIO
-                         .attemptBlocking(dbi.openCursor(txn))
+                         .attempt(dbi.openCursor(txn))
                          .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
                      )(cursor =>
                        ZIO
-                         .attemptBlocking(cursor.close())
+                         .attempt(cursor.close())
                          .ignoreLogged
                      )
       key         <- ZIO.foreach(recordKey)(rk => makeKeyByteBuffer(rk))
@@ -773,7 +776,7 @@ class LMDBLive(
     valueFilter: T => Boolean = (_: T) => true,
     startAfter: Option[K] = None,
     backward: Boolean = false,
-    limit: Option[Int] = None
+    limit: Option[Long] = None
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]] = {
     for {
       collectionDbi <- getCollectionDbi(colName)
@@ -781,11 +784,11 @@ class LMDBLive(
                          for {
                            txn <- ZIO.acquireRelease(
                                     ZIO
-                                      .attemptBlocking(env.txnRead())
+                                      .attempt(env.txnRead())
                                       .mapError[CollectErrors](err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
                                   )(txn =>
                                     ZIO
-                                      .attemptBlocking(txn.close())
+                                      .attempt(txn.close())
                                       .ignoreLogged
                                   )
                            res <- collectLogic(txn, collectionDbi, colName, keyFilter, valueFilter, startAfter, backward, limit)
@@ -822,31 +825,33 @@ class LMDBLive(
     valueFilter: T => Boolean = (_: T) => true,
     startAfter: Option[K] = None,
     backward: Boolean = false,
-    limit: Option[Int] = None
+    limit: Option[Long] = None
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, CollectErrors, List[T]] = {
     for {
       startAfterBB <- ZIO.foreach(startAfter)(makeKeyByteBuffer)
       iterable     <- ZIO.acquireRelease(
                         ZIO
-                          .attemptBlocking(dbi.iterate(txn, makeRange(startAfterBB, backward)))
+                          .attempt(dbi.iterate(txn, makeRange(startAfterBB, backward)))
                           .mapError[CollectErrors](err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
                       )(cursor =>
                         ZIO
-                          .attemptBlocking(cursor.close())
+                          .attempt(cursor.close())
                           .ignoreLogged
                       )
       collected    <- ZIO
-                        .foreach {
+                        .attempt {
                           def content =
                             LazyList
                               .from(KeyValueIterator[K, T](iterable.iterator()))
                               .map(kv => kv.key.flatMap(key => kv.value.map(value => (key, value))))
                               .collect { case either if either.isLeft || either.exists((k, v) => keyFilter(k) && valueFilter(v)) => either.map((k, v) => v) }
-                          limit match {
+                          val limited = limit match {
                             case None    => content.toList
-                            case Some(l) => content.take(l).toList
+                            case Some(l) => content.take(l.toInt).toList
                           }
-                        } { r => ZIO.from(r) }
+                          limited
+                        }
+                        .flatMap { r => ZIO.foreach(r)(ZIO.from(_)) }
                         .mapError[CollectErrors](err => InternalError(s"Couldn't collect documents stored in $colName : $err", None))
     } yield collected
   }
@@ -899,11 +904,11 @@ class LMDBLive(
         db  <- getCollectionDbi(colName)
         txn <- ZIO.acquireRelease(
                  ZIO
-                   .attemptBlocking(env.txnRead())
+                   .attempt(env.txnRead())
                    .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
                )(txn =>
                  ZIO
-                   .attemptBlocking(txn.close())
+                   .attempt(txn.close())
                    .ignoreLogged
                )
         s   <- streamLogic(txn, db, colName, keyFilter, startAfter, backward)
@@ -924,11 +929,11 @@ class LMDBLive(
       startAfterBB <- ZIO.foreach(startAfter)(makeKeyByteBuffer)
       iterable     <- ZIO.acquireRelease(
                         ZIO
-                          .attemptBlocking(dbi.iterate(txn, makeRange(startAfterBB, backward)))
+                          .attempt(dbi.iterate(txn, makeRange(startAfterBB, backward)))
                           .mapError(err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
                       )(cursor =>
                         ZIO
-                          .attemptBlocking(cursor.close())
+                          .attempt(cursor.close())
                           .ignoreLogged
                       )
     } yield ZStream
@@ -955,11 +960,11 @@ class LMDBLive(
         db  <- getCollectionDbi(colName)
         txn <- ZIO.acquireRelease(
                  ZIO
-                   .attemptBlocking(env.txnRead())
+                   .attempt(env.txnRead())
                    .mapError(err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
                )(txn =>
                  ZIO
-                   .attemptBlocking(txn.close())
+                   .attempt(txn.close())
                    .ignoreLogged
                )
         s   <- streamWithKeysLogic(txn, db, colName, keyFilter, startAfter, backward)
@@ -980,11 +985,11 @@ class LMDBLive(
       startAfterBB <- ZIO.foreach(startAfter)(makeKeyByteBuffer)
       iterable     <- ZIO.acquireRelease(
                         ZIO
-                          .attemptBlocking(dbi.iterate(txn, makeRange(startAfterBB, backward)))
+                          .attempt(dbi.iterate(txn, makeRange(startAfterBB, backward)))
                           .mapError(err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
                       )(cursor =>
                         ZIO
-                          .attemptBlocking(cursor.close())
+                          .attempt(cursor.close())
                           .ignoreLogged
                       )
     } yield ZStream
@@ -1097,7 +1102,7 @@ class LMDBLive(
   /** @inheritdoc */
   override def indexes(): IO[IndexErrors, List[IndexName]] = {
     for {
-      metas <- collect[String, MetaDataEntry](config.metaDataCollectionName).mapError {
+      metas <- collect[String, MetaDataEntry](config.metaDataCollectionName, limit = None).mapError {
                  case e: OverSizedKey       => e: IndexErrors
                  case e: CollectionNotFound => InternalError(s"Metadata collection not found: ${config.metaDataCollectionName}", Some(new RuntimeException(e.toString))): IndexErrors
                  case e: CodecFailure       => e: IndexErrors
@@ -1151,7 +1156,7 @@ class LMDBLive(
                for {
                  txn <- ZIO.acquireRelease(
                           ZIO
-                            .attemptBlocking(env.txnRead())
+                            .attempt(env.txnRead())
                             .mapError(err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
                         )(txn => ZIO.attempt(txn.close()).ignoreLogged)
                  res <- indexContainsLogic(txn, dbi, name, key, targetKey)
@@ -1168,7 +1173,7 @@ class LMDBLive(
                for {
                  txn <- ZIO.acquireRelease(
                           ZIO
-                            .attemptBlocking(env.txnRead())
+                            .attempt(env.txnRead())
                             .mapError(err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
                         )(txn => ZIO.attempt(txn.close()).ignoreLogged)
                  res <- indexHasKeyLogic(txn, dbi, name, key)
@@ -1184,7 +1189,7 @@ class LMDBLive(
                      ZIO.attempt(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
                    )(c => ZIO.attempt(c.close()).ignoreLogged)
       found     <- ZIO
-                     .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
+                     .attempt(cursor.get(keyBuffer, GetOp.MDB_SET))
                      .mapError(e => InternalError(s"Get error: $e", Some(e)))
     } yield found
   }
@@ -1196,11 +1201,11 @@ class LMDBLive(
                   for {
                     txn <- ZIO.acquireRelease(
                              ZIO
-                               .attemptBlocking(env.txnRead())
+                               .attempt(env.txnRead())
                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
                            )(txn =>
                              ZIO
-                               .attemptBlocking(txn.close())
+                               .attempt(txn.close())
                                .ignoreLogged
                            )
                     res <- indexSeekLogic(txn, db, name, recordKey, seekOperation)(keyCodec, toKeyCodec)
@@ -1216,11 +1221,11 @@ class LMDBLive(
     for {
       cursor      <- ZIO.acquireRelease(
                        ZIO
-                         .attemptBlocking(dbi.openCursor(txn))
+                         .attempt(dbi.openCursor(txn))
                          .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $name: $err", Some(err)))
                      )(cursor =>
                        ZIO
-                         .attemptBlocking(cursor.close())
+                         .attempt(cursor.close())
                          .ignoreLogged
                      )
       key         <- ZIO.foreach(recordKey)(rk => makeKeyByteBuffer(rk).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e })
@@ -1275,11 +1280,11 @@ class LMDBLive(
                   for {
                     txn <- ZIO.acquireRelease(
                              ZIO
-                               .attemptBlocking(env.txnRead())
+                               .attempt(env.txnRead())
                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
                            )(txn =>
                              ZIO
-                               .attemptBlocking(txn.close())
+                               .attempt(txn.close())
                                .ignoreLogged
                            )
                     res <- indexFetchLogic(txn, db, name, key)(keyCodec, toKeyCodec)
@@ -1296,11 +1301,11 @@ class LMDBLive(
                   for {
                     txn <- ZIO.acquireRelease(
                              ZIO
-                               .attemptBlocking(env.txnRead())
+                               .attempt(env.txnRead())
                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
                            )(txn =>
                              ZIO
-                               .attemptBlocking(txn.close())
+                               .attempt(txn.close())
                                .ignoreLogged
                            )
                     res <- indexFetchAtLogic(txn, db, name, position)(keyCodec, toKeyCodec)
@@ -1410,7 +1415,7 @@ class LMDBLive(
         db  <- getIndexDbi(name)
         txn <- ZIO.acquireRelease(
                  ZIO
-                   .attemptBlocking(env.txnRead())
+                   .attempt(env.txnRead())
                    .mapError(err => InternalError(s"Couldn't acquire read transaction on $name: $err", Some(err)))
                )(txn => ZIO.attempt(txn.close()).ignoreLogged)
         s   <- indexedLogic(txn, db, name, key, limitToKey)(keyCodec, toKeyCodec)
@@ -1430,12 +1435,12 @@ class LMDBLive(
 
       cursor <- ZIO.acquireRelease(
                   ZIO
-                    .attemptBlocking(dbi.openCursor(txn))
+                    .attempt(dbi.openCursor(txn))
                     .mapError(err => InternalError(s"Couldn't acquire cursor on $name: $err", Some(err)))
                 )(cursor => ZIO.attempt(cursor.close()).ignoreLogged)
 
       found <- ZIO
-                 .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
+                 .attempt(cursor.get(keyBuffer, GetOp.MDB_SET))
                  .mapError(err => InternalError(s"Seek error: $err", Some(err)))
 
     } yield {
@@ -1593,7 +1598,7 @@ class LMDBLive(
                      ZIO.attempt(dbi.openCursor(txn)).mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
                    )(c => ZIO.attempt(c.close()).ignoreLogged)
       found     <- ZIO
-                     .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
+                     .attempt(cursor.get(keyBuffer, GetOp.MDB_SET))
                      .mapError[FetchErrors](e => InternalError(s"Get error: $e", Some(e)))
       result    <- if (found) {
                      ZIO
@@ -1622,7 +1627,7 @@ class LMDBLive(
                for {
                  txn <- ZIO.acquireRelease(
                           ZIO
-                            .attemptBlocking(env.txnRead())
+                            .attempt(env.txnRead())
                             .mapError[FetchErrors](err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
                         )(txn => ZIO.attempt(txn.close()).ignoreLogged)
                  res <- multiFetchLogic(txn, db, colName, key)
@@ -1707,7 +1712,7 @@ class LMDBLive(
         for {
           txn <- ZIO.acquireRelease(
                    ZIO
-                     .attemptBlocking(env.txnRead())
+                     .attempt(env.txnRead())
                      .mapError(err => InternalError(s"Couldn't acquire read transaction: $err", Some(err)))
                  )(txn => ZIO.attempt(txn.close()).ignoreLogged)
           ops  = new LMDBReadOpsLive(txn)
@@ -1830,7 +1835,7 @@ class LMDBLive(
       valueFilter: T => Boolean,
       startAfter: Option[K],
       backward: Boolean,
-      limit: Option[Int]
+      limit: Option[Long]
     )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]] = {
       for {
         collectionDbi <- getCollectionDbi(colName, Some(txn))

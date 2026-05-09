@@ -244,6 +244,7 @@ trait LMDB {
     * @return
     *   some (key,record) tuple or none if index is out of bounds
     */
+  @deprecated("Arbitrary positional lookup is an anti-pattern for ordered key-value stores like LMDB. Use key-based or stream-based access instead.", "0.1.0")
   def fetchAt[K, T](collectionName: CollectionName, index: Long)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
   /** Get collection first record
@@ -396,7 +397,7 @@ trait LMDB {
     valueFilter: T => Boolean = (_: T) => true,
     startAfter: Option[K] = None,
     backward: Boolean = false,
-    limit: Option[Int] = None
+    limit: Option[Long] = None
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]]
 
   /** Stream collection records.
@@ -622,6 +623,7 @@ trait LMDB {
     * @return
     *   some (key,targetKey) tuple or none if the index is empty
     */
+  @deprecated("Arbitrary positional lookup is an anti-pattern for ordered key-value stores like LMDB. Use key-based or stream-based access instead.", "0.1.0")
   def indexFetchAt[FROM_KEY, TO_KEY](name: IndexName, position: Long)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
 
   /** Remove a mapping from an index
@@ -966,6 +968,7 @@ object LMDB {
     * @return
     *   a ZIO effect that, when executed, may produce either a FetchErrors error or an Option containing the fetched value of type `T`
     */
+  @deprecated("Arbitrary positional lookup is an anti-pattern for ordered key-value stores like LMDB. Use key-based or stream-based access instead.", "0.1.0")
   def fetchAt[K, T](collectionName: CollectionName, index: Long)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, FetchErrors, Option[(K, T)]] = ZIO.serviceWithZIO(_.fetchAt(collectionName, index))
 
   /** Get collection first record
@@ -1115,7 +1118,7 @@ object LMDB {
     valueFilter: T => Boolean = (_: T) => true,
     startAfter: Option[K] = None,
     backward: Boolean = false,
-    limit: Option[Int] = None
+    limit: Option[Long] = None
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, CollectErrors, List[T]] =
     ZIO.serviceWithZIO(_.collect[K, T](collectionName, keyFilter, valueFilter, startAfter, backward, limit))
 
@@ -1355,6 +1358,7 @@ object LMDB {
     * @return
     *   some (key,targetKey) tuple or none if the index is empty
     */
+  @deprecated("Arbitrary positional lookup is an anti-pattern for ordered key-value stores like LMDB. Use key-based or stream-based access instead.", "0.1.0")
   def indexFetchAt[FROM_KEY, TO_KEY](name: IndexName, position: Long)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[LMDB, FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
     ZIO.serviceWithZIO(_.indexFetchAt(name, position))
 

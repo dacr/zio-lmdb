@@ -44,7 +44,7 @@ case class QueryBuilder[K, T](
   valuePredicate: T => Boolean = (_: T) => true,
   startKey: Option[K] = None,
   isBackward: Boolean = false,
-  maxLimit: Option[Int] = None
+  maxLimit: Option[Long] = None
 ) {
 
   /** Add a filter condition on the key. Multiple calls are combined with AND.
@@ -214,7 +214,7 @@ case class IndexQueryBuilder[IK, RK](
   limitToKey: Boolean = true,
   ops: Option[LMDBReadOps] = None,
   targetKeyPredicate: RK => Boolean = (_: RK) => true,
-  maxLimit: Option[Int] = None
+  maxLimit: Option[Long] = None
 ) {
 
   /** Add a filter condition on the target key. Multiple calls are combined with AND.

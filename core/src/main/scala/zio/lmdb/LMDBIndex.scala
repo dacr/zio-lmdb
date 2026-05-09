@@ -116,6 +116,7 @@ case class LMDBIndex[FROM_KEY, TO_KEY](
     * @return
     *   some (key,targetKey) tuple or none if the index is empty
     */
+  @deprecated("Arbitrary positional lookup is an anti-pattern for ordered key-value stores like LMDB. Use key-based or stream-based access instead.", "0.1.0")
   def fetchAt(
     position: Long
   ): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = lmdb.indexFetchAt[FROM_KEY, TO_KEY](name, position)
@@ -231,6 +232,7 @@ case class LMDBIndexReadOps[FROM_KEY, TO_KEY](
     ops.indexFetch(index.name, key)
 
   /** Get an index record at a specific position */
+  @deprecated("Arbitrary positional lookup is an anti-pattern for ordered key-value stores like LMDB. Use key-based or stream-based access instead.", "0.1.0")
   def fetchAt(position: Long): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] =
     ops.indexFetchAt(index.name, position)
 }

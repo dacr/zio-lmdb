@@ -56,6 +56,7 @@ trait LMDBReadOps {
     * @return
     *   some record or none if index is out of bounds
     */
+  @deprecated("Arbitrary positional lookup is an anti-pattern for ordered key-value stores like LMDB. Use key-based or stream-based access instead.", "0.1.0")
   def fetchAt[K, T](collectionName: CollectionName, index: Long)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]]
 
   /** Get collection first record
@@ -126,7 +127,7 @@ trait LMDBReadOps {
     valueFilter: T => Boolean = (_: T) => true,
     startAfter: Option[K] = None,
     backward: Boolean = false,
-    limit: Option[Int] = None
+    limit: Option[Long] = None
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CollectErrors, List[T]]
 
   /** check if an index exists
@@ -220,6 +221,7 @@ trait LMDBReadOps {
     * @return
     *   some (key,targetKey) tuple or none if the index is empty
     */
+  @deprecated("Arbitrary positional lookup is an anti-pattern for ordered key-value stores like LMDB. Use key-based or stream-based access instead.", "0.1.0")
   def indexFetchAt[FROM_KEY, TO_KEY](name: IndexName, position: Long)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]]
 
   /** Get a stream of target keys for a given key in an index

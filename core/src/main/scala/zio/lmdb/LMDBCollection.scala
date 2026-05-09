@@ -147,6 +147,7 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters:
     * @return
     *   a ZIO effect that, when executed, may produce either a FetchErrors error or an Option containing the fetched value of type `T`
     */
+  @deprecated("Arbitrary positional lookup is an anti-pattern for ordered key-value stores like LMDB. Use key-based or stream-based access instead.", "0.1.0")
   def fetchAt(index: Long): ZIO[LMDB, FetchErrors, Option[(K, T)]] = lmdb.fetchAt(name, index)
 
   /** Get collection first record
@@ -262,7 +263,7 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters:
     valueFilter: T => Boolean = (_: T) => true,
     startAfter: Option[K] = None,
     backward: Boolean = false,
-    limit: Option[Int] = None
+    limit: Option[Long] = None
   ): IO[CollectErrors, List[T]] =
     lmdb.collect[K, T](name, keyFilter, valueFilter, startAfter, backward, limit)
 
@@ -374,6 +375,7 @@ case class LMDBCollectionReadOps[K, T](
     * @return
     *   some record or none if index is out of bounds
     */
+  @deprecated("Arbitrary positional lookup is an anti-pattern for ordered key-value stores like LMDB. Use key-based or stream-based access instead.", "0.1.0")
   def fetchAt(index: Long): IO[FetchErrors, Option[(K, T)]] = ops.fetchAt(collection.name, index)
 
   /** Get collection first record */
@@ -410,7 +412,7 @@ case class LMDBCollectionReadOps[K, T](
     valueFilter: T => Boolean = (_: T) => true,
     startAfter: Option[K] = None,
     backward: Boolean = false,
-    limit: Option[Int] = None
+    limit: Option[Long] = None
   ): IO[CollectErrors, List[T]] =
     ops.collect(collection.name, keyFilter, valueFilter, startAfter, backward, limit)
 
