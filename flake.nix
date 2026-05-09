@@ -40,6 +40,7 @@
             mill          # Build Tool
             scl              # Build Tool
             stable.scalafmt  # Formatter
+            stable.protobuf  # Provides native protoc compiler
           ];
 
           shellHook = ''

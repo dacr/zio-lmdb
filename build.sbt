@@ -1,13 +1,23 @@
+import scala.sys.process._
+
+// Safely try to find a system-installed protoc (provided by our flake)
+val localProtoc = try {
+  Some("which protoc".!!.trim).filter(_.nonEmpty)
+} catch {
+  case _: Exception => None
+}
+
 ThisBuild / scalaVersion := "3.3.7"
 
 lazy val versions = new {
-  val zio        = "2.1.25"
+  val zio        = "2.1.26"
   val zionio     = "2.0.2"
   val ziojson    = "0.9.2"
   val zioconfig  = "4.0.7"
   val ziologging = "2.5.3"
   val lmdb       = "0.9.3"
   val airframe   = "2026.1.6"
+  val scalapbrt  = scalapb.compiler.Version.scalapbVersion
 }
 
 lazy val commonSettings = Seq(
@@ -49,20 +59,25 @@ lazy val root = (project in file("."))
 lazy val core = (project in file("core"))
   .settings(commonSettings)
   .settings(
-    name        := "zio-lmdb",
-    description := "Lightning Memory Database (LMDB) for scala ZIO",
+    name                       := "zio-lmdb",
+    description                := "Lightning Memory Database (LMDB) for scala ZIO",
     libraryDependencies ++= Seq(
-      "dev.zio"     %% "zio"                 % versions.zio,
-      "dev.zio"     %% "zio-streams"         % versions.zio,
-      "dev.zio"     %% "zio-json"            % versions.ziojson,
-      "dev.zio"     %% "zio-config"          % versions.zioconfig,
-      "org.lmdbjava" % "lmdbjava"            % versions.lmdb,
-      "dev.zio"     %% "zio-test"            % versions.zio        % Test,
-      "dev.zio"     %% "zio-logging"         % versions.ziologging % Test,
-      "dev.zio"     %% "zio-test-sbt"        % versions.zio        % Test,
-      "dev.zio"     %% "zio-test-scalacheck" % versions.zio        % Test,
-      "dev.zio"     %% "zio-nio"             % versions.zionio     % Test
-    )
+      "dev.zio"              %% "zio"                 % versions.zio,
+      "dev.zio"              %% "zio-streams"         % versions.zio,
+      "dev.zio"              %% "zio-json"            % versions.ziojson,
+      "dev.zio"              %% "zio-config"          % versions.zioconfig,
+      "org.lmdbjava"          % "lmdbjava"            % versions.lmdb,
+      "dev.zio"              %% "zio-test"            % versions.zio        % Test,
+      "dev.zio"              %% "zio-logging"         % versions.ziologging % Test,
+      "dev.zio"              %% "zio-test-sbt"        % versions.zio        % Test,
+      "dev.zio"              %% "zio-test-scalacheck" % versions.zio        % Test,
+      "dev.zio"              %% "zio-nio"             % versions.zionio     % Test,
+      "com.thesamet.scalapb" %% "scalapb-runtime"     % versions.scalapbrt  % "protobuf,test"
+    ),
+    Test / PB.targets          := Seq(
+      scalapb.gen() -> (Test / sourceManaged).value / "scalapb"
+    ),
+    Test / PB.protocExecutable := localProtoc.map(file).getOrElse(PB.protocExecutable.value)
   )
   .dependsOn(keycodecs)
 
@@ -162,16 +177,16 @@ lazy val queryDsl = (project in file("query-dsl"))
 lazy val console = (project in file("console"))
   .settings(commonSettings)
   .settings(
-    name        := "zio-lmdb-console",
-    description := "REPL for ZIO LMDB",
+    name                             := "zio-lmdb-console",
+    description                      := "REPL for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "org.jline"   % "jline"       % "4.0.15",
-      "dev.zio"    %% "zio"         % versions.zio,
-      "dev.zio"    %% "zio-json"    % versions.ziojson,
-      "dev.zio"    %% "zio-logging" % versions.ziologging
+      "org.jline" % "jline"       % "4.1.0",
+      "dev.zio"  %% "zio"         % versions.zio,
+      "dev.zio"  %% "zio-json"    % versions.ziojson,
+      "dev.zio"  %% "zio-logging" % versions.ziologging
     ),
-    assembly / mainClass := Some("zio.lmdb.console.Main"),
-    assembly / assemblyJarName := "zio-lmdb-console.jar",
+    assembly / mainClass             := Some("zio.lmdb.console.Main"),
+    assembly / assemblyJarName       := "zio-lmdb-console.jar",
     assembly / assemblyMergeStrategy := {
       case PathList("module-info.class") => MergeStrategy.discard
       case x                             =>

@@ -5,6 +5,7 @@
 - introduce console with basic operations
 - Add meta-collection collection to store metadata about collections and indices
 - Add multi collection type to support collection with several values for the same key
+- provide a protobuf usage example through a dedicated test spec
 
 ## 2.7 - 2026-04-12
 
