@@ -32,6 +32,20 @@ trait LMDBCodecJson[T] extends LMDBCodec[T] with JsonEncoder[T] with JsonDecoder
 
 object LMDBCodecJson {
 
+  /** Internal helper to encode a value efficiently using a JSON encoder.
+    */
+  private[lmdb] def encodeEfficiently[T](encoder: JsonEncoder[T], t: T): Array[Byte] = {
+    val out    = new java.io.ByteArrayOutputStream()
+    val writer = new java.io.OutputStreamWriter(out, StandardCharsets.UTF_8)
+    val jsonWrite = new Write {
+      override def write(s: String): Unit = writer.write(s)
+      override def write(c: Char): Unit   = writer.write(c.toInt)
+    }
+    encoder.unsafeEncode(t, None, jsonWrite)
+    writer.flush()
+    out.toByteArray
+  }
+
   /** Internal helper to create a codec from an encoder and decoder.
     *
     * @param encoder
@@ -48,8 +62,10 @@ object LMDBCodecJson {
       override def unsafeEncode(a: T, indent: Option[Int], out: Write): Unit  = encoder.unsafeEncode(a, indent, out)
       override def unsafeDecode(trace: List[JsonError], in: RetractReader): T = decoder.unsafeDecode(trace, in)
 
-      def encode(t: T): Array[Byte]                    = encoder.encodeJson(t).toString.getBytes
-      def decode(bytes: ByteBuffer): Either[String, T] = decoder.decodeJson(charset.decode(bytes))
+      def encode(t: T): Array[Byte] = encodeEfficiently(encoder, t)
+
+      def decode(bytes: ByteBuffer): Either[String, T] =
+        decoder.decodeJson(charset.decode(bytes))
     }
   }
 
