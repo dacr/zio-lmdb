@@ -27,49 +27,49 @@ package object json {
 
   /** Implicit codec for `zio.json.ast.Json`. */
   implicit val jsonCodec: LMDBCodec[Json] = new LMDBCodec {
-    def encode(t: Json): Array[Byte] = Json.encoder.encodeJson(t).toString.getBytes
+    def encode(t: Json): Array[Byte] = LMDBCodecJson.encodeEfficiently(Json.encoder, t)
 
     def decode(bytes: ByteBuffer): Either[String, Json] = Json.decoder.decodeJson(charset.decode(bytes))
   }
 
   /** Implicit codec for `String` using JSON representation. */
   implicit val stringCodec: LMDBCodec[String] = new LMDBCodec {
-    def encode(t: String): Array[Byte] = Str.encoder.encodeJson(Str(t)).toString.getBytes
+    def encode(t: String): Array[Byte] = LMDBCodecJson.encodeEfficiently(Str.encoder, Str(t))
 
     def decode(bytes: ByteBuffer): Either[String, String] = Str.decoder.decodeJson(charset.decode(bytes)).map(_.value)
   }
 
   /** Implicit codec for `zio.json.ast.Json.Str`. */
   implicit val strCodec: LMDBCodec[Str] = new LMDBCodec {
-    def encode(t: Str): Array[Byte] = Str.encoder.encodeJson(t).toString.getBytes
+    def encode(t: Str): Array[Byte] = LMDBCodecJson.encodeEfficiently(Str.encoder, t)
 
     def decode(bytes: ByteBuffer): Either[String, Str] = Str.decoder.decodeJson(charset.decode(bytes))
   }
 
   /** Implicit codec for `Int` using JSON representation. */
   implicit val intCodec: LMDBCodec[Int] = new LMDBCodec {
-    def encode(t: Int): Array[Byte] = Num.encoder.encodeJson(Num(t)).toString.getBytes
+    def encode(t: Int): Array[Byte] = LMDBCodecJson.encodeEfficiently(Num.encoder, Num(t))
 
     def decode(bytes: ByteBuffer): Either[String, Int] = Num.decoder.decodeJson(charset.decode(bytes)).map(_.value.intValue())
   }
 
   /** Implicit codec for `Double` using JSON representation. */
   implicit val doubleCodec: LMDBCodec[Double] = new LMDBCodec {
-    def encode(t: Double): Array[Byte] = Num.encoder.encodeJson(Num(t)).toString.getBytes
+    def encode(t: Double): Array[Byte] = LMDBCodecJson.encodeEfficiently(Num.encoder, Num(t))
 
     def decode(bytes: ByteBuffer): Either[String, Double] = Num.decoder.decodeJson(charset.decode(bytes)).map(_.value.doubleValue())
   }
 
   /** Implicit codec for `Float` using JSON representation. */
   implicit val floatCodec: LMDBCodec[Float] = new LMDBCodec {
-    def encode(t: Float): Array[Byte] = Num.encoder.encodeJson(Num(t)).toString.getBytes
+    def encode(t: Float): Array[Byte] = LMDBCodecJson.encodeEfficiently(Num.encoder, Num(t))
 
     def decode(bytes: ByteBuffer): Either[String, Float] = Num.decoder.decodeJson(charset.decode(bytes)).map(_.value.floatValue())
   }
 
   /** Implicit codec for `zio.json.ast.Json.Num`. */
   implicit val numCodec: LMDBCodec[Num] = new LMDBCodec {
-    def encode(t: Num): Array[Byte] = Num.encoder.encodeJson(t).toString.getBytes
+    def encode(t: Num): Array[Byte] = LMDBCodecJson.encodeEfficiently(Num.encoder, t)
 
     def decode(bytes: ByteBuffer): Either[String, Num] = Num.decoder.decodeJson(charset.decode(bytes))
   }
