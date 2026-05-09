@@ -200,6 +200,7 @@ object Main extends ZIOAppDefault {
       
       // 3. Separate them
       regularColls = allDbis.filter(name => metaEntries.get(name).exists(_.collectionKind == CollectionKind.Regular))
+      multiColls   = allDbis.filter(name => metaEntries.get(name).exists(_.collectionKind == CollectionKind.Multi))
       indexColls   = allDbis.filter(name => metaEntries.get(name).exists(_.collectionKind == CollectionKind.Index))
       internalColls = allDbis.filter(name => name == metaCollName)
       unknownColls = allDbis.filter(name => !metaEntries.contains(name) && name != metaCollName)
@@ -216,6 +217,18 @@ object Main extends ZIOAppDefault {
           _ <- ZIO.foreachDiscard((regularColls ++ (if (metaEntries.isEmpty) unknownColls else Nil)).sorted) { c =>
             for {
               size <- lmdb.collectionSize(c).catchAll(_ => ZIO.succeed(-1L))
+              _ <- ZIO.attempt(w.println(f" - $c%-30s (size: $size%d)"))
+            } yield ()
+          }
+        } yield ()
+      } else ZIO.unit
+
+      _ <- if (multiColls.nonEmpty) {
+        for {
+          _ <- ZIO.attempt(w.println(new AttributedStringBuilder().style(AttributedStyle.DEFAULT.bold().foreground(AttributedStyle.YELLOW)).append("MultiCollections:").toAnsi))
+          _ <- ZIO.foreachDiscard(multiColls.sorted) { c =>
+            for {
+              size <- lmdb.multiSize(c).catchAll(_ => ZIO.succeed(-1L))
               _ <- ZIO.attempt(w.println(f" - $c%-30s (size: $size%d)"))
             } yield ()
           }
@@ -261,6 +274,7 @@ object Main extends ZIOAppDefault {
         w.println(f"  Max Readers:             ${stats.maxReaders}")
         w.println(f"  Current Readers:         ${stats.numReaders}")
         w.println(f"  Number of Collections:   ${stats.numCollections}")
+        w.println(f"  Number of MultiColls:    ${stats.numMultis}")
         w.println(f"  Number of Indexes:       ${stats.numIndexes}")
 
         w.println(new AttributedStringBuilder().style(AttributedStyle.DEFAULT.bold().foreground(AttributedStyle.YELLOW)).append("Environment Statistics").toAnsi)
@@ -282,6 +296,7 @@ object Main extends ZIOAppDefault {
            else {
              for {
                meta <- lmdb.fetch[String, MetaDataEntry](metaCollName, name).catchAll(_ => ZIO.succeed(None))
+               isMulti = meta.exists(_.collectionKind == CollectionKind.Multi)
                kindStr = meta.map(_.collectionKind.toString).getOrElse("Unknown")
                _ <- ZIO.attempt {
                  val header = new AttributedStringBuilder()
@@ -292,7 +307,8 @@ object Main extends ZIOAppDefault {
                    .toAnsi
                  ctx.terminal.writer().println(header)
                }
-               _ <- lmdb.streamWithKeys[Array[Byte], Array[Byte]](name).take(20).runForeach { case (k, v) =>
+               _ <- (if (isMulti) lmdb.multiGet[Array[Byte], Array[Byte]](name).unit.catchAll(_ => ZIO.unit) else ZIO.unit) *>
+                    lmdb.streamWithKeys[Array[Byte], Array[Byte]](name).take(20).runForeach { case (k, v) =>
                  ZIO.attempt {
                    val ks = TypeGuesser.formatKey(k)
                    val vs = TypeGuesser.formatValue(v)
@@ -312,13 +328,18 @@ object Main extends ZIOAppDefault {
   }
 
   def deleteCollection(name: String, lmdb: LMDB, ctx: ConsoleContext): ZIO[Any, Throwable, Unit] = {
+    val metaCollName = LMDBConfig.default.metaDataCollectionName
     for {
-      _ <- lmdb.collectionDrop(name).mapError(e => new RuntimeException(e.toString))
+      meta <- lmdb.fetch[String, MetaDataEntry](metaCollName, name).catchAll(_ => ZIO.succeed(None))
+      isMulti = meta.exists(_.collectionKind == CollectionKind.Multi)
+      _ <- if (isMulti) lmdb.multiDrop(name).mapError(e => new RuntimeException(e.toString))
+           else lmdb.collectionDrop(name).mapError(e => new RuntimeException(e.toString))
       _ <- ZIO.attempt(ctx.terminal.writer().println(s"Collection $name dropped."))
     } yield ()
   }.catchAll(e => ZIO.attempt(ctx.terminal.writer().println(s"Failed to drop collection $name: $e")))
 
   def fetchKey(collName: String, keyStr: String, lmdb: LMDB, ctx: ConsoleContext): ZIO[Any, Throwable, Unit] = {
+    val metaCollName = LMDBConfig.default.metaDataCollectionName
     val keyOptions = List(
       keyStr.getBytes(StandardCharsets.UTF_8),
       Try(ByteBuffer.allocate(8).putLong(keyStr.toLong).array()).getOrElse(Array.emptyByteArray),
@@ -326,16 +347,26 @@ object Main extends ZIOAppDefault {
     ).filter(_.nonEmpty)
 
     (for {
-      results <- ZIO.foreach(keyOptions) { k =>
-        lmdb.fetch[Array[Byte], Array[Byte]](collName, k).catchAll(_ => ZIO.succeed(None))
+      meta <- lmdb.fetch[String, MetaDataEntry](metaCollName, collName).catchAll(_ => ZIO.succeed(None))
+      isMulti = meta.exists(_.collectionKind == CollectionKind.Multi)
+      
+      results <- if (isMulti) {
+        ZIO.foreach(keyOptions) { k =>
+          lmdb.multiFetch[Array[Byte], Array[Byte]](collName, k).catchAll(_ => ZIO.succeed(Nil))
+        }.map(_.flatten)
+      } else {
+        ZIO.foreach(keyOptions) { k =>
+          lmdb.fetch[Array[Byte], Array[Byte]](collName, k).catchAll(_ => ZIO.succeed(None))
+        }.map(_.flatten)
       }
-      found = results.flatten.headOption
-      _ <- found match {
-        case Some(v) => 
+
+      _ <- if (results.nonEmpty) {
+        ZIO.foreachDiscard(results) { v =>
           val vs = TypeGuesser.formatValue(v)
           ZIO.attempt(ctx.terminal.writer().println(TypeGuesser.colorize(vs)))
-        case None => 
-          ZIO.attempt(ctx.terminal.writer().println(s"Key '$keyStr' not found in '$collName'."))
+        }
+      } else {
+        ZIO.attempt(ctx.terminal.writer().println(s"Key '$keyStr' not found in '$collName'."))
       }
     } yield ()).catchAll(e => ZIO.attempt(ctx.terminal.writer().println(s"Error fetching key: $e")))
   }
