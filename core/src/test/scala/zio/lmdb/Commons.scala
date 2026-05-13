@@ -35,6 +35,14 @@ trait Commons {
     } yield lmdb
   )
 
+  val lmdbLayerSync = ZLayer.scoped(
+    for {
+      path  <- Files.createTempDirectoryScoped(prefix = Some("lmdb"), fileAttributes = Nil)
+      config = LMDBConfig.default.copy(databasesHome = Some(path.toString), fileSystemSynchronized = true)
+      lmdb  <- LMDBLive.setup(config)
+    } yield lmdb
+  )
+
   val randomUUID: UIO[RecordKey] = Random.nextUUID.map(_.toString)
 
   val randomCollectionName: UIO[String] = for {

@@ -80,6 +80,7 @@ lazy val core = (project in file("core"))
     Test / PB.protocExecutable := localProtoc.map(file).getOrElse(PB.protocExecutable.value)
   )
   .dependsOn(keycodecs)
+  .dependsOn(keycodecsUuidv7 % Test)
 
 lazy val keycodecs = (project in file("keycodecs"))
   .settings(commonSettings)
