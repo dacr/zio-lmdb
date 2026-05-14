@@ -1,4 +1,4 @@
-<svg width="800" height="240" viewBox="0 0 400 120" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 400 120" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <!-- ZIO Glowing Core Gradient -->
     <linearGradient id="zGrad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -53,7 +53,7 @@
   <!-- Text: ZIO-LMDB (French Flag Colors with Black Outline) -->
   <g font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="44" stroke="#000000" stroke-width="1.8" paint-order="stroke fill">
     <text x="120" y="65">
-      <tspan fill="#0055A4">ZIO</tspan><tspan fill="#FFFFFF">-</tspan><tspan fill="#EF4135">LMDB</tspan>
+      <tspan fill="#0055A4">ZIO</tspan><tspan fill="#64748B">-</tspan><tspan fill="#EF4135">LMDB</tspan>
     </text>
   </g>
   
