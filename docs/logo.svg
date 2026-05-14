@@ -1,0 +1,49 @@
+<svg width="400" height="400" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- ZIO Glowing Core Gradient -->
+    <linearGradient id="zGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F43F5E" />
+      <stop offset="100%" stop-color="#F59E0B" />
+    </linearGradient>
+
+    <!-- Glow Filter -->
+    <filter id="zGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.5" result="blur1" />
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <linearGradient id="discGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0EA5E9" />
+      <stop offset="50%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#0EA5E9" />
+    </linearGradient>
+  </defs>
+
+  <!-- 1. BACK HALVES (Lightened Blue) -->
+  <g fill="none" stroke="#1E40AF" stroke-width="1.5" opacity="0.4">
+    <path d="M 15 25 A 35 12 0 0 1 85 25" />
+    <path d="M 15 50 A 35 12 0 0 1 85 50" />
+    <path d="M 15 75 A 35 12 0 0 1 85 75" />
+    <path d="M 15 25 L 15 75" stroke-dasharray="2 4" />
+    <path d="M 85 25 L 85 75" stroke-dasharray="2 4" />
+  </g>
+
+  <!-- 2. THE LIGHTNING BOLT (Exact Geometry from Image) -->
+  <g transform="translate(50, 50) rotate(-45) scale(0.9) translate(-50, -50)">
+    <path d="M 65 15 L 35 55 L 55 55 L 35 85 L 65 45 L 45 45 Z" 
+          fill="url(#zGrad)" 
+          filter="url(#zGlow)" />
+  </g>
+
+  <!-- 3. FRONT HALVES (Lighter Blue) -->
+  <g fill="none" stroke="url(#discGrad)" stroke-width="2.5" opacity="0.9">
+    <path d="M 15 25 A 35 12 0 0 0 85 25" />
+    <path d="M 15 50 A 35 12 0 0 0 85 50" />
+    <path d="M 15 75 A 35 12 0 0 0 85 75" />
+  </g>
+</svg>
