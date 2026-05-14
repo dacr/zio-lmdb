@@ -32,7 +32,7 @@ null
 LMDBFreezeReproductionSpec.scala
 LMDBThreadCrashSpec.scala
 ExecutorTest.scala
-TMP_*.md
+*_AUDIT.md
 
 # Security purposes
 .envrc
