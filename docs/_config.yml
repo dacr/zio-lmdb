@@ -1,0 +1,25 @@
+title: ZIO-LMDB
+description: Embedded ACID key-value database for ZIO applications
+remote_theme: just-the-docs/just-the-docs
+
+color_scheme: light
+
+aux_links:
+  "GitHub":
+    - "https://github.com/dacr/zio-lmdb"
+  "Maven Central":
+    - "https://mvnrepository.com/artifact/fr.janalyse/zio-lmdb"
+  "Scaladoc":
+    - "https://javadoc.io/doc/fr.janalyse/zio-lmdb_3/latest/zio/lmdb/LMDB$.html"
+
+aux_links_new_tab: true
+
+nav_sort: order
+
+search_enabled: true
+
+footer_content: "ZIO-LMDB &mdash; Copyright &copy; 2026 David Crosson. Licensed under the Apache 2.0 License."
+
+plugins:
+  - jekyll-remote-theme
+  - jekyll-seo-tag
