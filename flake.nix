@@ -9,8 +9,14 @@
   outputs = { self, nixstable, nixunstable, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        stable = nixstable.legacyPackages.${system};
-        unstable = nixunstable.legacyPackages.${system};
+        stable = import nixstable {
+          inherit system;
+          config.allowUnfree = true;
+        };
+        unstable = import nixunstable {
+          inherit system;
+          config.allowUnfree = true;
+        };
 
         jdk = stable.jdk21;
 
