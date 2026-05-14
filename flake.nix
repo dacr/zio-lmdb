@@ -30,9 +30,10 @@
       {
         devShells.default = stable.mkShell {
           packages = [
-            unstable.opencode      # The AI Agent
-            unstable.gemini-cli    # The Auth Bridge
-            stable.nodejs_22       # Required for the auth plugin
+            unstable.opencode
+            unstable.gemini-cli
+            unstable.claude-code
+            stable.nodejs_22
 
             # Scala Development
             jdk              # Java Runtime
