@@ -82,7 +82,7 @@ lazy val core = (project in file("core"))
   .dependsOn(keycodecs)
   .dependsOn(keycodecsUuidv7 % Test)
 
-lazy val keycodecs = (project in file("keycodecs"))
+lazy val keycodecs = (project in file("codecs/keycodecs"))
   .settings(commonSettings)
   .settings(
     name        := "keycodecs",
@@ -94,7 +94,7 @@ lazy val keycodecs = (project in file("keycodecs"))
     )
   )
 
-lazy val keycodecsGeo = (project in file("keycodecs-geo"))
+lazy val keycodecsGeo = (project in file("codecs/keycodecs-geo"))
   .settings(commonSettings)
   .settings(
     name        := "keycodecs-geo",
@@ -107,7 +107,7 @@ lazy val keycodecsGeo = (project in file("keycodecs-geo"))
   )
   .dependsOn(keycodecs)
 
-lazy val keycodecsTimestamp = (project in file("keycodecs-timestamp"))
+lazy val keycodecsTimestamp = (project in file("codecs/keycodecs-timestamp"))
   .settings(commonSettings)
   .settings(
     name        := "keycodecs-timestamp",
@@ -120,7 +120,7 @@ lazy val keycodecsTimestamp = (project in file("keycodecs-timestamp"))
   )
   .dependsOn(keycodecs)
 
-lazy val keycodecsUca = (project in file("keycodecs-uca"))
+lazy val keycodecsUca = (project in file("codecs/keycodecs-uca"))
   .settings(commonSettings)
   .settings(
     name        := "keycodecs-uca",
@@ -134,7 +134,7 @@ lazy val keycodecsUca = (project in file("keycodecs-uca"))
   )
   .dependsOn(keycodecs)
 
-lazy val keycodecsUlid = (project in file("keycodecs-ulid"))
+lazy val keycodecsUlid = (project in file("codecs/keycodecs-ulid"))
   .settings(commonSettings)
   .settings(
     name        := "keycodecs-ulid",
@@ -148,7 +148,7 @@ lazy val keycodecsUlid = (project in file("keycodecs-ulid"))
   )
   .dependsOn(keycodecs)
 
-lazy val keycodecsUuidv7 = (project in file("keycodecs-uuidv7"))
+lazy val keycodecsUuidv7 = (project in file("codecs/keycodecs-uuidv7"))
   .settings(commonSettings)
   .settings(
     name        := "keycodecs-uuidv7",
@@ -162,7 +162,7 @@ lazy val keycodecsUuidv7 = (project in file("keycodecs-uuidv7"))
   )
   .dependsOn(keycodecs)
 
-lazy val queryDsl = (project in file("query-dsl"))
+lazy val queryDsl = (project in file("codecs/query-dsl"))
   .settings(commonSettings)
   .settings(
     name        := "query-dsl",
