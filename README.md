@@ -1,256 +1,79 @@
 <a href="https://dacr.github.io/zio-lmdb/"><img src="docs/logo-horizontal.svg" alt="ZIO-LMDB" width="480" height="144"></a>
 
-# Lightning Memory Database (LMDB) for ZIO
 [![][ZIOLMDBManagerImg]][ZIOLMDBManagerLnk] [![scaladoc][ScalaDocImg]][ScalaDoc] [![docs][DocsImg]][Docs]
 
-Why ZIO-lmdb? Because I wanted a straightforward **embedded** (in the same process) ACID database for small
-applications while keeping deployment, maintenance, upgrades as simple as possible.
+Embedded, ACID, key-value database for [ZIO][ZIO] — zero infrastructure, zero ops, just a file.
 
-ZIO-lmdb is based on the powerful [lmdb-java][JLMDB] library and brings a higher level API to enhance the developer experience.
+Built on [lmdb-java][JLMDB] with a type-safe, ZIO-native API:
+- **Three collection kinds** — `LMDBCollection` (1 key → 1 value), `LMDBMulti` (1 key → N values), `LMDBIndex` (1 key → N keys)
+- **JSON by default** — `derives LMDBCodecJson` is all it takes; custom codecs are supported
+- **Honest types** — every function signature tells you exactly what can fail
+- **Atomic transactions** — single-collection or cross-collection, always consistent
+- **Lexicographic ordering** — keys are sorted; range scans and pagination come for free
+- **Scala-CLI friendly** — add one dependency line and run
 
-So ZIO-lmdb is an embedded key/value database with an easy-to-use opinionated API.
-Choices have been made to make the developer experience as simple as possible :
-- JSON-based default storage using zio-json,
-  - *Custom serialization is supported*
-- Safe update by using a lambda which will be called with the previous value if it exists and returns the new value,
-- Identifiers are managed by the developer, using, for example, [UUID][UUID] or [ULID][ZIO-ULID].
-  - Remember that identifiers are automatically lexicographically sorted :)
-- Several collection kinds are supported with their own dedicated API facades:
-  - regular: one key ⇒ one value
-  - multi: one key ⇒ N values
-  - index: one key ⇒ N keys
-
-API is designed to not lie. All functions signatures describe precisely
-what you must expect from them, thanks to [ZIO][ZIO] and [Scala3][Scala3].  
-
-## Definitions
-
-For a better understanding, this library uses slightly different vocabulary from LMDB original one :  
-- **Database**: (*LMDB talk about Environment*)
-  - The place where the database file is stored on your file system
-  - A set of configurations for this database (expected maximum size, expected collection number)
-- **Collection**: (*LMDB talk about Database*) 
-  - A sorted Map ([B+ Tree][btree]) where your data is stored
-  - One database contains multiple collections
-- **Transaction**: (*the same for LMDB*)
-  - for global coherency within the same database
-  - only one simultaneous write access is possible within the same database
-
-## Configuration
-
-Configuration is based on the standard ZIO config mechanism, the default configuration provider uses environnment variables
-or java properties to resolve these library configuration parameters.
-
- 
-| Configuration key   | Environment variable | Description                                                    | Default value    |
-|---------------------|----------------------|----------------------------------------------------------------|------------------|
-| lmdb.name           | LMDB_NAME            | Database name, which will be also used as the directory name   | default          |
-| lmdb.home           | LMDB_HOME            | Where to store the database directory                          | $HOME/.lmdb      |
-| lmdb.sync           | LMDB_SYNC            | Synchronize the file system with all database write operations | false            |
-| lmdb.maxReaders     | LMDB_MAXREADERS      | The maximum number of readers                                  | 100              |
-| lmdb.maxCollections | LMDB_MAXCOLLECTIONS  | The maximum number of collections which can be created         | 10_000           |
-| lmdb.mapSize        | LMDB_MAPSIZE         | The maximum size of the whole database including metadata      | 100_000_000_000L |
-
-
-## Usage examples
-
-Available LMDB layers :
-- `LMDB.live` : Fully configurable using standard zio-config
-- `LMDB.liveWithDatabaseName("chosen-database-name")` : to override/force the database name
-
-### CRUD example
+## Install
 
 ```scala
-//> using scala 3.8.3
-//> using dep fr.janalyse::zio-lmdb:2.8.0
+// sbt
+libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.1"
+
+// scala-cli
+//> using dep fr.janalyse::zio-lmdb:2.8.1
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
-
-import zio.*, zio.json.*, zio.lmdb.*, zio.lmdb.json.*
-import java.io.File, java.util.UUID, java.time.OffsetDateTime
-
-case class CrudRecord(uuid: UUID, name: String, age: Int, addedOn: OffsetDateTime) derives LMDBCodecJson
-
-object CrudExample extends ZIOAppDefault {
-  override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-data-simple-example"), zio.Scope.default)
-
-  val collectionName = "examples"
-  val example        = for {
-    examples  <- LMDB.collectionCreate[UUID,CrudRecord](collectionName, failIfExists = false)
-    recordId  <- Random.nextUUID
-    dateTime  <- Clock.currentDateTime
-    record     = CrudRecord(recordId, "John Doe", 42, dateTime)
-    _         <- examples.upsertOverwrite(recordId, record)
-    gotten    <- examples.fetch(recordId).some
-    collected <- examples.collect()
-    _         <- Console.printLine(s"collection $collectionName contains ${collected.size} records")
-    _         <- ZIO.foreachDiscard(collected)(record => Console.printLine(record))
-    lmdb      <- ZIO.service[LMDB]
-    _         <- Console.printLine("""LMDB standard tools can be used to manage the database content : sudo apt-get install lmdb-utils""")
-    _         <- Console.printLine(s"""To get some statistics     : mdb_stat -s $collectionName ${lmdb.databasePath}/""")
-    _         <- Console.printLine(s"""To dump collection content : mdb_dump -p -s $collectionName ${lmdb.databasePath}/""")
-  } yield ()
-}
-
-CrudExample.main(Array.empty)
 ```
 
-### Transaction example
+## Quick example
 
 ```scala
-//> using scala 3.8.3
-//> using dep fr.janalyse::zio-lmdb:2.8.0
-//> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
+import zio.*, zio.lmdb.*, zio.lmdb.json.*
+import java.util.UUID
 
-import zio.*, zio.json.*, zio.lmdb.*, zio.lmdb.json.*
-import java.io.File, java.util.UUID, java.time.OffsetDateTime
+case class Person(name: String, age: Int) derives LMDBCodecJson
 
-case class TransactionRecord(uuid: UUID, name: String, age: Int, addedOn: OffsetDateTime) derives LMDBCodecJson
-
-object TransactionExample extends ZIOAppDefault {
-  override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-data-basic-transaction-example"), zio.Scope.default)
-
-  val collectionName = "people"
-  val example        = for {
-    people    <- LMDB.collectionCreate[UUID, TransactionRecord](collectionName, failIfExists = false)
-    dateTime  <- Clock.currentDateTime
-    record1   <- Random.nextUUID.map(id => TransactionRecord(id, "John Doe", 42, dateTime))
-    record2   <- Random.nextUUID.map(id => TransactionRecord(id, "Sarah Connors", 24, dateTime))
-    _         <- people.readWrite { peopleTX =>
-                   peopleTX.upsertOverwrite(record1.uuid, record1) *>
-                     peopleTX.upsertOverwrite(record2.uuid, record2)
-                 }
-    collected <- people.collect()
-    _         <- ZIO.foreachDiscard(collected)(record => Console.printLine(record))
-  } yield ()
-}
-
-TransactionExample.main(Array.empty)
+object Example extends ZIOAppDefault:
+  def run = (for {
+    people <- LMDB.collectionCreate[UUID, Person]("people", failIfExists = false)
+    id     <- Random.nextUUID
+    _      <- people.upsertOverwrite(id, Person("Alice", 30))
+    _      <- people.upsert(id, _.map(p => p.copy(age = p.age + 1)).getOrElse(Person("Alice", 30)))
+    result <- people.fetch(id)
+    _      <- Console.printLine(result)
+  } yield ()).provide(LMDB.liveWithDatabaseName("my-app"), Scope.default)
 ```
 
-### Query DSL example
+## Documentation
 
-The `query-dsl` module provides a fluent API for querying and joining collections.
+Full API reference, transactions, codecs, indexes, query DSL and configuration:  
+**[dacr.github.io/zio-lmdb][Docs]**
 
-```scala
-//> using scala 3.8.3
-//> using dep fr.janalyse::query-dsl:2.8.0
-//> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
+## Real-world usage
 
-import zio.*, zio.json.*, zio.lmdb.*, zio.lmdb.json.LMDBCodecJson.given
-import zio.lmdb.query.QueryBuilder.*
+- [sotohp][SOTOHP] — photo management, uses zio-lmdb intensively
+- [code-examples-manager][CEM] — snippets and gist management
+- [zwords][ZWORDS-CODE] — a Wordle-like game ([play it][ZWORDS-LIVE])
 
-case class User(id: String, name: String, active: Boolean) derives JsonCodec
-case class Post(id: String, authorId: String, title: String) derives JsonCodec
+## Runnable snippets ([scala-cli][SCL])
 
-object QueryDslExample extends ZIOAppDefault {
-  override def run = example.provide(LMDB.liveWithDatabaseName("lmdb-query-dsl-example"), zio.Scope.default)
-
-  val example = for {
-    lmdb     <- ZIO.service[LMDB]
-    usersCol <- lmdb.collectionCreate[String, User]("users", failIfExists = false)
-    postsCol <- lmdb.collectionCreate[String, Post]("posts", failIfExists = false)
-    
-    // Insert some data
-    _ <- usersCol.upsertOverwrite("u1", User("u1", "Alice", true))
-    _ <- usersCol.upsertOverwrite("u2", User("u2", "Bob", false))
-
-    // 1. Simple query with filtering and limits
-    activeUsers <- usersCol.query
-                     .whereValue(_.active == true)
-                     .limit(10)
-                     .toList
-    _ <- Console.printLine(s"Active users: $activeUsers")
-
-    // 2. Cross-collection join (Many-to-One)
-    // Find all posts and join with their authors
-    postsWithAuthors <- postsCol.query
-                          .joinByKey(usersCol)(post => post.authorId)
-                          .toList
-    _ <- Console.printLine(s"Posts with authors: $postsWithAuthors")
-
-    // 3. Cross-collection join using an Index (One-to-Many)
-    authorToPostIdx <- lmdb.indexCreate[String, String]("author_to_post", failIfExists = false)
-    
-    // We can link the index to the collection so it updates automatically
-    postsColWithIdx = postsCol.withIndex(authorToPostIdx)(post => List(post.authorId))
-    
-    // Insert some data using the collection with the linked index
-    _ <- postsColWithIdx.upsertOverwrite("p1", Post("p1", "u1", "Alice's first post"))
-    _ <- postsColWithIdx.upsertOverwrite("p2", Post("p2", "u1", "Alice's second post"))
-
-    // Find active users and join with their posts using the index
-    usersWithPosts <- usersCol.query
-                        .whereValue(_.active == true)
-                        .joinByIndex(postsColWithIdx, authorToPostIdx)(user => user.id)
-                        .toList
-    _ <- Console.printLine(s"Users with posts: $usersWithPosts")
-
-    // 4. Start query from an Index (Alternative entry point)
-    // Find all Alice's posts directly from the author_to_post index
-    alicePosts <- authorToPostIdx.query("u1")
-                    .whereTargetKey(_.startsWith("p"))
-                    .join(postsCol)
-                    .toList
-    _ <- Console.printLine(s"Alice posts from index: $alicePosts")
-  } yield ()
-}
-
-QueryDslExample.main(Array.empty)
-```
-
-### ZIO-LMDB based Applications
-- [sotohp - photos management][SOTOHP] which uses zio-lmdb intensively
-- [code-examples-manager - snippets/gists management][CEM] lmdb used for caching and data sharing
-- [zwords - wordle like game][ZWORDS-CODE] which can be played [zwords game][ZWORDS-LIVE]
-
-### Code snippets using ZIO-LMDB, runnable with [scala-cli][SCL]
-- [ZIO LMDB CRUD example](https://gist.github.com/dacr/dcb8a11f095ef0a2a95c24701e6eb804)
-- [ZIO LMDB transaction example](https://gist.github.com/dacr/f69159308f971361a2643393d4b9bf3f)
-- [ZIO LMDB feeding with French town postal codes](https://gist.github.com/dacr/6d24baf827ae0c590133e0f27f1ef20b)
-- [ZIO LMDB using custom configuration provider](https://gist.github.com/dacr/790df1705c7ec19ae2fe4098dad8d762)
-- [Extract photos records from elasticsearch and save them into LMDB](https://gist.github.com/dacr/6ea121f251ad316a64657cbe78085ab7)
-- [Export code examples and executions results from lmdb to elastisearch](https://gist.github.com/dacr/f25da8222b2ac644c3195c5982b7367e)
-
-## Operating lmdb databases
-
-LMDB standard tools can be used to manage the LMDB database content : `sudo apt-get install lmdb-utils`
-- to get some database statistics : `mdb_stat -a database_directory_path/`
-- to dump the content of a database : `mdb_dump -a -p database_directory_path/`
-- to dump the content of a database collection : `mdb_dump -s collectionName -p database_directory_path/`
-- to restore some collection or the entire database use the command named `mdb_load` which uses the same format as for `mdb_dump` 
-
-As zio-lmdb is using JSON format, dumps are just text, which can be edited and then loaded back. So simple data migration is straightforward.
-
-## Requirements
-
-When LVMDB is used as a persistence store with recent JVM, it requires some JVM options :
-
-```
---add-opens java.base/java.nio=ALL-UNNAMED
---add-opens java.base/sun.nio.ch=ALL-UNNAMED
-```
-
-## Contributors :)
-
-- [François Armand](https://github.com/fanf) : for scala 2.13 support initiative
-
+- [CRUD example](https://gist.github.com/dacr/dcb8a11f095ef0a2a95c24701e6eb804)
+- [Transaction example](https://gist.github.com/dacr/f69159308f971361a2643393d4b9bf3f)
+- [French postal codes](https://gist.github.com/dacr/6d24baf827ae0c590133e0f27f1ef20b)
+- [Custom configuration provider](https://gist.github.com/dacr/790df1705c7ec19ae2fe4098dad8d762)
+- [Elasticsearch → LMDB import](https://gist.github.com/dacr/6ea121f251ad316a64657cbe78085ab7)
+- [LMDB → Elasticsearch export](https://gist.github.com/dacr/f25da8222b2ac644c3195c5982b7367e)
 
 [DocsImg]:           https://img.shields.io/badge/docs-GitHub%20Pages-blue
 [Docs]:              https://dacr.github.io/zio-lmdb/
 [ZIOLMDBManager]:    https://github.com/dacr/zio-lmdb
 [ZIOLMDBManagerImg]: https://img.shields.io/maven-central/v/fr.janalyse/zio-lmdb_3.svg
 [ZIOLMDBManagerLnk]: https://mvnrepository.com/artifact/fr.janalyse/zio-lmdb
-[ZIO]: https://zio.dev/
-[Scala3]: https://docs.scala-lang.org/scala3/reference/
-[JLMDB]: https://github.com/lmdbjava/lmdbjava
-[LMDB]: https://www.symas.com/lmdb
-[ZIO-ULID]: https://zio-ulid.bilal-fazlani.com/
-[UUID]: https://en.wikipedia.org/wiki/Universally_unique_identifier
-[ZWORDS-CODE]: https://github.com/dacr/zwords
-[ZWORDS-LIVE]: https://zwords.mapland.fr/
-[CEM]: https://github.com/dacr/code-examples-manager
-[SOTOHP]: https://github.com/dacr/sotohp
-[SCL]: https://scala-cli.virtuslab.org/
-[ScalaDocImg]: https://javadoc.io/badge2/fr.janalyse/zio-lmdb_3/scaladoc.svg
-[ScalaDoc]: https://javadoc.io/doc/fr.janalyse/zio-lmdb_3/latest/zio/lmdb/LMDB$.html
-[btree]: https://en.wikipedia.org/wiki/B%2B_tree
+[ZIO]:               https://zio.dev/
+[JLMDB]:             https://github.com/lmdbjava/lmdbjava
+[ZIO-ULID]:          https://zio-ulid.bilal-fazlani.com/
+[ZWORDS-CODE]:       https://github.com/dacr/zwords
+[ZWORDS-LIVE]:       https://zwords.mapland.fr/
+[CEM]:               https://github.com/dacr/code-examples-manager
+[SOTOHP]:            https://github.com/dacr/sotohp
+[SCL]:               https://scala-cli.virtuslab.org/
+[ScalaDocImg]:       https://javadoc.io/badge2/fr.janalyse/zio-lmdb_3/scaladoc.svg
+[ScalaDoc]:          https://javadoc.io/doc/fr.janalyse/zio-lmdb_3/latest/zio/lmdb/LMDB$.html
