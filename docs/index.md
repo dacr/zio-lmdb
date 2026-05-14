@@ -3,9 +3,6 @@ title: Home
 layout: default
 nav_order: 1
 ---
-
-<img src="logo-horizontal.svg" alt="ZIO-LMDB" width="480" height="144">
-
 # ZIO-LMDB
 
 [![Maven Central](https://img.shields.io/maven-central/v/fr.janalyse/zio-lmdb_3.svg)](https://mvnrepository.com/artifact/fr.janalyse/zio-lmdb)

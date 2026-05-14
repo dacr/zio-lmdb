@@ -2,7 +2,7 @@ title: ZIO-LMDB
 description: Embedded ACID key-value database for ZIO applications
 remote_theme: just-the-docs/just-the-docs
 
-logo: logo.svg
+logo: logo-horizontal.svg
 
 color_scheme: light
 
