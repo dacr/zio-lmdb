@@ -4,7 +4,7 @@ layout: default
 nav_order: 1
 ---
 
-<img src="logo-horizontal.svg" alt="ZIO-LMDB" width="480">
+<img src="logo-horizontal.svg" alt="ZIO-LMDB" width="480" height="144">
 
 # ZIO-LMDB
 

@@ -1,4 +1,4 @@
-<a href="https://dacr.github.io/zio-lmdb/"><img src="docs/logo-horizontal.svg" alt="ZIO-LMDB" width="480"></a>
+<a href="https://dacr.github.io/zio-lmdb/"><img src="docs/logo-horizontal.svg" alt="ZIO-LMDB" width="480" height="144"></a>
 
 # Lightning Memory Database (LMDB) for ZIO
 [![][ZIOLMDBManagerImg]][ZIOLMDBManagerLnk] [![scaladoc][ScalaDocImg]][ScalaDoc] [![docs][DocsImg]][Docs]
