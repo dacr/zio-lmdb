@@ -5,14 +5,11 @@ ThisBuild / releaseCrossBuild      := true
 ThisBuild / versionScheme          := Some("semver-spec")
 
 // -----------------------------------------------------------------------------
-ThisBuild / sonatypeCredentialHost := Sonatype.sonatypeCentralHost
-
-ThisBuild / publishTo := sonatypePublishToBundle.value
-
-ThisBuild / credentials ++= (for {
-  username <- sys.env.get("SONATYPE_USERNAME")
-  password <- sys.env.get("SONATYPE_PASSWORD")
-} yield Credentials("Sonatype Nexus Repository Manager", "central.sonatype.com", username, password))
+ThisBuild / publishTo := {
+  val centralSnapshots = "https://central.sonatype.com/repository/maven-snapshots/"
+  if (isSnapshot.value) Some("central-snapshots" at centralSnapshots)
+  else localStaging.value
+}
 
 // -----------------------------------------------------------------------------
 releaseTagComment        := s"Releasing ${(ThisBuild / version).value}"
@@ -30,7 +27,7 @@ releaseProcess := Seq[ReleaseStep](
   commitReleaseVersion,
   tagRelease,
   releaseStepCommand("publishSigned"),
-  releaseStepCommand("sonatypeBundleRelease"),
+  releaseStepCommand("sonaRelease"),
   setNextVersion,
   commitNextVersion,
   pushChanges

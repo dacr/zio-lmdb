@@ -23,7 +23,7 @@ lazy val versions = new {
 lazy val commonSettings = Seq(
   organization                 := "fr.janalyse",
   licenses += "NON-AI-APACHE2" -> url(s"https://github.com/non-ai-licenses/non-ai-licenses/blob/main/NON-AI-APACHE2"),
-  homepage                     := Some(new URL("https://github.com/dacr/zio-lmdb")),
+  homepage                     := Some(url("https://github.com/dacr/zio-lmdb")),
   scmInfo                      := Some(ScmInfo(url(s"https://github.com/dacr/zio-lmdb.git"), s"git@github.com:dacr/zio-lmdb.git")),
   developers                   := List(
     Developer(
@@ -197,7 +197,7 @@ lazy val console = (project in file("console"))
   )
   .dependsOn(core, queryDsl, keycodecsUlid, keycodecsUuidv7, keycodecsGeo, keycodecsTimestamp, keycodecsUca)
 
-homepage   := Some(new URL("https://github.com/dacr/zio-lmdb"))
+homepage   := Some(url("https://github.com/dacr/zio-lmdb"))
 scmInfo    := Some(ScmInfo(url(s"https://github.com/dacr/zio-lmdb.git"), s"git@github.com:dacr/zio-lmdb.git"))
 developers := List(
   Developer(
