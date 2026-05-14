@@ -94,5 +94,5 @@ When LMDB is used with recent JVMs, add the following options at startup:
 - **[LMDBIndex](lmdb-index.html)** — key-to-key index collections.
 - **[Transactions](transactions.html)** — atomic multi-operation transactions.
 - **[Codecs](codecs.html)** — key codecs and value codecs reference.
-- **[Configuration](configuration.html)** — all configuration parameters.
 - **[Query DSL](query-dsl.html)** — fluent query and join API.
+- **[Configuration](configuration.html)** — all configuration parameters.
