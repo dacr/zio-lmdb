@@ -36,7 +36,7 @@ object Example extends ZIOAppDefault:
     people <- LMDB.collectionCreate[UUID, Person]("people", failIfExists = false)
     id     <- Random.nextUUID
     _      <- people.upsertOverwrite(id, Person("Alice", 30))
-    _      <- people.upsert(id, _.map(p => p.copy(age = p.age + 1)).getOrElse(Person("Alice", 30)))
+    _      <- people.update(id, _.copy(age = p.age + 1))
     result <- people.fetch(id)
     _      <- Console.printLine(result)
   } yield ()).provide(LMDB.liveWithDatabaseName("my-app"), Scope.default)
