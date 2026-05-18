@@ -34,13 +34,16 @@ object LMDBBasicUsageSpec extends ZIOSpecDefault with Commons {
         collection    <- LMDB.collectionCreate[String, Record]("example")
         record         = Record("John Doe", 42)
         recordId      <- Random.nextUUID.map(_.toString)
-        _             <- collection.upsert(recordId, previousRecord => record)
+        _             <- collection.insert(recordId, record)
+        updated       <- collection.update(recordId, prev => prev.copy(age = prev.age + 1)).some
+        _             <- collection.update(recordId, prev => prev.copy(age = prev.age - 1))
         exists        <- collection.contains(recordId)
         gotten        <- collection.fetch(recordId).some
         deletedRecord <- collection.delete(recordId)
         gotNothing    <- collection.fetch(recordId)
       } yield assertTrue(
         gotten == record,
+        updated.age == record.age + 1,
         deletedRecord.contains(record),
         gotNothing.isEmpty,
         exists

@@ -352,6 +352,16 @@ trait LMDBWriteOps extends LMDBReadOps {
     */
   def upsertOverwrite[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit]
 
+  /** Insert a record in a collection. Fails with [[StorageUserError.KeyAlreadyExists]] if the key is already in use.
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key for the record to insert
+    * @param document
+    *   the record content to insert
+    */
+  def insert[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[InsertErrors, Unit]
+
   /** Delete a record in a collection
     * @param collectionName
     *   the collection name

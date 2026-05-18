@@ -12,7 +12,7 @@ object LMDBAutoIndexGenericSpec extends ZIOSpecDefault with Commons {
     test("automatically update generic index on upsertOverwrite, update, delete, and clear") {
       for {
         userIndex <- LMDB.indexCreate[String, String]("users_by_name_generic")
-        usersRaw  <- LMDB.collectionCreate[String, TxnUser]("users_auto_idx_generic_test")
+        usersRaw  <- LMDB.collectionCreate[String, SimpleUser]("users_auto_idx_generic_test")
         
         // Generic index: maps name to "ID: " + id
         users = usersRaw.withIndexFull(userIndex)((k, u) => Some((u.name, s"ID: $k")))
@@ -23,8 +23,8 @@ object LMDBAutoIndexGenericSpec extends ZIOSpecDefault with Commons {
         userName2 = "Bob"
 
         // 1. Test upsertOverwrite
-        _ <- users.upsertOverwrite(userId1, TxnUser(userName1))
-        _ <- users.upsertOverwrite(userId2, TxnUser(userName2))
+        _ <- users.upsertOverwrite(userId1, SimpleUser(userName1))
+        _ <- users.upsertOverwrite(userId2, SimpleUser(userName2))
 
         idxAlice1 <- userIndex.indexed(userName1).runCollect
         idxBob1   <- userIndex.indexed(userName2).runCollect
@@ -36,7 +36,7 @@ object LMDBAutoIndexGenericSpec extends ZIOSpecDefault with Commons {
 
         // 2. Test update (change name)
         newUserName1 = "Alicia"
-        _ <- users.update(userId1, _ => TxnUser(newUserName1))
+        _ <- users.update(userId1, _ => SimpleUser(newUserName1))
 
         idxAlice2  <- userIndex.indexed(userName1).runCollect
         idxAlicia2 <- userIndex.indexed(newUserName1).runCollect

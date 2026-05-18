@@ -231,6 +231,18 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters:
     else readWrite(_.upsertOverwrite(key, document))
   }
 
+  /** Insert a record in a collection. Fails with [[StorageUserError.KeyAlreadyExists]] if the key is already in use.
+    *
+    * @param key
+    *   the key for the record to insert
+    * @param document
+    *   the record content to insert
+    */
+  def insert(key: K, document: T): IO[InsertErrors | IndexErrors, Unit] = {
+    if (indexUpdaters.isEmpty) lmdb.insert[K, T](name, key, document)
+    else readWrite(_.insert(key, document))
+  }
+
   /** Delete a record in a collection
     *
     * @param key
@@ -534,6 +546,19 @@ case class LMDBCollectionWriteOps[K, T](
                          case None         => updater.onInsert(ops, key, document)
                        }
                      }
+    } yield ()
+  }
+
+  /** Insert a record in the collection. Fails with [[StorageUserError.KeyAlreadyExists]] if the key is already in use.
+    * @param key
+    *   the key for the record to insert
+    * @param document
+    *   the record content to insert
+    */
+  def insert(key: K, document: T): IO[InsertErrors | IndexErrors, Unit] = {
+    for {
+      _ <- ops.insert(collection.name, key, document)
+      _ <- ZIO.foreachDiscard(collection.indexUpdaters)(_.onInsert(ops, key, document))
     } yield ()
   }
 

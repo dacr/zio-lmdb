@@ -23,25 +23,25 @@ import zio.lmdb.json.*
 
 import java.util.UUID
 
-case class Dummy(
-  uuid: UUID,
-  x: Int,
-  y: Double
-)
-
-object Dummy {
-  implicit val codec: LMDBCodec[Dummy] = LMDBCodecJson.derived
-
-  def random = for {
-    uuid <- Random.nextUUID
-    x    <- Random.nextInt
-    y    <- Random.nextDouble
-  } yield Dummy(uuid, x, y)
-}
-
 object LMDBConcurrencySpec extends ZIOSpecDefault with Commons {
 
   override val bootstrap: ZLayer[Any, Any, TestEnvironment] = logger >>> testEnvironment
+
+  case class Dummy(
+    uuid: UUID,
+    x: Int,
+    y: Double
+  )
+
+  object Dummy {
+    implicit val codec: LMDBCodec[Dummy] = LMDBCodecJson.derived
+
+    def random = for {
+      uuid <- Random.nextUUID
+      x    <- Random.nextInt
+      y    <- Random.nextDouble
+    } yield Dummy(uuid, x, y)
+  }
 
   val collectionLimit = 50
   val recordsLimit    = 1_000

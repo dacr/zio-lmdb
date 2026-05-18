@@ -20,7 +20,7 @@ import zio.test.*
 import zio.test.TestAspect.*
 import zio.lmdb.protobuf.*
 
-import zio.lmdb.protobuf.user_profile.UserProfile
+import zio.lmdb.protobuf.user_profile_pb.UserProfilePB
 
 object LMDBProtobufSpec extends ZIOSpecDefault with Commons {
 
@@ -29,9 +29,9 @@ object LMDBProtobufSpec extends ZIOSpecDefault with Commons {
   override def spec = suite("Protobuf serialization codec")(
     test("support scalapb generated classes") {
       for {
-        collection    <- LMDB.collectionCreate[String, UserProfile]("user_profiles")
+        collection    <- LMDB.collectionCreate[String, UserProfilePB]("user_profiles")
         recordId      <- Random.nextUUID.map(_.toString)
-        record         = UserProfile(id = recordId, name = "Alice", email = "alice@example.com", age = 30)
+        record         = UserProfilePB(id = recordId, name = "Alice", email = "alice@example.com", age = 30)
         _             <- collection.upsert(recordId, _ => record)
         exists        <- collection.contains(recordId)
         gotten        <- collection.fetch(recordId).some

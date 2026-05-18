@@ -21,9 +21,6 @@ import zio.test.TestAspect.*
 import zio.json.*
 import zio.lmdb.json.*
 
-case class TxnUser(name: String) derives LMDBCodecJson
-case class TxnAccount(balance: Long) derives LMDBCodecJson
-
 object LMDBTransactionSeveralCollectionsSpec extends ZIOSpecDefault with Commons {
 
   override val bootstrap: ZLayer[Any, Any, TestEnvironment] = logger >>> testEnvironment
@@ -32,15 +29,15 @@ object LMDBTransactionSeveralCollectionsSpec extends ZIOSpecDefault with Commons
     test("atomically update two collections") {
       for {
         // Setup collections
-        users    <- LMDB.collectionCreate[String, TxnUser]("users")
-        accounts <- LMDB.collectionCreate[String, TxnAccount]("accounts")
+        users    <- LMDB.collectionCreate[String, SimpleUser]("users")
+        accounts <- LMDB.collectionCreate[String, SimpleAccount]("accounts")
 
         userId    = "user1"
         accountId = "account1"
 
         // Initial data
-        _ <- users.upsertOverwrite(userId, TxnUser("Alice"))
-        _ <- accounts.upsertOverwrite(accountId, TxnAccount(100))
+        _ <- users.upsertOverwrite(userId, SimpleUser("Alice"))
+        _ <- accounts.upsertOverwrite(accountId, SimpleAccount(100))
 
         // Transactional update across both collections
         _ <- LMDB.readWrite { ops =>
@@ -63,14 +60,14 @@ object LMDBTransactionSeveralCollectionsSpec extends ZIOSpecDefault with Commons
     },
     test("multi-collection rollback on error") {
       for {
-        users    <- LMDB.collectionCreate[String, TxnUser]("users_rollback")
-        accounts <- LMDB.collectionCreate[String, TxnAccount]("accounts_rollback")
+        users    <- LMDB.collectionCreate[String, SimpleUser]("users_rollback")
+        accounts <- LMDB.collectionCreate[String, SimpleAccount]("accounts_rollback")
 
         userId    = "user1"
         accountId = "account1"
 
-        _ <- users.upsertOverwrite(userId, TxnUser("Alice"))
-        _ <- accounts.upsertOverwrite(accountId, TxnAccount(100))
+        _ <- users.upsertOverwrite(userId, SimpleUser("Alice"))
+        _ <- accounts.upsertOverwrite(accountId, SimpleAccount(100))
 
         _ <- LMDB.readWrite { ops =>
                val usersTxn    = users.lift(ops)
@@ -93,14 +90,14 @@ object LMDBTransactionSeveralCollectionsSpec extends ZIOSpecDefault with Commons
     },
     test("concurrent multi-collection updates are serialized") {
       for {
-        users    <- LMDB.collectionCreate[String, TxnUser]("users_concurrent")
-        accounts <- LMDB.collectionCreate[String, TxnAccount]("accounts_concurrent")
+        users    <- LMDB.collectionCreate[String, SimpleUser]("users_concurrent")
+        accounts <- LMDB.collectionCreate[String, SimpleAccount]("accounts_concurrent")
 
         userId    = "user1"
         accountId = "account1"
 
-        _ <- users.upsertOverwrite(userId, TxnUser("Alice"))
-        _ <- accounts.upsertOverwrite(accountId, TxnAccount(0))
+        _ <- users.upsertOverwrite(userId, SimpleUser("Alice"))
+        _ <- accounts.upsertOverwrite(accountId, SimpleAccount(0))
 
         _ <- ZIO.foreachPar(1 to 100) { _ =>
                LMDB.readWrite { ops =>
@@ -110,8 +107,8 @@ object LMDBTransactionSeveralCollectionsSpec extends ZIOSpecDefault with Commons
                  for {
                    u <- usersTxn.fetch(userId)
                    a <- accountsTxn.fetch(accountId)
-                   _ <- usersTxn.upsertOverwrite(userId, TxnUser(u.map(_.name).getOrElse("") + "."))
-                   _ <- accountsTxn.upsertOverwrite(accountId, TxnAccount(a.map(_.balance).getOrElse(0L) + 1))
+                   _ <- usersTxn.upsertOverwrite(userId, SimpleUser(u.map(_.name).getOrElse("") + "."))
+                   _ <- accountsTxn.upsertOverwrite(accountId, SimpleAccount(a.map(_.balance).getOrElse(0L) + 1))
                  } yield ()
                }
              }

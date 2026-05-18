@@ -22,9 +22,6 @@ import zio.json.*
 import zio.nio.file.Files
 import zio.lmdb.json.*
 
-case class User(firstName:String, lastName:String, age:Option[Int]) derives LMDBCodecJson
-case class Login(username:String, user:User) derives LMDBCodecJson
-
 object LMDBDataClassSpec extends ZIOSpecDefault with Commons {
 
   override val bootstrap: ZLayer[Any, Any, TestEnvironment] = logger >>> testEnvironment
@@ -33,7 +30,7 @@ object LMDBDataClassSpec extends ZIOSpecDefault with Commons {
     test("support product type")(
       for {
         collection    <- LMDB.collectionCreate[String,Login]("logins")
-        user           = User("John", "Doe", Some(42))
+        user           = Shopper("John", "Doe", Some(42))
         record         = Login("joe", user)
         recordId      <- Random.nextUUID.map(_.toString)
         _             <- collection.upsert(recordId, previousRecord => record)

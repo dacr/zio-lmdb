@@ -27,6 +27,7 @@ enum StorageUserError {
   case CodecFailure(issue: String | KeyCodecError)
   case OverSizedKey(id: String, expandedSize: Int, limit: Int)
   case NestedWriteTransactionError(activeTransaction: ActiveTransaction)
+  case KeyAlreadyExists(name: CollectionName, key: String)
 }
 
 /** Errors indicating a failure within the underlying storage system or library. */

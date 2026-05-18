@@ -8,8 +8,6 @@ import zio.lmdb.keycodecs.KeyCodec
 
 object LMDBMultiSpec extends ZIOSpecDefault with Commons {
 
-  case class Person(name: String, age: Int) derives LMDBCodecJson
-
   val spec = suite("LMDBMultiSpec")(
     test("create and get multi collection") {
       for {

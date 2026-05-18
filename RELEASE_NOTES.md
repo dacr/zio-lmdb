@@ -1,12 +1,14 @@
 # ZIO-LMDB RELEASE NOTES
 
-## 2.8 - 2026-05-10
+## 2.8 - 2026-05-18
 
-- introduce console with basic operations
+- Introduce console with basic operations
 - Add meta-collection collection to store metadata about collections and indices
 - Add multi collection type to support collection with several values for the same key
-- provide a protobuf usage example through a dedicated test spec
-- performance enhancements under heavy concurrency
+- Provide a protobuf usage example through a dedicated test spec
+- Enhance performance under heavy concurrency
+- Add `insert` operation to improve user experience 
+- Add some basic/naive performance tests
 
 ## 2.7 - 2026-04-12
 

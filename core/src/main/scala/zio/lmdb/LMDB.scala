@@ -357,6 +357,20 @@ trait LMDB {
     */
   def upsertOverwrite[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit]
 
+  /** Insert a record in a collection. Fails with [[StorageUserError.KeyAlreadyExists]] if the key is already in use.
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key for the record to insert
+    * @param document
+    *   the record content to insert
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    */
+  def insert[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[InsertErrors, Unit]
+
   /** Delete a record in a collection
     * @param collectionName
     *   the collection name
@@ -1078,6 +1092,20 @@ object LMDB {
     */
   def upsertOverwrite[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, UpsertErrors, Unit] =
     ZIO.serviceWithZIO(_.upsertOverwrite[K, T](collectionName, key, document))
+
+  /** Insert a record in a collection. Fails with [[StorageUserError.KeyAlreadyExists]] if the key is already in use.
+    *
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key for the record to insert
+    * @param document
+    *   the record content to insert
+    * @tparam T
+    *   the data type of the record which must be LMDB serializable
+    */
+  def insert[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, InsertErrors, Unit] =
+    ZIO.serviceWithZIO(_.insert[K, T](collectionName, key, document))
 
   /** Delete a record in a collection
     *

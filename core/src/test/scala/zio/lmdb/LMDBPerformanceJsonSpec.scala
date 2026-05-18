@@ -18,12 +18,12 @@ package zio.lmdb
 import zio.*
 import zio.test.*
 import zio.test.TestAspect.*
-import zio.lmdb.protobuf.*
-import zio.lmdb.protobuf.user_profile.UserProfile
+import zio.json.*
+import zio.lmdb.json.*
 import zio.lmdb.keycodecs.uuidv7.*
 import zio.lmdb.keycodecs.uuidv7.UUIDv7Codec.given
 
-object LMDBPerformanceSpec extends ZIOSpecDefault with Commons {
+object LMDBPerformanceJsonSpec extends ZIOSpecDefault with Commons {
 
   override val bootstrap: ZLayer[Any, Any, TestEnvironment] = logger >>> testEnvironment
 
@@ -57,7 +57,7 @@ object LMDBPerformanceSpec extends ZIOSpecDefault with Commons {
         writeDuration   = Duration.fromNanos(writeEnd - writeStart)
         writeThroughput = recordCount.toDouble / (writeDuration.toNanos.toDouble / 1e9)
 
-        avgRecordSize = records.map(_._2.toByteArray.length).sum.toDouble / recordCount
+        avgRecordSize = records.map(_._2.toJson.getBytes("UTF-8").length).sum.toDouble / recordCount
 
         // Read Benchmark
         readStart     <- Clock.nanoTime

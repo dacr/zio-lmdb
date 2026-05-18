@@ -22,7 +22,7 @@ import zio.stm._
 import zio.stream._
 
 import java.io.File
-import org.lmdbjava.{Cursor, Dbi, DbiFlags, Env, EnvFlags, KeyRange, Txn, Verifier}
+import org.lmdbjava.{Cursor, Dbi, DbiFlags, Env, EnvFlags, KeyRange, PutFlags, Txn, Verifier}
 import org.lmdbjava.SeekOp._
 import org.lmdbjava.CursorIterable.KeyVal
 import org.lmdbjava.GetOp
@@ -707,6 +707,44 @@ class LMDBLive(
       valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
       _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
       _           <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't upsertOverwrite $key into $colName: $err", Some(err)))
+    } yield ()
+  }
+
+  /** @inheritdoc */
+  override def insert[K, T](colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[InsertErrors, Unit] = {
+    for {
+      collectionDbi <- getCollectionDbi(colName)
+      result        <- withWriteLock(
+                         withWriteTransaction(colName) { txn =>
+                           for {
+                             _ <- insertLogic(txn, collectionDbi, colName, key, document)
+                             _ <- ZIO.attempt(txn.commit()).mapError(err => InternalError(s"Couldn't commit transaction: $err", Some(err)))
+                           } yield ()
+                         }
+                       )
+    } yield result
+  }
+
+  /** logic for inserting a record, failing if the key already exists
+    * @param txn
+    *   transaction
+    * @param dbi
+    *   database handle
+    * @param colName
+    *   collection name
+    * @param key
+    *   key to insert
+    * @param document
+    *   record content
+    */
+  private def insertLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[InsertErrors, Unit] = {
+    for {
+      keyBB       <- makeKeyByteBuffer(key)
+      docBytes     = codec.encode(document)
+      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
+      _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
+      inserted    <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer, PutFlags.MDB_NOOVERWRITE)).mapError(err => InternalError(s"Couldn't insert $key into $colName: $err", Some(err)))
+      _           <- ZIO.unless(inserted)(ZIO.fail(KeyAlreadyExists(colName, key.toString): InsertErrors))
     } yield ()
   }
 
@@ -1994,6 +2032,14 @@ class LMDBLive(
       for {
         collectionDbi <- getCollectionDbi(collectionName, Some(txn))
         _             <- upsertOverwriteLogic(txn, collectionDbi, collectionName, key, document)
+      } yield ()
+    }
+
+    /** @inheritdoc */
+    override def insert[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[InsertErrors, Unit] = {
+      for {
+        collectionDbi <- getCollectionDbi(collectionName, Some(txn))
+        _             <- insertLogic(txn, collectionDbi, collectionName, key, document)
       } yield ()
     }
 

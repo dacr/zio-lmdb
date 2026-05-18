@@ -33,6 +33,7 @@ package object lmdb {
   type ContainsErrors = OverSizedKey | CollectionNotFound | StorageSystemError
   type UpdateErrors   = OverSizedKey | CollectionNotFound | CodecFailure | NestedWriteTransactionError | StorageSystemError
   type UpsertErrors   = OverSizedKey | CollectionNotFound | CodecFailure | NestedWriteTransactionError | StorageSystemError
+  type InsertErrors   = KeyAlreadyExists | OverSizedKey | CollectionNotFound | CodecFailure | NestedWriteTransactionError | StorageSystemError
   type DeleteErrors   = OverSizedKey | CollectionNotFound | CodecFailure | NestedWriteTransactionError | StorageSystemError
   type CollectErrors  = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
   type StreamErrors   = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError

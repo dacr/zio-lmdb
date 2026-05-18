@@ -12,7 +12,7 @@ object LMDBAutoIndexSpec extends ZIOSpecDefault with Commons {
     test("automatically update index on upsertOverwrite, update, delete, and clear") {
       for {
         userIndex <- LMDB.indexCreate[String, String]("users_by_name")
-        usersRaw  <- LMDB.collectionCreate[String, TxnUser]("users_auto_idx_test")
+        usersRaw  <- LMDB.collectionCreate[String, SimpleUser]("users_auto_idx_test")
         
         users = usersRaw.withIndex(userIndex)(u => Some(u.name))
 
@@ -22,8 +22,8 @@ object LMDBAutoIndexSpec extends ZIOSpecDefault with Commons {
         userName2 = "Bob"
 
         // 1. Test upsertOverwrite
-        _ <- users.upsertOverwrite(userId1, TxnUser(userName1))
-        _ <- users.upsertOverwrite(userId2, TxnUser(userName2))
+        _ <- users.upsertOverwrite(userId1, SimpleUser(userName1))
+        _ <- users.upsertOverwrite(userId2, SimpleUser(userName2))
 
         idxAlice1 <- userIndex.indexed(userName1).runCollect
         idxBob1   <- userIndex.indexed(userName2).runCollect
@@ -35,7 +35,7 @@ object LMDBAutoIndexSpec extends ZIOSpecDefault with Commons {
 
         // 2. Test update (change name)
         newUserName1 = "Alicia"
-        _ <- users.update(userId1, _ => TxnUser(newUserName1))
+        _ <- users.update(userId1, _ => SimpleUser(newUserName1))
 
         idxAlice2  <- userIndex.indexed(userName1).runCollect
         idxAlicia2 <- userIndex.indexed(newUserName1).runCollect

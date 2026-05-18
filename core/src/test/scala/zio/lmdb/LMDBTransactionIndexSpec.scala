@@ -27,7 +27,7 @@ object LMDBTransactionIndexSpec extends ZIOSpecDefault with Commons {
     test("atomically update index and collection") {
       for {
         // Setup collection and index
-        users     <- LMDB.collectionCreate[String, TxnUser]("users_idx_test")
+        users     <- LMDB.collectionCreate[String, SimpleUser]("users_idx_test")
         userIndex <- LMDB.indexCreate[String, String]("users_by_name")
 
         userId   = "user1"
@@ -39,7 +39,7 @@ object LMDBTransactionIndexSpec extends ZIOSpecDefault with Commons {
                val indexTxn = userIndex.lift(ops)
 
                for {
-                 _ <- usersTxn.upsertOverwrite(userId, TxnUser(userName))
+                 _ <- usersTxn.upsertOverwrite(userId, SimpleUser(userName))
                  _ <- indexTxn.index(userName, userId)
                } yield ()
              }
