@@ -31,6 +31,7 @@ null
 .attach_pid*
 LMDBFreezeReproductionSpec.scala
 LMDBThreadCrashSpec.scala
+LMDBReadCrashSpec.scala
 ExecutorTest.scala
 *_AUDIT.md
 

@@ -28,7 +28,17 @@ import zio._
   * @param fileSystemSynchronized
   *   Synchronize the file system with all database write operations
   * @param maxReaders
-  *   The maximum number of readers
+  *   The maximum number of readers (LMDB-level reader-table size)
+  * @param maxConcurrentReaders
+  *   Upper bound on the number of read operations the library lets through to
+  *   LMDB at the same time. Must be > 0 and should be <= `maxReaders`. Used to
+  *   protect against unbounded fan-out of read transactions (which can exhaust
+  *   the reader table and, under heavy host load, has been observed to trigger
+  *   native crashes in `mdb_page_search` because of cursor lifecycle races).
+  * @param readExecutorThreads
+  *   Size of the dedicated thread pool that runs LMDB read operations. Keeping
+  *   read work pinned to a small bounded pool stabilises the JNI side. Must be
+  *   > 0.
   * @param maxCollections
   *   The maximum number of collections that can be created
   * @param mapSize
@@ -41,6 +51,8 @@ case class LMDBConfig(
   databasesHome: Option[String],
   fileSystemSynchronized: Boolean,
   maxReaders: Int,
+  maxConcurrentReaders: Int,
+  readExecutorThreads: Int,
   maxCollections: Int,
   mapSize: BigInt,
   metaDataCollectionName: String
@@ -53,6 +65,8 @@ object LMDBConfig {
       databasesHome = None,
       fileSystemSynchronized = false,
       maxReaders = 1_000,
+      maxConcurrentReaders = 32,
+      readExecutorThreads = math.max(2, math.min(8, java.lang.Runtime.getRuntime.availableProcessors())),
       mapSize = BigInt(100_000_000_000L),
       maxCollections = 10_000,
       metaDataCollectionName = "meta-data"

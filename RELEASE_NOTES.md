@@ -3,12 +3,13 @@
 ## 2.8 - 2026-05-18
 
 - Introduce console with basic operations
-- Add meta-collection collection to store metadata about collections and indices
-- Add multi collection type to support collection with several values for the same key
+- Add a meta-collection collection to store metadata about collections and indices
+- Add multi collection type to support collections with several values for the same key
 - Provide a protobuf usage example through a dedicated test spec
 - Enhance performance under heavy concurrency
 - Add `insert` operation to improve user experience 
 - Add some basic/naive performance tests
+- Fix concurrency-read crashes under a heavy load
 
 ## 2.7 - 2026-04-12
 

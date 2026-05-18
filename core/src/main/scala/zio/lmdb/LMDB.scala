@@ -706,22 +706,41 @@ trait LMDB {
 
 object LMDB {
 
-  val config: Config[LMDBConfig] = (
-    (Config.string("name").withDefault(LMDBConfig.default.databaseName)
-      ?? "Database name, which will be also used as the directory name") ++
-      (Config.string("home").optional.withDefault(LMDBConfig.default.databasesHome)
-        ?? "Where to store the database directory") ++
-      (Config.boolean("sync").withDefault(LMDBConfig.default.fileSystemSynchronized)
-        ?? "Synchronize the file system with all database write operations") ++
-      (Config.int("maxReaders").withDefault(LMDBConfig.default.maxReaders)
-        ?? "The maximum number of readers") ++
-      (Config.int("maxCollections").withDefault(LMDBConfig.default.maxCollections)
-        ?? "The maximum number of collections which can be created") ++
-      (Config.bigInt("mapSize").withDefault(LMDBConfig.default.mapSize)
-        ?? "The maximum size of the whole database including metadata") ++
-      (Config.string("metaDataCollectionName").withDefault(LMDBConfig.default.metaDataCollectionName)
-        ?? "The name of the collection used for storing collection metadata")
-  ).to[LMDBConfig].nested("lmdb")
+  val config: Config[LMDBConfig] = {
+    val name                   = Config.string("name").withDefault(LMDBConfig.default.databaseName)
+      ?? "Database name, which will be also used as the directory name"
+    val home                   = Config.string("home").optional.withDefault(LMDBConfig.default.databasesHome)
+      ?? "Where to store the database directory"
+    val sync                   = Config.boolean("sync").withDefault(LMDBConfig.default.fileSystemSynchronized)
+      ?? "Synchronize the file system with all database write operations"
+    val maxReaders             = Config.int("maxReaders").withDefault(LMDBConfig.default.maxReaders)
+      ?? "The maximum number of readers"
+    val maxConcurrentReaders   = Config.int("maxConcurrentReaders").withDefault(LMDBConfig.default.maxConcurrentReaders)
+      ?? "Upper bound on concurrent in-flight read transactions (semaphore-gated)"
+    val readExecutorThreads    = Config.int("readExecutorThreads").withDefault(LMDBConfig.default.readExecutorThreads)
+      ?? "Size of the dedicated thread pool used by LMDB read operations"
+    val maxCollections         = Config.int("maxCollections").withDefault(LMDBConfig.default.maxCollections)
+      ?? "The maximum number of collections which can be created"
+    val mapSize                = Config.bigInt("mapSize").withDefault(LMDBConfig.default.mapSize)
+      ?? "The maximum size of the whole database including metadata"
+    val metaDataCollectionName = Config.string("metaDataCollectionName").withDefault(LMDBConfig.default.metaDataCollectionName)
+      ?? "The name of the collection used for storing collection metadata"
+    (name zip home zip sync zip maxReaders zip maxConcurrentReaders zip readExecutorThreads zip maxCollections zip mapSize zip metaDataCollectionName)
+      .map { case (n, h, s, mr, mcr, ret, mc, ms, mdcn) =>
+        LMDBConfig(
+          databaseName = n,
+          databasesHome = h,
+          fileSystemSynchronized = s,
+          maxReaders = mr,
+          maxConcurrentReaders = mcr,
+          readExecutorThreads = ret,
+          maxCollections = mc,
+          mapSize = ms,
+          metaDataCollectionName = mdcn
+        )
+      }
+      .nested("lmdb")
+  }
 
   /** Default live implementation using the current configuration provider
     */
