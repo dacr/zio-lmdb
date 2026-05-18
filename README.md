@@ -16,10 +16,10 @@ Built on [lmdb-java][JLMDB] with a type-safe, ZIO-native API:
 
 ```scala
 // sbt
-libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.2"
+libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.3"
 
 // scala-cli
-//> using dep fr.janalyse::zio-lmdb:2.8.2
+//> using dep fr.janalyse::zio-lmdb:2.8.3
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 ```
 

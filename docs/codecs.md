@@ -86,7 +86,7 @@ Add these as separate dependencies for advanced key types:
 Encodes `java.time.Instant` (or a custom timestamp wrapper) as **12 fixed bytes** with nanosecond precision. 12 bytes instead of the 30+ bytes of an ISO-8601 string, with correct lexicographic ordering.
 
 ```scala
-libraryDependencies += "fr.janalyse" %% "keycodecs-timestamp" % "2.8.2"
+libraryDependencies += "fr.janalyse" %% "keycodecs-timestamp" % "2.8.3"
 ```
 
 ```scala
@@ -100,7 +100,7 @@ val events: LMDBCollection[Instant, Event] = ...
 Encodes UUIDv7 (time-ordered UUID) as **16 fixed bytes**. UUIDv7 keys sort chronologically, making this ideal for time-series or event-sourcing collections.
 
 ```scala
-libraryDependencies += "fr.janalyse" %% "keycodecs-uuidv7" % "2.8.2"
+libraryDependencies += "fr.janalyse" %% "keycodecs-uuidv7" % "2.8.3"
 ```
 
 ```scala
@@ -116,7 +116,7 @@ val timeline: LMDBCollection[UUID, Event] = ...
 Encodes ULID as **16 fixed bytes**. Like UUIDv7 but following the ULID spec.
 
 ```scala
-libraryDependencies += "fr.janalyse" %% "keycodecs-ulid" % "2.8.2"
+libraryDependencies += "fr.janalyse" %% "keycodecs-ulid" % "2.8.3"
 ```
 
 ```scala
@@ -128,7 +128,7 @@ import zio.lmdb.keycodecs.ulid.given
 Encodes `(latitude, longitude)` pairs as **8 bytes** using Morton (Z-curve) interleaving. Enables efficient spatial proximity queries via lexicographic range scans.
 
 ```scala
-libraryDependencies += "fr.janalyse" %% "keycodecs-geo" % "2.8.2"
+libraryDependencies += "fr.janalyse" %% "keycodecs-geo" % "2.8.3"
 ```
 
 ```scala
@@ -143,7 +143,7 @@ val locations: LMDBCollection[(Double, Double), Place] = ...
 Encodes strings using the **Unicode Collation Algorithm (UCA)** so that lexicographic byte order matches natural language sort order for any locale.
 
 ```scala
-libraryDependencies += "fr.janalyse" %% "keycodecs-uca" % "2.8.2"
+libraryDependencies += "fr.janalyse" %% "keycodecs-uca" % "2.8.3"
 ```
 
 ### Composite keys

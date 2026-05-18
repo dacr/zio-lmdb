@@ -40,13 +40,13 @@ It wraps [lmdb-java](https://github.com/lmdbjava/lmdbjava) with a higher-level, 
 Add the dependency to your `build.sbt`:
 
 ```scala
-libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.2"
+libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.3"
 ```
 
 For `scala-cli` scripts, add at the top of your file:
 
 ```scala
-//> using dep fr.janalyse::zio-lmdb:2.8.2
+//> using dep fr.janalyse::zio-lmdb:2.8.3
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 ```
 
