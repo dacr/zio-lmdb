@@ -40,13 +40,13 @@ It wraps [lmdb-java](https://github.com/lmdbjava/lmdbjava) with a higher-level, 
 Add the dependency to your `build.sbt`:
 
 ```scala
-libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.1"
+libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.2"
 ```
 
 For `scala-cli` scripts, add at the top of your file:
 
 ```scala
-//> using dep fr.janalyse::zio-lmdb:2.8.1
+//> using dep fr.janalyse::zio-lmdb:2.8.2
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 ```
 
@@ -64,7 +64,7 @@ case class User(name: String, age: Int) derives LMDBCodecJson
 
 val program = for {
   users  <- LMDB.collectionCreate[String, User]("users", failIfExists = false)
-  _      <- users.upsertOverwrite("alice", User("Alice", 30))
+  _      <- users.insert("alice", User("Alice", 30))
   result <- users.fetch("alice")
   _      <- Console.printLine(result)
 } yield ()

@@ -77,7 +77,7 @@ lmdb.readWrite { ops =>
 
 ## Indexed collections and transactions
 
-When a collection has attached indexes (via `withIndex`), every mutation method (`upsert`, `update`, `delete`, `clear`) internally opens a **write transaction** to keep the index consistent.
+When a collection has attached indexes (via `withIndex`), every mutation method (`insert`, `upsert`, `update`, `delete`, `clear`) internally opens a **write transaction** to keep the index consistent.
 
 This means you cannot call `upsert` on an indexed collection **inside** an outer write transaction — doing so would create a nested write transaction. Instead, call the write operation through the `LMDBCollectionWriteOps` facade obtained via `lift`:
 

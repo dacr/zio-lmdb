@@ -16,10 +16,10 @@ Built on [lmdb-java][JLMDB] with a type-safe, ZIO-native API:
 
 ```scala
 // sbt
-libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.1"
+libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.2"
 
 // scala-cli
-//> using dep fr.janalyse::zio-lmdb:2.8.1
+//> using dep fr.janalyse::zio-lmdb:2.8.2
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 ```
 
@@ -35,7 +35,7 @@ object Example extends ZIOAppDefault:
   def run = (for {
     people <- LMDB.collectionCreate[UUID, Person]("people", failIfExists = false)
     id     <- Random.nextUUID
-    _      <- people.upsertOverwrite(id, Person("Alice", 30))
+    _      <- people.insert(id, Person("Alice", 30))
     _      <- people.update(id, previous => previous.copy(age = previous.age + 1))
     result <- people.fetch(id)
     _      <- Console.printLine(result)

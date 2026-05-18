@@ -19,11 +19,11 @@ The `query-dsl` module provides a **fluent query and join API** on top of `LMDBC
 ## Dependency
 
 ```scala
-libraryDependencies += "fr.janalyse" %% "query-dsl" % "2.8.1"
+libraryDependencies += "fr.janalyse" %% "query-dsl" % "2.8.2"
 ```
 
 ```scala
-//> using dep fr.janalyse::query-dsl:2.8.1
+//> using dep fr.janalyse::query-dsl:2.8.2
 ```
 
 ---

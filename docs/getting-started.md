@@ -20,14 +20,14 @@ nav_order: 2
 
 ```scala
 // build.sbt
-libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.1"
+libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.2"
 ```
 
 ### scala-cli
 
 ```scala
 //> using scala 3
-//> using dep fr.janalyse::zio-lmdb:2.8.1
+//> using dep fr.janalyse::zio-lmdb:2.8.2
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 ```
 
@@ -115,7 +115,10 @@ object CrudExample extends ZIOAppDefault:
     now      <- Clock.currentDateTime
     record    = Record("Alice", 30, now)
 
-    // Insert or overwrite
+    // Strict insert — fails with KeyAlreadyExists if the key is in use
+    _        <- col.insert(id, record)
+
+    // Insert or overwrite — silently replaces any existing record
     _        <- col.upsertOverwrite(id, record)
 
     // Fetch by key

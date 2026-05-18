@@ -214,7 +214,7 @@ val program = for {
 | Feature | `LMDBCollection[K, T]` | `LMDBMulti[K, T]` |
 |---|---|---|
 | Values per key | Exactly one | Zero or more |
-| Insert semantics | `upsertOverwrite` replaces | `put` accumulates |
+| Insert semantics | `insert` (strict, fails on conflict) / `upsertOverwrite` (replaces) | `put` accumulates |
 | Fetch result | `Option[T]` | `List[T]` |
 | Streaming | `stream()`, `streamWithKeys()` | — |
 | Cursor navigation | `head`, `last`, `next`, `previous` | — |

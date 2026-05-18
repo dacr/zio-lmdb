@@ -98,6 +98,20 @@ for {
 
 ## Write operations
 
+### insert
+
+```scala
+def insert(key: K, document: T): IO[InsertErrors | IndexErrors, Unit]
+```
+
+Strictly inserts `document` at `key`. Fails with `StorageUserError.KeyAlreadyExists` if the key is already present — the existing record is left untouched. The check and the write happen atomically in a single LMDB operation (`MDB_NOOVERWRITE`), so there is no race window between "does the key exist?" and "write".
+
+```scala
+col.insert(id, Product(id, "Widget", 9.99))
+```
+
+Attached indexes are only updated when the insert succeeds.
+
 ### upsertOverwrite
 
 ```scala
