@@ -37,6 +37,35 @@ object KeyCodecSpec extends ZIOSpecDefault {
         }
       }
     ),
+    suite("Long codec")(
+      test("roundtrip encoding/decoding") {
+        check(Gen.long) { l =>
+          val codec   = summon[KeyCodec[Long]]
+          val encoded = codec.encode(l)
+          val buffer  = ByteBuffer.allocateDirect(encoded.length).put(encoded).flip()
+          val decoded = codec.decode(buffer)
+          assert(encoded.length)(equalTo(8)) &&
+          assert(decoded)(isRight(equalTo(l)))
+        }
+      },
+      test("byte-order matches numeric order") {
+        check(Gen.long, Gen.long) { (a, b) =>
+          val codec = summon[KeyCodec[Long]]
+          val ea    = codec.encode(a)
+          val eb    = codec.encode(b)
+          val cmp   = Arrays.compareUnsigned(ea, eb)
+          assertTrue((cmp < 0) == (a < b)) &&
+          assertTrue((cmp > 0) == (a > b)) &&
+          assertTrue((cmp == 0) == (a == b))
+        }
+      },
+      test("decoding fails when buffer has insufficient bytes") {
+        val codec   = summon[KeyCodec[Long]]
+        val buffer  = ByteBuffer.allocateDirect(7)
+        val decoded = codec.decode(buffer)
+        assert(decoded)(isLeft(equalTo(KeyCodecError.InsufficientBytes(8, 7))))
+      }
+    ),
     suite("UUID codec")(
       test("roundtrip encoding/decoding") {
         check(Gen.uuid) { uuid =>

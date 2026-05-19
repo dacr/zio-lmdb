@@ -70,6 +70,33 @@ object KeyCodec {
     override def width: Option[Int] = None
   }
 
+  given longKeyCodec: KeyCodec[Long] = new KeyCodec[Long] {
+    // Big-endian with sign-bit flip so the lexicographic order of the encoded
+    // bytes matches the natural numeric order on Long (including negatives).
+    private val signBias: Long = Long.MinValue
+
+    override def encode(key: Long): Array[Byte] = {
+      val biased = key ^ signBias
+      val out    = new Array[Byte](8)
+      out(0) = (biased >>> 56).toByte
+      out(1) = (biased >>> 48).toByte
+      out(2) = (biased >>> 40).toByte
+      out(3) = (biased >>> 32).toByte
+      out(4) = (biased >>> 24).toByte
+      out(5) = (biased >>> 16).toByte
+      out(6) = (biased >>> 8).toByte
+      out(7) = biased.toByte
+      out
+    }
+
+    override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, Long] = {
+      if (keyBytes.remaining() < 8) Left(InsufficientBytes(8, keyBytes.remaining()))
+      else Right(keyBytes.getLong ^ signBias)
+    }
+
+    override def width: Option[Int] = Some(8)
+  }
+
   given uuidKeyCodec: KeyCodec[UUID] = new KeyCodec[UUID] {
     override def encode(key: UUID): Array[Byte] = UUIDTools.uuidToBytes(key)
 
