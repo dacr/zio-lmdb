@@ -32,6 +32,7 @@ null
 LMDBFreezeReproductionSpec.scala
 LMDBThreadCrashSpec.scala
 LMDBReadCrashSpec.scala
+LMDBReadOpsDbiOpenRaceSpec.scala
 ExecutorTest.scala
 *_AUDIT.md
 

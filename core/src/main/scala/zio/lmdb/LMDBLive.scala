@@ -58,6 +58,31 @@ class LMDBLive(
     collectionCreateLogic(config.metaDataCollectionName)
   }
 
+  /** Eagerly open every collection / index / multi recorded in the metadata
+    * collection. After this returns, the DBI cache reflects everything on
+    * disk and the `Some(txn)` fail-fast branch of `getCollectionDbi` &
+    * friends will only fire for genuinely-missing names.
+    *
+    * Without this, the first touch of an existing-on-disk collection inside
+    * a `readOnly { ops => ... }` block would have to open its DBI inside
+    * that read transaction — an unsafe pattern (see `withExclusiveDbiOpen`
+    * for the full explanation) that was the source of the production
+    * `Assertion 'root > 1' failed in mdb_page_search()` SIGABRT.
+    */
+  private[lmdb] def openAllKnownDbis(): ZIO[Any, StorageSystemError, Unit] = {
+    collect[String, MetaDataEntry](config.metaDataCollectionName, limit = None)
+      .catchAll(_ => ZIO.succeed(Nil))
+      .flatMap { metas =>
+        ZIO.foreachDiscard(metas) { meta =>
+          meta.collectionKind match {
+            case CollectionKind.Regular => getCollectionDbi(meta.collectionName).ignore
+            case CollectionKind.Index   => getIndexDbi(meta.collectionName).ignore
+            case CollectionKind.Multi   => getMultiDbi(meta.collectionName).ignore
+          }
+        }
+      }
+  }
+
   private def metadataUpdate(name: String, kind: CollectionKind): ZIO[Any, StorageSystemError, Unit] = {
     val entry = MetaDataEntry(name, kind, None, None)
     upsertOverwrite(config.metaDataCollectionName, name, entry)
@@ -81,6 +106,23 @@ class LMDBLive(
 
   private def withWriteLock[R, E, A](effect: ZIO[R, E, A]): ZIO[R, E, A] =
     ZIO.scoped(writeMutex.withPermit(effect)).onExecutor(writeExecutor)
+
+  /** Drain all in-flight readers, then acquire the write mutex, then run
+    * `effect`. Use only around code paths that open a new LMDB DBI handle.
+    *
+    * Background: a `Dbi` opened in one txn becomes visible to other txns via
+    * the env's `me_dbs[]`, but each txn snapshots its `mt_dbs[]` at begin
+    * time. If a read transaction A has started, and a new DBI is opened
+    * after A's snapshot, A's `mt_dbs[]` slot for the new DBI is still
+    * zero-filled. Sharing the new `Dbi` handle across fibers (via our
+    * process-wide cache) lets A pick it up — and then a cursor on it fails
+    * the `root > 1` assertion inside `mdb_page_search`, since `md_root` is
+    * zero in A's stale slot. Draining all readers before the open guarantees
+    * that every read txn started after the open sees the DBI in its
+    * snapshot, eliminating the race.
+    */
+  private def withExclusiveDbiOpen[R, E, A](effect: ZIO[R, E, A]): ZIO[R, E, A] =
+    readSemaphore.withPermits(config.maxConcurrentReaders.toLong)(withWriteLock(effect))
 
   /** Gate around every read-side LMDB operation.
     *
@@ -113,20 +155,28 @@ class LMDBLive(
       } yield key
   }
 
-  /** Gets or opens a collection DBI handle. */
+  /** Gets a cached collection DBI handle, or opens it if no transaction is
+    * already in flight on this fiber.
+    *
+    * SAFETY: we deliberately refuse to open a new DBI when called from inside
+    * an existing transaction (`txn = Some(_)`). Opening a DBI inside a read
+    * transaction creates a handle that is private to that txn (LMDB does not
+    * commit it to `me_dbs[]`), so caching it process-wide for other txns to
+    * pick up is undefined behavior — and in practice triggers a `root > 1`
+    * assertion failure (SIGABRT) in `mdb_page_search`. With eager-open at
+    * setup, this fail-fast branch should never fire for collections that
+    * exist on disk; if it does, the collection genuinely does not exist.
+    */
   private def getCollectionDbi(name: CollectionName, txn: Option[Txn[ByteBuffer]] = None): IO[CollectionNotFound, Dbi[ByteBuffer]] = {
     openedCollectionDbisRef.get.flatMap { opened =>
       opened.get(name) match {
         case Some(d) => ZIO.succeed(d)
         case None    =>
           txn match {
-            case Some(t) =>
-              for {
-                newDbi <- ZIO.attempt(env.openDbi(t, name.getBytes(StandardCharsets.UTF_8), null, false))
-                _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
-              } yield newDbi
+            case Some(_) =>
+              ZIO.fail(CollectionNotFound(name))
             case None    =>
-              withWriteLock {
+              withExclusiveDbiOpen {
                 openedCollectionDbisRef.get.flatMap { openedAgain =>
                   openedAgain.get(name) match {
                     case Some(alreadyOpened) => ZIO.succeed(alreadyOpened)
@@ -231,7 +281,7 @@ class LMDBLive(
   }
 
   /** Internal logic to create a collection. */
-  private def collectionCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = withWriteLock {
+  private def collectionCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = withExclusiveDbiOpen {
     for {
       openedCollectionDbis <- openedCollectionDbisRef.get
       _                    <- ZIO.when(!openedCollectionDbis.contains(name)) {
@@ -963,8 +1013,8 @@ class LMDBLive(
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T] = {
     val result =
       for {
-        _   <- readSemaphore.withPermitScoped
         db  <- getCollectionDbi(colName)
+        _   <- readSemaphore.withPermitScoped
         txn <- ZIO.acquireRelease(
                  ZIO
                    .attemptBlocking(env.txnRead())
@@ -1020,8 +1070,8 @@ class LMDBLive(
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)] = {
     val result =
       for {
-        _   <- readSemaphore.withPermitScoped
         db  <- getCollectionDbi(colName)
+        _   <- readSemaphore.withPermitScoped
         txn <- ZIO.acquireRelease(
                  ZIO
                    .attemptBlocking(env.txnRead())
@@ -1067,20 +1117,19 @@ class LMDBLive(
       }
   }
 
-  /** Gets or opens an index DBI handle. */
+  /** Gets a cached index DBI handle, or opens it if no transaction is in
+    * flight on this fiber. See `getCollectionDbi` for the safety contract.
+    */
   private def getIndexDbi(name: IndexName, txn: Option[Txn[ByteBuffer]] = None): IO[IndexNotFound, Dbi[ByteBuffer]] = {
     openedCollectionDbisRef.get.flatMap { opened =>
       opened.get(name) match {
         case Some(d) => ZIO.succeed(d)
         case None    =>
           txn match {
-            case Some(t) =>
-              for {
-                newDbi <- ZIO.attempt(env.openDbi(t, name.getBytes(StandardCharsets.UTF_8), null, false, DbiFlags.MDB_DUPSORT))
-                _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
-              } yield newDbi
+            case Some(_) =>
+              ZIO.fail(IndexNotFound(name))
             case None    =>
-              withWriteLock {
+              withExclusiveDbiOpen {
                 openedCollectionDbisRef.get.flatMap { openedAgain =>
                   openedAgain.get(name) match {
                     case Some(alreadyOpened) => ZIO.succeed(alreadyOpened)
@@ -1098,7 +1147,7 @@ class LMDBLive(
   }.mapError(_ => IndexNotFound(name))
 
   /** Internal logic to create an index. */
-  private def indexCreateLogic(name: IndexName): ZIO[Any, StorageSystemError, Unit] = withWriteLock {
+  private def indexCreateLogic(name: IndexName): ZIO[Any, StorageSystemError, Unit] = withExclusiveDbiOpen {
     for {
       openedCollectionDbis <- openedCollectionDbisRef.get
       _                    <- ZIO.when(!openedCollectionDbis.contains(name)) {
@@ -1477,8 +1526,8 @@ class LMDBLive(
     ZStream
       .unwrapScoped {
         for {
-          _   <- readSemaphore.withPermitScoped
           db  <- getIndexDbi(name)
+          _   <- readSemaphore.withPermitScoped
           txn <- ZIO.acquireRelease(
                    ZIO
                      .attemptBlocking(env.txnRead())
@@ -1546,20 +1595,20 @@ class LMDBLive(
     }
   }
 
-  /** Gets or opens a multi-collection DBI handle. */
+  /** Gets a cached multi-collection DBI handle, or opens it if no transaction
+    * is in flight on this fiber. See `getCollectionDbi` for the safety
+    * contract.
+    */
   private def getMultiDbi(name: CollectionName, txn: Option[Txn[ByteBuffer]] = None): IO[CollectionNotFound, Dbi[ByteBuffer]] = {
     openedCollectionDbisRef.get.flatMap { opened =>
       opened.get(name) match {
         case Some(d) => ZIO.succeed(d)
         case None    =>
           txn match {
-            case Some(t) =>
-              for {
-                newDbi <- ZIO.attempt(env.openDbi(t, name.getBytes(StandardCharsets.UTF_8), null, false, DbiFlags.MDB_DUPSORT))
-                _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
-              } yield newDbi
+            case Some(_) =>
+              ZIO.fail(CollectionNotFound(name))
             case None    =>
-              withWriteLock {
+              withExclusiveDbiOpen {
                 openedCollectionDbisRef.get.flatMap { openedAgain =>
                   openedAgain.get(name) match {
                     case Some(alreadyOpened) => ZIO.succeed(alreadyOpened)
@@ -1576,7 +1625,7 @@ class LMDBLive(
     }
   }.mapError(_ => CollectionNotFound(name))
 
-  private def multiCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = withWriteLock {
+  private def multiCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = withExclusiveDbiOpen {
     for {
       openedCollectionDbis <- openedCollectionDbisRef.get
       _                    <- ZIO.when(!openedCollectionDbis.contains(name)) {
@@ -2195,6 +2244,7 @@ object LMDBLive {
                                 config
                               )
       _                    <- lmdb.initializeMetadata().mapError(e => new RuntimeException(s"Failed to initialize metadata: $e"))
+      _                    <- lmdb.openAllKnownDbis().mapError(e => new RuntimeException(s"Failed to eager-open DBIs: $e"))
     } yield lmdb
   }
 }
