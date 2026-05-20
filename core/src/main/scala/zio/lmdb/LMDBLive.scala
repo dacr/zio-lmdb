@@ -58,16 +58,11 @@ class LMDBLive(
     collectionCreateLogic(config.metaDataCollectionName)
   }
 
-  /** Eagerly open every collection / index / multi recorded in the metadata
-    * collection. After this returns, the DBI cache reflects everything on
-    * disk and the `Some(txn)` fail-fast branch of `getCollectionDbi` &
-    * friends will only fire for genuinely-missing names.
+  /** Eagerly open every collection / index / multi recorded in the metadata collection. After this returns, the DBI cache reflects everything on disk and the `Some(txn)` fail-fast branch of `getCollectionDbi` & friends will only fire for
+    * genuinely-missing names.
     *
-    * Without this, the first touch of an existing-on-disk collection inside
-    * a `readOnly { ops => ... }` block would have to open its DBI inside
-    * that read transaction — an unsafe pattern (see `withExclusiveDbiOpen`
-    * for the full explanation) that was the source of the production
-    * `Assertion 'root > 1' failed in mdb_page_search()` SIGABRT.
+    * Without this, the first touch of an existing-on-disk collection inside a `readOnly { ops => ... }` block would have to open its DBI inside that read transaction — an unsafe pattern (see `withExclusiveDbiOpen` for the full explanation) that was
+    * the source of the production `Assertion 'root > 1' failed in mdb_page_search()` SIGABRT.
     */
   private[lmdb] def openAllKnownDbis(): ZIO[Any, StorageSystemError, Unit] = {
     collect[String, MetaDataEntry](config.metaDataCollectionName, limit = None)
@@ -107,39 +102,24 @@ class LMDBLive(
   private def withWriteLock[R, E, A](effect: ZIO[R, E, A]): ZIO[R, E, A] =
     ZIO.scoped(writeMutex.withPermit(effect)).onExecutor(writeExecutor)
 
-  /** Drain all in-flight readers, then acquire the write mutex, then run
-    * `effect`. Use only around code paths that open a new LMDB DBI handle.
+  /** Drain all in-flight readers, then acquire the write mutex, then run `effect`. Use only around code paths that open a new LMDB DBI handle.
     *
-    * Background: a `Dbi` opened in one txn becomes visible to other txns via
-    * the env's `me_dbs[]`, but each txn snapshots its `mt_dbs[]` at begin
-    * time. If a read transaction A has started, and a new DBI is opened
-    * after A's snapshot, A's `mt_dbs[]` slot for the new DBI is still
-    * zero-filled. Sharing the new `Dbi` handle across fibers (via our
-    * process-wide cache) lets A pick it up — and then a cursor on it fails
-    * the `root > 1` assertion inside `mdb_page_search`, since `md_root` is
-    * zero in A's stale slot. Draining all readers before the open guarantees
-    * that every read txn started after the open sees the DBI in its
-    * snapshot, eliminating the race.
+    * Background: a `Dbi` opened in one txn becomes visible to other txns via the env's `me_dbs[]`, but each txn snapshots its `mt_dbs[]` at begin time. If a read transaction A has started, and a new DBI is opened after A's snapshot, A's `mt_dbs[]`
+    * slot for the new DBI is still zero-filled. Sharing the new `Dbi` handle across fibers (via our process-wide cache) lets A pick it up — and then a cursor on it fails the `root > 1` assertion inside `mdb_page_search`, since `md_root` is zero in
+    * A's stale slot. Draining all readers before the open guarantees that every read txn started after the open sees the DBI in its snapshot, eliminating the race.
     */
   private def withExclusiveDbiOpen[R, E, A](effect: ZIO[R, E, A]): ZIO[R, E, A] =
     readSemaphore.withPermits(config.maxConcurrentReaders.toLong)(withWriteLock(effect))
 
   /** Gate around every read-side LMDB operation.
     *
-    * Even though LMDB's MVCC lets readers run in parallel, in practice we must
-    * bound the number of *concurrent* read transactions and keep them on a
-    * small, dedicated thread pool. Without that, a fan-out of fibers each
-    * calling `env.txnRead()` + `openCursor` + `cursor.seek` on a different
-    * ZScheduler worker has been observed to:
+    * Even though LMDB's MVCC lets readers run in parallel, in practice we must bound the number of *concurrent* read transactions and keep them on a small, dedicated thread pool. Without that, a fan-out of fibers each calling `env.txnRead()` +
+    * `openCursor` + `cursor.seek` on a different ZScheduler worker has been observed to:
     *
     *   - exhaust the LMDB reader table (`ReadersFullException`), and
-    *   - under heavy host load, segfault in `mdb_page_search` because the
-    *     cursor's C struct is freed while a sibling worker is still inside
-    *     the JNI `mdb_cursor_get` call.
+    *   - under heavy host load, segfault in `mdb_page_search` because the cursor's C struct is freed while a sibling worker is still inside the JNI `mdb_cursor_get` call.
     *
-    * The semaphore bounds parallelism; `onExecutor(readExecutor)` pins the
-    * work to a small fixed pool so JIT-compiled JNI stubs see a stable,
-    * bounded set of threads.
+    * The semaphore bounds parallelism; `onExecutor(readExecutor)` pins the work to a small fixed pool so JIT-compiled JNI stubs see a stable, bounded set of threads.
     */
   private def withReadLock[R, E, A](effect: ZIO[R, E, A]): ZIO[R, E, A] =
     readSemaphore.withPermit(effect).onExecutor(readExecutor)
@@ -155,35 +135,29 @@ class LMDBLive(
       } yield key
   }
 
-  /** Gets a cached collection DBI handle, or opens it if no transaction is
-    * already in flight on this fiber.
+  /** Gets a cached collection DBI handle, or opens it if no transaction is already in flight on this fiber.
     *
-    * SAFETY: we deliberately refuse to open a new DBI when called from inside
-    * an existing transaction (`txn = Some(_)`). Opening a DBI inside a read
-    * transaction creates a handle that is private to that txn (LMDB does not
-    * commit it to `me_dbs[]`), so caching it process-wide for other txns to
-    * pick up is undefined behavior — and in practice triggers a `root > 1`
-    * assertion failure (SIGABRT) in `mdb_page_search`. With eager-open at
-    * setup, this fail-fast branch should never fire for collections that
-    * exist on disk; if it does, the collection genuinely does not exist.
+    * SAFETY: we deliberately refuse to open a new DBI when called from inside an existing transaction (`txn = Some(_)`). Opening a DBI inside a read transaction creates a handle that is private to that txn (LMDB does not commit it to `me_dbs[]`), so
+    * caching it process-wide for other txns to pick up is undefined behavior — and in practice triggers a `root > 1` assertion failure (SIGABRT) in `mdb_page_search`. With eager-open at setup, this fail-fast branch should never fire for collections
+    * that exist on disk; if it does, the collection genuinely does not exist.
     */
   private def getCollectionDbi(name: CollectionName, txn: Option[Txn[ByteBuffer]] = None): IO[CollectionNotFound, Dbi[ByteBuffer]] = {
     openedCollectionDbisRef.get.flatMap { opened =>
       opened.get(name) match {
         case Some(d) => ZIO.succeed(d)
-        case None    =>
+        case None =>
           txn match {
             case Some(_) =>
               ZIO.fail(CollectionNotFound(name))
-            case None    =>
+            case None =>
               withExclusiveDbiOpen {
                 openedCollectionDbisRef.get.flatMap { openedAgain =>
                   openedAgain.get(name) match {
                     case Some(alreadyOpened) => ZIO.succeed(alreadyOpened)
-                    case None                =>
+                    case None =>
                       for {
                         newDbi <- ZIO.attempt(env.openDbi(name))
-                        _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                        _ <- openedCollectionDbisRef.update(_ + (name -> newDbi))
                       } yield newDbi
                   }
                 }
@@ -191,7 +165,7 @@ class LMDBLive(
           }
       }
     }
-  }.mapError(_ => CollectionNotFound(name))
+  }.orElseFail(CollectionNotFound(name))
 
   /** @inheritdoc */
   override def collectionExists(name: CollectionName): IO[StorageSystemError, Boolean] = {
@@ -309,11 +283,8 @@ class LMDBLive(
       )(use)
       .onExecutor(writeExecutor)
 
-  /** Scoped read transaction. The native txn-begin / txn-close calls run on
-    * the blocking pool (off the ZIO compute pool) because they are JNI calls
-    * into LMDB; making them `attemptBlocking` keeps the native side from
-    * starving the compute pool and prevents fiber-interruption from running
-    * a release between two cursor operations on the same txn.
+  /** Scoped read transaction. The native txn-begin / txn-close calls run on the blocking pool (off the ZIO compute pool) because they are JNI calls into LMDB; making them `attemptBlocking` keeps the native side from starving the compute pool and
+    * prevents fiber-interruption from running a release between two cursor operations on the same txn.
     */
   private def withReadTransaction(colName: CollectionName): ZIO.Release[Any, StorageSystemError, Txn[ByteBuffer]] =
     ZIO.acquireReleaseWith(
@@ -389,7 +360,7 @@ class LMDBLive(
         collectionNames <- ZIO
                              .attempt(
                                env
-                                 .getDbiNames()
+                                 .getDbiNames
                                  .asScala
                                  .map(bytes => new String(bytes))
                                  .toList
@@ -482,62 +453,58 @@ class LMDBLive(
     *   the record if found
     */
   private def fetchAtLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, index: Long)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, FetchErrors, Option[(K, T)]] = {
+    // Same fused-JNI rationale as `indexSeekLogic` above. The walk itself is
+    // O(index), but it stays on a single blocking-pool thread so no
+    // interrupt-driven scope teardown can occur mid-walk.
     for {
-      cursor             <- ZIO.acquireRelease(
-                              ZIO
-                                .attemptBlocking(dbi.openCursor(txn))
-                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
-                            )(cursor =>
-                              ZIO
-                                .attemptBlocking(cursor.close())
-                                .ignoreLogged
-                            )
-      seekFirstSuccess   <- ZIO
-                              .attemptBlocking(cursor.seek(SeekOp.MDB_FIRST))
-                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName: $err", Some(err)))
-      finalState         <- ZIO
-                              .iterate((0L, seekFirstSuccess))(state => state._1 < index && state._2) { case (i, _) =>
-                                ZIO
-                                  .attemptBlocking(cursor.seek(SeekOp.MDB_NEXT))
-                                  .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName: $err", Some(err)))
-                                  .map(success => (i + 1, success))
+      cursorWithResult <- ZIO.acquireRelease(
+                            ZIO
+                              .attemptBlocking {
+                                val cursor  = dbi.openCursor(txn)
+                                var i       = 0L
+                                var ok      = cursor.seek(SeekOp.MDB_FIRST)
+                                while (i < index && ok) {
+                                  ok = cursor.seek(SeekOp.MDB_NEXT)
+                                  i += 1
+                                }
+                                val success = i == index && ok
+                                val decoded =
+                                  if (success) Some((kodec.decode(cursor.key()), codec.decode(cursor.`val`())))
+                                  else None
+                                (cursor, decoded)
                               }
-      seeksSuccess        = finalState._1 == index && finalState._2
-      seekedKey          <- ZIO
-                              .fromEither(kodec.decode(cursor.key()))
-                              .when(seeksSuccess)
-                              .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $colName: $err", None))
-      valBuffer          <- ZIO
-                              .attemptBlocking(cursor.`val`())
-                              .when(seeksSuccess)
-                              .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $colName: $err", Some(err)))
-      seekedValue        <- ZIO
-                              .foreach(valBuffer) { rawValue =>
-                                ZIO
-                                  .fromEither(codec.decode(rawValue))
-                                  .mapError[FetchErrors](msg => CodecFailure(msg))
-                              }
-                              .when(seeksSuccess)
-                              .map(_.flatten)
-
-    } yield seekedValue.flatMap(v => seekedKey.map(k => k -> v))
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
+                          )(cw => ZIO.attemptBlocking(cw._1.close()).ignoreLogged)
+      result           <- cursorWithResult._2 match {
+                            case None                       => ZIO.none
+                            case Some((Left(_), _))         => ZIO.fail(InternalError(s"Couldn't decode key at cursor for $colName", None): FetchErrors)
+                            case Some((_, Left(err)))       => ZIO.fail(CodecFailure(err): FetchErrors)
+                            case Some((Right(k), Right(v))) => ZIO.some(k -> v)
+                          }
+    } yield result
   }
 
   private def indexFetchLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[Scope, FetchErrors, Option[TO_KEY]] = {
+    // Same fused-JNI rationale as `indexSeekLogic` above.
     for {
-      keyBuffer <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-      cursor    <- ZIO.acquireRelease(
-                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
-                   )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
-      found     <- ZIO
-                     .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
-                     .mapError[FetchErrors](e => InternalError(s"Get error: $e", Some(e)))
-      result    <- if (found) {
-                     for {
-                       valBuffer <- ZIO.attemptBlocking(cursor.`val`()).mapError[FetchErrors](e => InternalError(s"Val error: $e", Some(e)))
-                       decoded   <- ZIO.fromEither(toKeyCodec.decode(valBuffer)).mapError[FetchErrors](e => CodecFailure(e))
-                     } yield Some(decoded)
-                   } else ZIO.succeed(None)
+      keyBuffer        <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      cursorWithResult <- ZIO.acquireRelease(
+                            ZIO
+                              .attemptBlocking {
+                                val cursor  = dbi.openCursor(txn)
+                                val found   = cursor.get(keyBuffer, GetOp.MDB_SET)
+                                val decoded =
+                                  if (found) Some(toKeyCodec.decode(cursor.`val`()))
+                                  else None
+                                (cursor, decoded)
+                              }
+                              .mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
+                          )(cw => ZIO.attemptBlocking(cw._1.close()).ignoreLogged)
+      result           <- cursorWithResult._2 match {
+                            case None            => ZIO.none
+                            case Some(Left(err)) => ZIO.fail(CodecFailure(err): FetchErrors)
+                            case Some(Right(v))  => ZIO.some(v)
+                          }
     } yield result
   }
 
@@ -547,45 +514,33 @@ class LMDBLive(
     name: IndexName,
     position: Long
   )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[Scope, FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
+    // Same fused-JNI rationale as `indexSeekLogic` above.
     for {
-      cursor             <- ZIO.acquireRelease(
-                              ZIO
-                                .attemptBlocking(dbi.openCursor(txn))
-                                .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $name: $err", Some(err)))
-                            )(cursor =>
-                              ZIO
-                                .attemptBlocking(cursor.close())
-                                .ignoreLogged
-                            )
-      seekFirstSuccess   <- ZIO
-                              .attemptBlocking(cursor.seek(SeekOp.MDB_FIRST))
-                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
-      finalState         <- ZIO
-                              .iterate((0L, seekFirstSuccess))(state => state._1 < position && state._2) { case (i, _) =>
-                                ZIO
-                                  .attemptBlocking(cursor.seek(SeekOp.MDB_NEXT))
-                                  .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
-                                  .map(success => (i + 1, success))
+      cursorWithResult <- ZIO.acquireRelease(
+                            ZIO
+                              .attemptBlocking {
+                                val cursor  = dbi.openCursor(txn)
+                                var i       = 0L
+                                var ok      = cursor.seek(SeekOp.MDB_FIRST)
+                                while (i < position && ok) {
+                                  ok = cursor.seek(SeekOp.MDB_NEXT)
+                                  i += 1
+                                }
+                                val success = i == position && ok
+                                val decoded =
+                                  if (success) Some((keyCodec.decode(cursor.key()), toKeyCodec.decode(cursor.`val`())))
+                                  else None
+                                (cursor, decoded)
                               }
-      seeksSuccess        = finalState._1 == position && finalState._2
-      seekedKey          <- ZIO
-                              .fromEither(keyCodec.decode(cursor.key()))
-                              .when(seeksSuccess)
-                              .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $name: $err", None))
-      valBuffer          <- ZIO
-                              .attemptBlocking(cursor.`val`())
-                              .when(seeksSuccess)
-                              .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $name: $err", Some(err)))
-      seekedValue        <- ZIO
-                              .foreach(valBuffer) { rawValue =>
-                                ZIO
-                                  .fromEither(toKeyCodec.decode(rawValue))
-                                  .mapError[FetchErrors](msg => CodecFailure(msg))
-                              }
-                              .when(seeksSuccess)
-                              .map(_.flatten)
-
-    } yield seekedValue.flatMap(v => seekedKey.map(k => k -> v))
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $name: $err", Some(err)))
+                          )(cw => ZIO.attemptBlocking(cw._1.close()).ignoreLogged)
+      result           <- cursorWithResult._2 match {
+                            case None                       => ZIO.none
+                            case Some((Left(_), _))         => ZIO.fail(InternalError(s"Couldn't decode key at cursor for $name", None): FetchErrors)
+                            case Some((_, Left(err)))       => ZIO.fail(CodecFailure(err): FetchErrors)
+                            case Some((Right(k), Right(v))) => ZIO.some(k -> v)
+                          }
+    } yield result
   }
 
   private def seek[K, T](colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, Option[(K, T)]] = {
@@ -623,42 +578,29 @@ class LMDBLive(
     *   the record if found
     */
   private def seekLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, FetchErrors, Option[(K, T)]] = {
+    // Same fused-JNI rationale as `indexSeekLogic` further below.
     for {
-      cursor      <- ZIO.acquireRelease(
-                       ZIO
-                         .attemptBlocking(dbi.openCursor(txn))
-                         .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
-                     )(cursor =>
-                       ZIO
-                         .attemptBlocking(cursor.close())
-                         .ignoreLogged
-                     )
-      key         <- ZIO.foreach(recordKey)(rk => makeKeyByteBuffer(rk))
-      _           <- ZIO.foreachDiscard(key) { k =>
-                       ZIO
-                         .attemptBlocking(cursor.get(k, GetOp.MDB_SET))
-                         .mapError[FetchErrors](err => InternalError(s"Couldn't set cursor at $recordKey for $colName: $err", Some(err)))
-                     }
-      seekSuccess <- ZIO
-                       .attemptBlocking(cursor.seek(seekOperation))
-                       .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName: $err", Some(err)))
-      seekedKey   <- ZIO
-                       .fromEither(kodec.decode(cursor.key()))
-                       .when(seekSuccess)
-                       .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $colName: $err", None))
-      valBuffer   <- ZIO
-                       .attemptBlocking(cursor.`val`())
-                       .when(seekSuccess)
-                       .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $colName: $err", Some(err)))
-      seekedValue <- ZIO
-                       .foreach(valBuffer) { rawValue =>
-                         ZIO
-                           .fromEither(codec.decode(rawValue))
-                           .mapError[FetchErrors](msg => CodecFailure(msg))
-                       }
-                       .when(seekSuccess)
-                       .map(_.flatten)
-    } yield seekedValue.flatMap(v => seekedKey.map(k => k -> v))
+      keyBB            <- ZIO.foreach(recordKey)(rk => makeKeyByteBuffer(rk))
+      cursorWithResult <- ZIO.acquireRelease(
+                            ZIO
+                              .attemptBlocking {
+                                val cursor  = dbi.openCursor(txn)
+                                keyBB.foreach(k => cursor.get(k, GetOp.MDB_SET))
+                                val success = cursor.seek(seekOperation)
+                                val decoded =
+                                  if (success) Some((kodec.decode(cursor.key()), codec.decode(cursor.`val`())))
+                                  else None
+                                (cursor, decoded)
+                              }
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $colName: $err", Some(err)))
+                          )(cw => ZIO.attemptBlocking(cw._1.close()).ignoreLogged)
+      result           <- cursorWithResult._2 match {
+                            case None                       => ZIO.none
+                            case Some((Left(_), _))         => ZIO.fail(InternalError(s"Couldn't decode key at cursor for $colName", None): FetchErrors)
+                            case Some((_, Left(err)))       => ZIO.fail(CodecFailure(err): FetchErrors)
+                            case Some((Right(k), Right(v))) => ZIO.some(k -> v)
+                          }
+    } yield result
   }
 
   /** @inheritdoc */
@@ -739,7 +681,7 @@ class LMDBLive(
       _              <- ZIO.foreachDiscard(mayBeDocAfter) { docAfter =>
                           val docBytes = codec.encode(docAfter)
                           for {
-                            valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
+                            valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
                             _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
                             _           <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't update $key into $collectionName: $err", Some(err)))
                           } yield ()
@@ -778,7 +720,7 @@ class LMDBLive(
     for {
       keyBB       <- makeKeyByteBuffer(key)
       docBytes     = codec.encode(document)
-      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
+      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
       _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
       _           <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't upsertOverwrite $key into $colName: $err", Some(err)))
     } yield ()
@@ -815,7 +757,7 @@ class LMDBLive(
     for {
       keyBB       <- makeKeyByteBuffer(key)
       docBytes     = codec.encode(document)
-      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
+      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
       _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
       inserted    <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer, PutFlags.MDB_NOOVERWRITE)).mapError(err => InternalError(s"Couldn't insert $key into $colName: $err", Some(err)))
       _           <- ZIO.unless(inserted)(ZIO.fail(KeyAlreadyExists(colName, key.toString): InsertErrors))
@@ -861,7 +803,7 @@ class LMDBLive(
                         }
       docAfter        = modifier(mayBeDocBefore)
       docBytes        = codec.encode(docAfter)
-      valueBuffer    <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
+      valueBuffer    <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
       _              <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
       _              <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $key into $colName: $err", Some(err)))
     } yield docAfter
@@ -989,15 +931,15 @@ class LMDBLive(
 
   case class KeyValue[K, T](key: Either[KeyCodecError, K], value: Either[String, T])
 
-  case class KeyValueIterator[K, T](jiterator: java.util.Iterator[KeyVal[ByteBuffer]])(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]) extends Iterator[KeyValue[K, T]] {
+  private case class KeyValueIterator[K, T](jiterator: java.util.Iterator[KeyVal[ByteBuffer]])(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]) extends Iterator[KeyValue[K, T]] {
 
-    private def extractKeyVal[K, T](keyval: KeyVal[ByteBuffer])(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): KeyValue[K, T] = {
+    private def extractKeyVal[LK, LT](keyval: KeyVal[ByteBuffer])(implicit kodec: KeyCodec[LK], codec: LMDBCodec[LT]): KeyValue[LK, LT] = {
       val key   = keyval.key()
       val value = keyval.`val`()
       KeyValue(kodec.decode(key), codec.decode(value))
     }
 
-    override def hasNext: Boolean = jiterator.hasNext()
+    override def hasNext: Boolean = jiterator.hasNext
 
     override def next(): KeyValue[K, T] = {
       extractKeyVal(jiterator.next())
@@ -1117,26 +1059,25 @@ class LMDBLive(
       }
   }
 
-  /** Gets a cached index DBI handle, or opens it if no transaction is in
-    * flight on this fiber. See `getCollectionDbi` for the safety contract.
+  /** Gets a cached index DBI handle, or opens it if no transaction is in flight on this fiber. See `getCollectionDbi` for the safety contract.
     */
   private def getIndexDbi(name: IndexName, txn: Option[Txn[ByteBuffer]] = None): IO[IndexNotFound, Dbi[ByteBuffer]] = {
     openedCollectionDbisRef.get.flatMap { opened =>
       opened.get(name) match {
         case Some(d) => ZIO.succeed(d)
-        case None    =>
+        case None =>
           txn match {
             case Some(_) =>
               ZIO.fail(IndexNotFound(name))
-            case None    =>
+            case None =>
               withExclusiveDbiOpen {
                 openedCollectionDbisRef.get.flatMap { openedAgain =>
                   openedAgain.get(name) match {
                     case Some(alreadyOpened) => ZIO.succeed(alreadyOpened)
-                    case None                =>
+                    case None =>
                       for {
                         newDbi <- ZIO.attempt(env.openDbi(name, DbiFlags.MDB_DUPSORT))
-                        _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                        _ <- openedCollectionDbisRef.update(_ + (name -> newDbi))
                       } yield newDbi
                   }
                 }
@@ -1144,7 +1085,7 @@ class LMDBLive(
           }
       }
     }
-  }.mapError(_ => IndexNotFound(name))
+  }.orElseFail(IndexNotFound(name))
 
   /** Internal logic to create an index. */
   private def indexCreateLogic(name: IndexName): ZIO[Any, StorageSystemError, Unit] = withExclusiveDbiOpen {
@@ -1296,15 +1237,19 @@ class LMDBLive(
   }
 
   private def indexHasKeyLogic[FROM_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY]): ZIO[Scope, IndexErrors, Boolean] = {
+    // Same fused-JNI rationale as `indexSeekLogic`.
     for {
-      keyBuffer <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-      cursor    <- ZIO.acquireRelease(
-                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
-                   )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
-      found     <- ZIO
-                     .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
-                     .mapError(e => InternalError(s"Get error: $e", Some(e)))
-    } yield found
+      keyBuffer        <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      cursorWithResult <- ZIO.acquireRelease(
+                            ZIO
+                              .attemptBlocking {
+                                val cursor = dbi.openCursor(txn)
+                                val found  = cursor.get(keyBuffer, GetOp.MDB_SET)
+                                (cursor, found)
+                              }
+                              .mapError(e => InternalError(s"Cursor error: $e", Some(e)))
+                          )(cw => ZIO.attemptBlocking(cw._1.close()).ignoreLogged)
+    } yield cursorWithResult._2
   }
 
   private def indexSeek[FROM_KEY, TO_KEY](name: IndexName, recordKey: Option[FROM_KEY], seekOperation: SeekOp)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
@@ -1331,42 +1276,43 @@ class LMDBLive(
     keyCodec: KeyCodec[FROM_KEY],
     toKeyCodec: KeyCodec[TO_KEY]
   ): ZIO[Scope, FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
+    // Fuse open-cursor -> get -> seek -> key/val into a single
+    // attemptBlocking so the entire JNI sequence runs on one blocking-pool
+    // thread, atomically. Without this, fiber interruption between two
+    // consecutive `attemptBlocking` calls can fire the cursor's scope
+    // finalizer (cursor.close + txn.close) — freeing the txn's `mt_dbxs[]`
+    // — while the next blocking-pool worker still holds the cursor for the
+    // following JNI call. That is the use-after-free observed at
+    // `mdb_page_search+0x53` in sotohp.
     for {
-      cursor      <- ZIO.acquireRelease(
-                       ZIO
-                         .attemptBlocking(dbi.openCursor(txn))
-                         .mapError[FetchErrors](err => InternalError(s"Couldn't acquire iterable on $name: $err", Some(err)))
-                     )(cursor =>
-                       ZIO
-                         .attemptBlocking(cursor.close())
-                         .ignoreLogged
-                     )
-      key         <- ZIO.foreach(recordKey)(rk => makeKeyByteBuffer(rk).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e })
-      _           <- ZIO.foreachDiscard(key) { k =>
-                       ZIO
-                         .attemptBlocking(cursor.get(k, GetOp.MDB_SET))
-                         .mapError[FetchErrors](err => InternalError(s"Couldn't set cursor at $recordKey for $name: $err", Some(err)))
-                     }
-      seekSuccess <- ZIO
-                       .attemptBlocking(cursor.seek(seekOperation))
-                       .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
-      seekedKey   <- ZIO
-                       .fromEither(keyCodec.decode(cursor.key()))
-                       .when(seekSuccess)
-                       .mapError[FetchErrors](err => InternalError(s"Couldn't get key at cursor for $name: $err", None))
-      valBuffer   <- ZIO
-                       .attemptBlocking(cursor.`val`())
-                       .when(seekSuccess)
-                       .mapError[FetchErrors](err => InternalError(s"Couldn't get value at cursor for stored $name: $err", Some(err)))
-      seekedValue <- ZIO
-                       .foreach(valBuffer) { rawValue =>
-                         ZIO
-                           .fromEither(toKeyCodec.decode(rawValue))
-                           .mapError[FetchErrors](msg => CodecFailure(msg))
-                       }
-                       .when(seekSuccess)
-                       .map(_.flatten)
-    } yield seekedValue.flatMap(v => seekedKey.map(k => k -> v))
+      keyBB            <- ZIO.foreach(recordKey)(rk => makeKeyByteBuffer(rk).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e })
+      cursorWithResult <- ZIO.acquireRelease(
+                            ZIO
+                              .attemptBlocking {
+                                val cursor      = dbi.openCursor(txn)
+                                keyBB.foreach(k => cursor.get(k, GetOp.MDB_SET))
+                                val seekSuccess = cursor.seek(seekOperation)
+                                if (seekSuccess) {
+                                  val k    = cursor.key()
+                                  val v    = cursor.`val`()
+                                  val dkey = keyCodec.decode(k)
+                                  val dval = toKeyCodec.decode(v)
+                                  (cursor, Some((dkey, dval)))
+                                } else (cursor, None)
+                              }
+                              .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
+                          )(cw => ZIO.attemptBlocking(cw._1.close()).ignoreLogged)
+      result           <- ZIO.fromEither(
+                            cursorWithResult._2 match {
+                              case None           => Right(None)
+                              case Some((dk, dv)) =>
+                                for {
+                                  k <- dk.left.map(e => InternalError(s"Couldn't decode key for $name: $e", None): FetchErrors)
+                                  v <- dv.left.map(e => CodecFailure(e): FetchErrors)
+                                } yield Some(k -> v)
+                            }
+                          )
+    } yield result
   }
 
   /** @inheritdoc */
@@ -1445,26 +1391,28 @@ class LMDBLive(
     keyCodec: KeyCodec[FROM_KEY],
     toKeyCodec: KeyCodec[TO_KEY]
   ): ZIO[Scope, IndexErrors, Boolean] = {
+    // Same fused-JNI rationale as `indexSeekLogic`.
     for {
-      keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-      valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-      cursor      <- ZIO.acquireRelease(
-                       ZIO.attemptBlocking(dbi.openCursor(txn)).mapError(e => InternalError(s"Cursor error: $e", Some(e)))
-                     )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
-      found       <- ZIO
-                       .attemptBlocking {
-                         @scala.annotation.tailrec
-                         def findValue(): Boolean = {
-                           if (cursor.`val`().compareTo(valueBuffer) == 0) true
-                           else if (cursor.seek(SeekOp.MDB_NEXT_DUP)) findValue()
-                           else false
-                         }
-
-                         if (cursor.get(keyBuffer, GetOp.MDB_SET)) findValue()
-                         else false
-                       }
-                       .mapError(e => InternalError(s"Get error: $e", Some(e)))
-    } yield found
+      keyBuffer        <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      valueBuffer      <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
+      cursorWithResult <- ZIO.acquireRelease(
+                            ZIO
+                              .attemptBlocking {
+                                val cursor               = dbi.openCursor(txn)
+                                @scala.annotation.tailrec
+                                def findValue(): Boolean = {
+                                  if (cursor.`val`().compareTo(valueBuffer) == 0) true
+                                  else if (cursor.seek(SeekOp.MDB_NEXT_DUP)) findValue()
+                                  else false
+                                }
+                                val found                =
+                                  if (cursor.get(keyBuffer, GetOp.MDB_SET)) findValue()
+                                  else false
+                                (cursor, found)
+                              }
+                              .mapError(e => InternalError(s"Cursor error: $e", Some(e)))
+                          )(cw => ZIO.attemptBlocking(cw._1.close()).ignoreLogged)
+    } yield cursorWithResult._2
   }
 
   /** @inheritdoc */
@@ -1595,27 +1543,25 @@ class LMDBLive(
     }
   }
 
-  /** Gets a cached multi-collection DBI handle, or opens it if no transaction
-    * is in flight on this fiber. See `getCollectionDbi` for the safety
-    * contract.
+  /** Gets a cached multi-collection DBI handle, or opens it if no transaction is in flight on this fiber. See `getCollectionDbi` for the safety contract.
     */
   private def getMultiDbi(name: CollectionName, txn: Option[Txn[ByteBuffer]] = None): IO[CollectionNotFound, Dbi[ByteBuffer]] = {
     openedCollectionDbisRef.get.flatMap { opened =>
       opened.get(name) match {
         case Some(d) => ZIO.succeed(d)
-        case None    =>
+        case None =>
           txn match {
             case Some(_) =>
               ZIO.fail(CollectionNotFound(name))
-            case None    =>
+            case None =>
               withExclusiveDbiOpen {
                 openedCollectionDbisRef.get.flatMap { openedAgain =>
                   openedAgain.get(name) match {
                     case Some(alreadyOpened) => ZIO.succeed(alreadyOpened)
-                    case None                =>
+                    case None =>
                       for {
                         newDbi <- ZIO.attempt(env.openDbi(name, DbiFlags.MDB_DUPSORT))
-                        _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                        _ <- openedCollectionDbisRef.update(_ + (name -> newDbi))
                       } yield newDbi
                   }
                 }
@@ -1623,7 +1569,7 @@ class LMDBLive(
           }
       }
     }
-  }.mapError(_ => CollectionNotFound(name))
+  }.orElseFail(CollectionNotFound(name))
 
   private def multiCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = withExclusiveDbiOpen {
     for {
@@ -1756,7 +1702,7 @@ class LMDBLive(
     for {
       keyBB       <- makeKeyByteBuffer(key)
       docBytes     = codec.encode(document)
-      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
+      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
       _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
       _           <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't multiPut $key into $colName: $err", Some(err)))
     } yield ()
@@ -1780,7 +1726,7 @@ class LMDBLive(
     for {
       keyBB       <- makeKeyByteBuffer(key)
       docBytes     = codec.encode(document)
-      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.size)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
+      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
       _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
       deleted     <- ZIO.attempt(dbi.delete(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't multiDelete $key from $colName: $err", Some(err)))
     } yield deleted
