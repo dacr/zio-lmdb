@@ -97,6 +97,50 @@ object KeyCodec {
     override def width: Option[Int] = Some(8)
   }
 
+  given intKeyCodec: KeyCodec[Int] = new KeyCodec[Int] {
+    // Big-endian with sign-bit flip so the lexicographic order of the encoded
+    // bytes matches the natural numeric order on Int (including negatives).
+    private val signBias: Int = Int.MinValue
+
+    override def encode(key: Int): Array[Byte] = {
+      val biased = key ^ signBias
+      val out    = new Array[Byte](4)
+      out(0) = (biased >>> 24).toByte
+      out(1) = (biased >>> 16).toByte
+      out(2) = (biased >>> 8).toByte
+      out(3) = biased.toByte
+      out
+    }
+
+    override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, Int] = {
+      if (keyBytes.remaining() < 4) Left(InsufficientBytes(4, keyBytes.remaining()))
+      else Right(keyBytes.getInt ^ signBias)
+    }
+
+    override def width: Option[Int] = Some(4)
+  }
+
+  given shortKeyCodec: KeyCodec[Short] = new KeyCodec[Short] {
+    // Big-endian with sign-bit flip so the lexicographic order of the encoded
+    // bytes matches the natural numeric order on Short (including negatives).
+    private val signBias: Int = 0x8000
+
+    override def encode(key: Short): Array[Byte] = {
+      val biased = (key & 0xffff) ^ signBias
+      val out    = new Array[Byte](2)
+      out(0) = (biased >>> 8).toByte
+      out(1) = biased.toByte
+      out
+    }
+
+    override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, Short] = {
+      if (keyBytes.remaining() < 2) Left(InsufficientBytes(2, keyBytes.remaining()))
+      else Right(((keyBytes.getShort & 0xffff) ^ signBias).toShort)
+    }
+
+    override def width: Option[Int] = Some(2)
+  }
+
   given uuidKeyCodec: KeyCodec[UUID] = new KeyCodec[UUID] {
     override def encode(key: UUID): Array[Byte] = UUIDTools.uuidToBytes(key)
 

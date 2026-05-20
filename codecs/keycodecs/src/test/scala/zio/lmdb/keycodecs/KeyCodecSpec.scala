@@ -66,6 +66,64 @@ object KeyCodecSpec extends ZIOSpecDefault {
         assert(decoded)(isLeft(equalTo(KeyCodecError.InsufficientBytes(8, 7))))
       }
     ),
+    suite("Int codec")(
+      test("roundtrip encoding/decoding") {
+        check(Gen.int) { i =>
+          val codec   = summon[KeyCodec[Int]]
+          val encoded = codec.encode(i)
+          val buffer  = ByteBuffer.allocateDirect(encoded.length).put(encoded).flip()
+          val decoded = codec.decode(buffer)
+          assert(encoded.length)(equalTo(4)) &&
+          assert(decoded)(isRight(equalTo(i)))
+        }
+      },
+      test("byte-order matches numeric order") {
+        check(Gen.int, Gen.int) { (a, b) =>
+          val codec = summon[KeyCodec[Int]]
+          val ea    = codec.encode(a)
+          val eb    = codec.encode(b)
+          val cmp   = Arrays.compareUnsigned(ea, eb)
+          assertTrue((cmp < 0) == (a < b)) &&
+          assertTrue((cmp > 0) == (a > b)) &&
+          assertTrue((cmp == 0) == (a == b))
+        }
+      },
+      test("decoding fails when buffer has insufficient bytes") {
+        val codec   = summon[KeyCodec[Int]]
+        val buffer  = ByteBuffer.allocateDirect(3)
+        val decoded = codec.decode(buffer)
+        assert(decoded)(isLeft(equalTo(KeyCodecError.InsufficientBytes(4, 3))))
+      }
+    ),
+    suite("Short codec")(
+      test("roundtrip encoding/decoding") {
+        check(Gen.short) { s =>
+          val codec   = summon[KeyCodec[Short]]
+          val encoded = codec.encode(s)
+          val buffer  = ByteBuffer.allocateDirect(encoded.length).put(encoded).flip()
+          val decoded = codec.decode(buffer)
+          assert(encoded.length)(equalTo(2)) &&
+          assert(decoded)(isRight(equalTo(s)))
+        }
+      },
+      test("byte-order matches numeric order") {
+        check(Gen.short, Gen.short) { (a, b) =>
+          val codec = summon[KeyCodec[Short]]
+          val ea    = codec.encode(a)
+          val eb    = codec.encode(b)
+          val cmp   = Arrays.compareUnsigned(ea, eb)
+          assertTrue((cmp < 0) == (a < b)) &&
+          assertTrue((cmp > 0) == (a > b)) &&
+          assertTrue((cmp == 0) == (a == b))
+        }
+      },
+      test("decoding fails when buffer has insufficient bytes") {
+        val codec   = summon[KeyCodec[Short]]
+        val buffer  = ByteBuffer.allocateDirect(1)
+        val decoded = codec.decode(buffer)
+        assert(decoded)(isLeft(equalTo(KeyCodecError.InsufficientBytes(2, 1))))
+      }
+    ),
     suite("UUID codec")(
       test("roundtrip encoding/decoding") {
         check(Gen.uuid) { uuid =>

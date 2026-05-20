@@ -10,7 +10,7 @@
 - Add `insert` operation to improve user experience 
 - Add some basic/naive performance tests
 - Fix concurrency-read crashes under a heavy load
-- Add new key binary codecs (Long)
+- Add new key binary codecs (Long, Int, Short)
 
 ## 2.7 - 2026-04-12
 
