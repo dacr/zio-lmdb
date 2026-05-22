@@ -135,6 +135,32 @@ class LMDBLive(
       } yield key
   }
 
+  /** Position `cursor` for a `seek` operation that may carry an anchor key, returning `true` iff the cursor lands on a valid entry.
+    *
+    * Why this exists: a naive `cursor.get(anchor, MDB_SET) + cursor.seek(op)` is unsafe — if `MDB_SET` returns false the cursor is in
+    * the LMDB uninitialized state, and the subsequent `cursor.seek(MDB_NEXT/MDB_PREV)` routes through `mdb_cursor_first` → `mdb_page_search`,
+    * which trips the internal `mdb_cassert(mc, root > 1)` and aborts the JVM with SIGABRT. Using `MDB_SET_RANGE` (position at first key >= anchor)
+    * for ranged navigation avoids that path entirely and gives well-defined semantics whether the anchor is present in the DB or not.
+    *
+    * Must be called inside a single `attemptBlocking` block alongside `dbi.openCursor` — all calls here are synchronous JNI.
+    */
+  private def positionCursorForSeek(cursor: Cursor[ByteBuffer], anchor: Option[ByteBuffer], seekOp: SeekOp): Boolean = {
+    (anchor, seekOp) match {
+      case (None, op)                  =>
+        cursor.seek(op)
+      case (Some(k), SeekOp.MDB_NEXT)  =>
+        if (!cursor.get(k, GetOp.MDB_SET_RANGE)) false
+        else if (cursor.key().equals(k)) cursor.seek(SeekOp.MDB_NEXT) // anchor present: advance strictly past
+        else true                                                     // already positioned at the first key > anchor
+      case (Some(k), SeekOp.MDB_PREV)  =>
+        if (cursor.get(k, GetOp.MDB_SET_RANGE)) cursor.seek(SeekOp.MDB_PREV)
+        else cursor.seek(SeekOp.MDB_LAST)                             // no key >= anchor: biggest key (if any) is < anchor
+      case (Some(k), op)               =>
+        // For other anchored ops (e.g. MDB_NEXT_DUP) exact-key positioning is required.
+        cursor.get(k, GetOp.MDB_SET) && cursor.seek(op)
+    }
+  }
+
   /** Gets a cached collection DBI handle, or opens it if no transaction is already in flight on this fiber.
     *
     * SAFETY: we deliberately refuse to open a new DBI when called from inside an existing transaction (`txn = Some(_)`). Opening a DBI inside a read transaction creates a handle that is private to that txn (LMDB does not commit it to `me_dbs[]`), so
@@ -157,7 +183,7 @@ class LMDBLive(
                     case None =>
                       for {
                         newDbi <- ZIO.attempt(env.openDbi(name))
-                        _ <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                        _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
                       } yield newDbi
                   }
                 }
@@ -256,17 +282,17 @@ class LMDBLive(
 
   /** Internal logic to create a collection. */
   private def collectionCreateLogic(name: CollectionName): ZIO[Any, StorageSystemError, Unit] = withExclusiveDbiOpen {
-    for {
-      openedCollectionDbis <- openedCollectionDbisRef.get
-      _                    <- ZIO.when(!openedCollectionDbis.contains(name)) {
-                                for {
-                                  newDbi <- ZIO
-                                              .attempt(env.openDbi(name, DbiFlags.MDB_CREATE))
-                                              .mapError(err => InternalError(s"Couldn't create DB $name: $err", Some(err)))
-                                  _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
-                                } yield ()
-                              }
-    } yield ()
+      for {
+        openedCollectionDbis <- openedCollectionDbisRef.get
+        _                    <- ZIO.when(!openedCollectionDbis.contains(name)) {
+                                  for {
+                                    newDbi <- ZIO
+                                                .attempt(env.openDbi(name, DbiFlags.MDB_CREATE))
+                                                .mapError(err => InternalError(s"Couldn't create DB $name: $err", Some(err)))
+                                    _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                                  } yield ()
+                                }
+      } yield ()
   }
 
   /** Scoped write transaction. */
@@ -579,16 +605,16 @@ class LMDBLive(
     */
   private def seekLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, recordKey: Option[K], seekOperation: SeekOp)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, FetchErrors, Option[(K, T)]] = {
     // Same fused-JNI rationale as `indexSeekLogic` further below.
+    // Anchored next/prev positioning is delegated to `positionCursorForSeek` (see its docstring for the SET_RANGE rationale).
     for {
       keyBB            <- ZIO.foreach(recordKey)(rk => makeKeyByteBuffer(rk))
       cursorWithResult <- ZIO.acquireRelease(
                             ZIO
                               .attemptBlocking {
                                 val cursor  = dbi.openCursor(txn)
-                                keyBB.foreach(k => cursor.get(k, GetOp.MDB_SET))
-                                val success = cursor.seek(seekOperation)
                                 val decoded =
-                                  if (success) Some((kodec.decode(cursor.key()), codec.decode(cursor.`val`())))
+                                  if (positionCursorForSeek(cursor, keyBB, seekOperation))
+                                    Some((kodec.decode(cursor.key()), codec.decode(cursor.`val`())))
                                   else None
                                 (cursor, decoded)
                               }
@@ -1077,7 +1103,7 @@ class LMDBLive(
                     case None =>
                       for {
                         newDbi <- ZIO.attempt(env.openDbi(name, DbiFlags.MDB_DUPSORT))
-                        _ <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                        _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
                       } yield newDbi
                   }
                 }
@@ -1089,17 +1115,17 @@ class LMDBLive(
 
   /** Internal logic to create an index. */
   private def indexCreateLogic(name: IndexName): ZIO[Any, StorageSystemError, Unit] = withExclusiveDbiOpen {
-    for {
-      openedCollectionDbis <- openedCollectionDbisRef.get
-      _                    <- ZIO.when(!openedCollectionDbis.contains(name)) {
-                                for {
-                                  newDbi <- ZIO
-                                              .attempt(env.openDbi(name, DbiFlags.MDB_CREATE, DbiFlags.MDB_DUPSORT))
-                                              .mapError(err => InternalError(s"Couldn't create Index $name: $err", Some(err)))
-                                  _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
-                                } yield ()
-                              }
-    } yield ()
+      for {
+        openedCollectionDbis <- openedCollectionDbisRef.get
+        _                    <- ZIO.when(!openedCollectionDbis.contains(name)) {
+                                  for {
+                                    newDbi <- ZIO
+                                                .attempt(env.openDbi(name, DbiFlags.MDB_CREATE, DbiFlags.MDB_DUPSORT))
+                                                .mapError(err => InternalError(s"Couldn't create Index $name: $err", Some(err)))
+                                    _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                                  } yield ()
+                                }
+      } yield ()
   }
 
   /** Allocates an index if it doesn't exist. */
@@ -1289,16 +1315,12 @@ class LMDBLive(
       cursorWithResult <- ZIO.acquireRelease(
                             ZIO
                               .attemptBlocking {
-                                val cursor      = dbi.openCursor(txn)
-                                keyBB.foreach(k => cursor.get(k, GetOp.MDB_SET))
-                                val seekSuccess = cursor.seek(seekOperation)
-                                if (seekSuccess) {
-                                  val k    = cursor.key()
-                                  val v    = cursor.`val`()
-                                  val dkey = keyCodec.decode(k)
-                                  val dval = toKeyCodec.decode(v)
-                                  (cursor, Some((dkey, dval)))
-                                } else (cursor, None)
+                                val cursor  = dbi.openCursor(txn)
+                                val decoded =
+                                  if (positionCursorForSeek(cursor, keyBB, seekOperation))
+                                    Some((keyCodec.decode(cursor.key()), toKeyCodec.decode(cursor.`val`())))
+                                  else None
+                                (cursor, decoded)
                               }
                               .mapError[FetchErrors](err => InternalError(s"Couldn't seek cursor for $name: $err", Some(err)))
                           )(cw => ZIO.attemptBlocking(cw._1.close()).ignoreLogged)
@@ -1561,7 +1583,7 @@ class LMDBLive(
                     case None =>
                       for {
                         newDbi <- ZIO.attempt(env.openDbi(name, DbiFlags.MDB_DUPSORT))
-                        _ <- openedCollectionDbisRef.update(_ + (name -> newDbi))
+                        _      <- openedCollectionDbisRef.update(_ + (name -> newDbi))
                       } yield newDbi
                   }
                 }
