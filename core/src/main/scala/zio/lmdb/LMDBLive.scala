@@ -124,19 +124,55 @@ class LMDBLive(
   private def withReadLock[R, E, A](effect: ZIO[R, E, A]): ZIO[R, E, A] =
     readSemaphore.withPermit(effect).onExecutor(readExecutor)
 
-  /** Helper to create a direct ByteBuffer for a given key.
+  /** Bounded checkout/checkin pool of direct ByteBuffers sized to `env.getMaxKeySize`, used for key buffers that must outlive a single JNI call.
     *
-    * Use only when the buffer's lifetime must outlive a single JNI call — i.e. as the `startAfter` anchor passed to `dbi.iterate` / `KeyRange`, which `CursorIterable` retains for the whole iteration. For ordinary point operations,
-    * use `fillKeyScratch` / `fillValueScratch` instead: those reuse a per-thread DirectByteBuffer and avoid the millions of short-lived `allocateDirect` wrappers that otherwise pile up faster than the JVM Cleaner can drain them.
+    * Why this exists: any key buffer passed to `dbi.iterate` (via `KeyRange.greaterThan*`) or to `dbi.openCursor` + `cursor.get` is retained by lmdbjava's `CursorIterable` / `Cursor` for the entire cursor lifetime — sometimes thousands of yield boundaries.
+    * That rules out the per-thread `keyScratch` ThreadLocal (which assumes single-JNI-call atomicity). Without pooling, each cursor open allocates a fresh `DirectByteBuffer`, which on a heap-constrained JVM accumulates in the Cleaner backlog and bloats off-heap memory.
+    *
+    * Capacity policy: every buffer is allocated at `env.getMaxKeySize` (LMDB's compile-time hard cap, typically 511 bytes) — uniform size class avoids size-matching at borrow time and keeps the pool's peak footprint tiny (`poolMaxSize * maxKeySize` ≈ 32 KB at default settings).
+    *
+    * Growth policy: unbounded `ConcurrentLinkedQueue`; we soft-cap retention at `poolMaxSize` on release (excess buffers are dropped and GC-reclaimed). Borrow on empty pool allocates fresh — bounded by simultaneous-cursor count, which is itself bounded by `readSemaphore` permits + 1 writer.
     */
-  private def makeKeyByteBuffer[K](id: K)(implicit kodec: KeyCodec[K]): IO[KeyErrors, ByteBuffer] = {
+  private val keyBufferPoolMaxSize: Int                                     = 64
+  private val keyBufferPool: java.util.concurrent.ConcurrentLinkedQueue[ByteBuffer] =
+    new java.util.concurrent.ConcurrentLinkedQueue[ByteBuffer]()
+  private val keyBufferPoolSize: java.util.concurrent.atomic.AtomicInteger  =
+    new java.util.concurrent.atomic.AtomicInteger(0)
+
+  private def borrowKeyBuffer(): ByteBuffer = {
+    val pooled = keyBufferPool.poll()
+    if (pooled != null) { keyBufferPoolSize.decrementAndGet(); pooled.clear(); pooled }
+    else ByteBuffer.allocateDirect(env.getMaxKeySize.toInt)
+  }
+
+  private def releaseKeyBuffer(buf: ByteBuffer): Unit = {
+    if (buf.capacity() == env.getMaxKeySize.toInt && keyBufferPoolSize.get() < keyBufferPoolMaxSize) {
+      buf.clear()
+      keyBufferPool.offer(buf)
+      keyBufferPoolSize.incrementAndGet()
+    }
+    // else drop; native bytes will be reclaimed by the Cleaner on the next GC
+  }
+
+  /** Borrow a key buffer from the pool, fill it with the encoded key, and register its release as a finalizer on the current `Scope`.
+    *
+    * Use for anchor / `startAfter` buffers handed to `dbi.iterate` or `dbi.openCursor` — i.e. anywhere the buffer must survive past a single `attemptBlocking` boundary. The buffer is returned to the pool when the scope closes (after the cursor's
+    * own finalizer has already released the JNI-side reference, thanks to LIFO finalizer order). For ordinary point operations, use `fillKeyScratch` / `fillValueScratch` instead — those reuse a per-thread buffer with zero allocation and zero pool contention.
+    */
+  private def borrowKeyBufferScoped[K](id: K)(implicit kodec: KeyCodec[K]): ZIO[Scope, KeyErrors, ByteBuffer] = {
     val keyBytes: Array[Byte] = kodec.encode(id)
-    if (keyBytes.length > env.getMaxKeySize) ZIO.fail(OverSizedKey(id.toString, keyBytes.length, env.getMaxKeySize)) // TODO id.toString probably not the best choice
+    if (keyBytes.length > env.getMaxKeySize)
+      ZIO.fail(OverSizedKey(id.toString, keyBytes.length, env.getMaxKeySize))
     else
-      for {
-        key <- ZIO.attempt(ByteBuffer.allocateDirect(keyBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for key: $err", Some(err)))
-        _   <- ZIO.attempt(key.put(keyBytes).flip).mapError(err => InternalError(s"Couldn't copy key bytes to buffer: $err", Some(err)))
-      } yield key
+      ZIO.acquireRelease(
+        ZIO
+          .attempt {
+            val buf = borrowKeyBuffer()
+            buf.put(keyBytes).flip()
+            buf
+          }
+          .mapError(err => InternalError(s"Couldn't borrow buffer for key: $err", Some(err)))
+      )(buf => ZIO.succeed(releaseKeyBuffer(buf)))
   }
 
   /** Per-thread scratch DirectByteBuffer for keys.
@@ -669,7 +705,7 @@ class LMDBLive(
     // Same fused-JNI rationale as `indexSeekLogic` further below.
     // Anchored next/prev positioning is delegated to `positionCursorForSeek` (see its docstring for the SET_RANGE rationale).
     for {
-      keyBB            <- ZIO.foreach(recordKey)(rk => makeKeyByteBuffer(rk))
+      keyBB            <- ZIO.foreach(recordKey)(rk => borrowKeyBufferScoped(rk))
       cursorWithResult <- ZIO.acquireRelease(
                             ZIO
                               .attemptBlocking {
@@ -1010,7 +1046,7 @@ class LMDBLive(
     limit: Option[Long] = None
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, CollectErrors, List[T]] = {
     for {
-      startAfterBB <- ZIO.foreach(startAfter)(makeKeyByteBuffer)
+      startAfterBB <- ZIO.foreach(startAfter)(borrowKeyBufferScoped(_))
       iterable     <- ZIO.acquireRelease(
                         ZIO
                           .attempt(dbi.iterate(txn, makeRange(startAfterBB, backward)))
@@ -1109,7 +1145,7 @@ class LMDBLive(
     backward: Boolean
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, T]] = {
     for {
-      startAfterBB <- ZIO.foreach(startAfter)(makeKeyByteBuffer)
+      startAfterBB <- ZIO.foreach(startAfter)(borrowKeyBufferScoped(_))
       iterable     <- ZIO.acquireRelease(
                         ZIO
                           .attempt(dbi.iterate(txn, makeRange(startAfterBB, backward)))
@@ -1166,7 +1202,7 @@ class LMDBLive(
     backward: Boolean
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, (K, T)]] = {
     for {
-      startAfterBB <- ZIO.foreach(startAfter)(makeKeyByteBuffer)
+      startAfterBB <- ZIO.foreach(startAfter)(borrowKeyBufferScoped(_))
       iterable     <- ZIO.acquireRelease(
                         ZIO
                           .attempt(dbi.iterate(txn, makeRange(startAfterBB, backward)))
@@ -1423,7 +1459,7 @@ class LMDBLive(
     // following JNI call. That is the use-after-free observed at
     // `mdb_page_search+0x53` in sotohp.
     for {
-      keyBB            <- ZIO.foreach(recordKey)(rk => makeKeyByteBuffer(rk).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e })
+      keyBB            <- ZIO.foreach(recordKey)(rk => borrowKeyBufferScoped(rk).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e })
       cursorWithResult <- ZIO.acquireRelease(
                             ZIO
                               .attemptBlocking {

@@ -11,6 +11,7 @@
 - Add some basic/naive performance tests
 - Fix concurrency-read crashes under a heavy load
 - Add new key binary codecs (Long, Int, Short)
+- Fix direct buffers memory leak
 
 ## 2.7 - 2026-04-12
 
