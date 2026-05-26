@@ -124,7 +124,11 @@ class LMDBLive(
   private def withReadLock[R, E, A](effect: ZIO[R, E, A]): ZIO[R, E, A] =
     readSemaphore.withPermit(effect).onExecutor(readExecutor)
 
-  /** Helper to create a direct ByteBuffer for a given key. */
+  /** Helper to create a direct ByteBuffer for a given key.
+    *
+    * Use only when the buffer's lifetime must outlive a single JNI call — i.e. as the `startAfter` anchor passed to `dbi.iterate` / `KeyRange`, which `CursorIterable` retains for the whole iteration. For ordinary point operations,
+    * use `fillKeyScratch` / `fillValueScratch` instead: those reuse a per-thread DirectByteBuffer and avoid the millions of short-lived `allocateDirect` wrappers that otherwise pile up faster than the JVM Cleaner can drain them.
+    */
   private def makeKeyByteBuffer[K](id: K)(implicit kodec: KeyCodec[K]): IO[KeyErrors, ByteBuffer] = {
     val keyBytes: Array[Byte] = kodec.encode(id)
     if (keyBytes.length > env.getMaxKeySize) ZIO.fail(OverSizedKey(id.toString, keyBytes.length, env.getMaxKeySize)) // TODO id.toString probably not the best choice
@@ -133,6 +137,45 @@ class LMDBLive(
         key <- ZIO.attempt(ByteBuffer.allocateDirect(keyBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for key: $err", Some(err)))
         _   <- ZIO.attempt(key.put(keyBytes).flip).mapError(err => InternalError(s"Couldn't copy key bytes to buffer: $err", Some(err)))
       } yield key
+  }
+
+  /** Per-thread scratch DirectByteBuffer for keys.
+    *
+    * Sized once to `env.getMaxKeySize` (LMDB hard-caps key length at compile time; default 511 bytes) so every encoded key fits without reallocation. The buffer is filled and consumed inside a single `ZIO.attempt` block,
+    * so no fiber yield can interleave another op on the same thread. Read and write executors are dedicated pools, so no foreign code touches this ThreadLocal.
+    */
+  private val keyScratch: ThreadLocal[ByteBuffer] = ThreadLocal.withInitial { () =>
+    ByteBuffer.allocateDirect(env.getMaxKeySize.toInt)
+  }
+
+  /** Per-thread scratch DirectByteBuffer for DUPSORT values (where `dbi.reserve` is not allowed).
+    *
+    * Grows on demand and never shrinks, so steady-state allocation is zero once the largest value size has been seen on a thread.
+    */
+  private val valueScratch: ThreadLocal[ByteBuffer] = new ThreadLocal[ByteBuffer]
+
+  /** Fill the per-thread key scratch buffer with `bytes` and return it positioned and flipped. */
+  private def fillKeyScratch(bytes: Array[Byte]): ByteBuffer = {
+    val buf = keyScratch.get()
+    buf.clear()
+    buf.put(bytes)
+    buf.flip()
+    buf
+  }
+
+  /** Fill the per-thread value scratch buffer with `bytes`, growing the buffer if needed, and return it positioned and flipped. */
+  private def fillValueScratch(bytes: Array[Byte]): ByteBuffer = {
+    val current = valueScratch.get()
+    val buf     = if (current != null && current.capacity() >= bytes.length) current
+                  else {
+                    val grown = ByteBuffer.allocateDirect(bytes.length)
+                    valueScratch.set(grown)
+                    grown
+                  }
+    buf.clear()
+    buf.put(bytes)
+    buf.flip()
+    buf
   }
 
   /** Position `cursor` for a `seek` operation that may carry an anchor key, returning `true` iff the cursor lands on a valid entry.
@@ -412,15 +455,24 @@ class LMDBLive(
   }
 
   private def deleteLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Option[T]] = {
-    for {
-      keyBB         <- makeKeyByteBuffer(key)
-      found         <- ZIO.attempt(Option(dbi.get(txn, keyBB))).mapError[DeleteErrors](err => InternalError(s"Couldn't fetch $key for delete on $colName: $err", Some(err)))
-      mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
-      mayBeDoc      <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                         ZIO.fromEither(codec.decode(rawValue)).mapError[DeleteErrors](msg => CodecFailure(msg))
-                       }
-      _             <- ZIO.attempt(dbi.delete(txn, keyBB)).mapError[DeleteErrors](err => InternalError(s"Couldn't delete $key from $colName: $err", Some(err)))
-    } yield mayBeDoc
+    ZIO
+      .attempt {
+        val keyBytes = kodec.encode(key)
+        if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): DeleteErrors)
+        else {
+          val keyBB = fillKeyScratch(keyBytes)
+          val found = Option(dbi.get(txn, keyBB))
+          val mayBeDoc = found.map(_ => codec.decode(txn.`val`()))
+          val _ = dbi.delete(txn, keyBB)
+          mayBeDoc match {
+            case None              => Right(None)
+            case Some(Right(v))    => Right(Some(v))
+            case Some(Left(msg))   => Left(CodecFailure(msg): DeleteErrors)
+          }
+        }
+      }
+      .mapError[DeleteErrors](err => InternalError(s"Couldn't delete $key from $colName: $err", Some(err)))
+      .flatMap(ZIO.fromEither(_))
   }
 
   /** @inheritdoc */
@@ -434,15 +486,21 @@ class LMDBLive(
   }
 
   private def fetchLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Any, FetchErrors, Option[T]] = {
-    for {
-      keyBB         <- makeKeyByteBuffer(key)
-      found         <- ZIO.attempt(Option(dbi.get(txn, keyBB))).mapError[FetchErrors](err => InternalError(s"Couldn't fetch $key on $colName: $err", Some(err)))
-      mayBeRawValue <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
-      document      <- ZIO
-                         .foreach(mayBeRawValue) { rawValue =>
-                           ZIO.fromEither(codec.decode(rawValue)).mapError[FetchErrors](msg => CodecFailure(msg))
-                         }
-    } yield document
+    ZIO
+      .attempt {
+        val keyBytes = kodec.encode(key)
+        if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): FetchErrors)
+        else {
+          val keyBB = fillKeyScratch(keyBytes)
+          if (dbi.get(txn, keyBB) == null) Right(None)
+          else codec.decode(txn.`val`()) match {
+            case Right(v)  => Right(Some(v))
+            case Left(msg) => Left(CodecFailure(msg): FetchErrors)
+          }
+        }
+      }
+      .mapError[FetchErrors](err => InternalError(s"Couldn't fetch $key on $colName: $err", Some(err)))
+      .flatMap(ZIO.fromEither(_))
   }
 
   /** @inheritdoc */
@@ -513,23 +571,27 @@ class LMDBLive(
   private def indexFetchLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[Scope, FetchErrors, Option[TO_KEY]] = {
     // Same fused-JNI rationale as `indexSeekLogic` above.
     for {
-      keyBuffer        <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
       cursorWithResult <- ZIO.acquireRelease(
                             ZIO
                               .attemptBlocking {
-                                val cursor  = dbi.openCursor(txn)
-                                val found   = cursor.get(keyBuffer, GetOp.MDB_SET)
-                                val decoded =
-                                  if (found) Some(toKeyCodec.decode(cursor.`val`()))
-                                  else None
-                                (cursor, decoded)
+                                val keyBytes = keyCodec.encode(key)
+                                if (keyBytes.length > env.getMaxKeySize) (None, Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): FetchErrors))
+                                else {
+                                  val cursor  = dbi.openCursor(txn)
+                                  val found   = cursor.get(fillKeyScratch(keyBytes), GetOp.MDB_SET)
+                                  val decoded =
+                                    if (found) Some(toKeyCodec.decode(cursor.`val`()))
+                                    else None
+                                  (Some(cursor), Right(decoded))
+                                }
                               }
                               .mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
-                          )(cw => ZIO.attemptBlocking(cw._1.close()).ignoreLogged)
+                          )(cw => ZIO.foreachDiscard(cw._1)(c => ZIO.attemptBlocking(c.close()).ignoreLogged))
       result           <- cursorWithResult._2 match {
-                            case None            => ZIO.none
-                            case Some(Left(err)) => ZIO.fail(CodecFailure(err): FetchErrors)
-                            case Some(Right(v))  => ZIO.some(v)
+                            case Left(err)             => ZIO.fail(err)
+                            case Right(None)           => ZIO.none
+                            case Right(Some(Left(e)))  => ZIO.fail(CodecFailure(e): FetchErrors)
+                            case Right(Some(Right(v))) => ZIO.some(v)
                           }
     } yield result
   }
@@ -660,10 +722,17 @@ class LMDBLive(
   }
 
   private def containsLogic[K](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): ZIO[Any, ContainsErrors, Boolean] = {
-    for {
-      keyBB <- makeKeyByteBuffer(key)
-      found <- ZIO.attempt(Option(dbi.get(txn, keyBB))).mapError[ContainsErrors](err => InternalError(s"Couldn't check $key on $colName: $err", Some(err)))
-    } yield found.isDefined
+    ZIO
+      .attempt {
+        val keyBytes = kodec.encode(key)
+        if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): ContainsErrors)
+        else {
+          val keyBB = fillKeyScratch(keyBytes)
+          Right(dbi.get(txn, keyBB) != null)
+        }
+      }
+      .mapError[ContainsErrors](err => InternalError(s"Couldn't check $key on $colName: $err", Some(err)))
+      .flatMap(ZIO.fromEither(_))
   }
 
   /** @inheritdoc */
@@ -696,23 +765,30 @@ class LMDBLive(
     *   the updated record if found
     */
   private def updateLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], collectionName: CollectionName, key: K, modifier: T => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpdateErrors, Option[T]] = {
-    for {
-      keyBB          <- makeKeyByteBuffer(key)
-      found          <- ZIO.attempt(Option(dbi.get(txn, keyBB))).mapError(err => InternalError(s"Couldn't fetch $key for update on $collectionName: $err", Some(err)))
-      mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
-      mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                          ZIO.fromEither(codec.decode(rawValue)).mapError[UpdateErrors](msg => CodecFailure(msg))
-                        }
-      mayBeDocAfter   = mayBeDocBefore.map(modifier)
-      _              <- ZIO.foreachDiscard(mayBeDocAfter) { docAfter =>
-                          val docBytes = codec.encode(docAfter)
-                          for {
-                            valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
-                            _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
-                            _           <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't update $key into $collectionName: $err", Some(err)))
-                          } yield ()
-                        }
-    } yield mayBeDocAfter
+    ZIO
+      .attempt {
+        val keyBytes = kodec.encode(key)
+        if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): UpdateErrors)
+        else {
+          val keyBB = fillKeyScratch(keyBytes)
+          if (dbi.get(txn, keyBB) == null) Right(None)
+          else
+            codec.decode(txn.`val`()) match {
+              case Left(msg)         => Left(CodecFailure(msg): UpdateErrors)
+              case Right(docBefore)  =>
+                val docAfter = modifier(docBefore)
+                val docBytes = codec.encode(docAfter)
+                // dbi.reserve returns a buffer pointing into LMDB's allocated DB page — no Java-side direct allocation. The dbi.get above invalidated txn.val(); we must rewrite the key buffer because the reserve call needs a stable
+                // key view (the previous get-call left it positioned, but lmdbjava's KV proxy reads from position to limit on every call so a re-flip would also work — re-filling is the safer invariant).
+                val keyBB2  = fillKeyScratch(keyBytes)
+                val valBB   = dbi.reserve(txn, keyBB2, docBytes.length)
+                valBB.put(docBytes)
+                Right(Some(docAfter))
+            }
+        }
+      }
+      .mapError[UpdateErrors](err => InternalError(s"Couldn't update $key into $collectionName: $err", Some(err)))
+      .flatMap(ZIO.fromEither(_))
   }
 
   /** @inheritdoc */
@@ -743,13 +819,20 @@ class LMDBLive(
     *   record content
     */
   private def upsertOverwriteLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
-    for {
-      keyBB       <- makeKeyByteBuffer(key)
-      docBytes     = codec.encode(document)
-      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
-      _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
-      _           <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't upsertOverwrite $key into $colName: $err", Some(err)))
-    } yield ()
+    ZIO
+      .attempt {
+        val keyBytes = kodec.encode(key)
+        if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): UpsertErrors)
+        else {
+          val keyBB    = fillKeyScratch(keyBytes)
+          val docBytes = codec.encode(document)
+          val valBB    = dbi.reserve(txn, keyBB, docBytes.length)
+          valBB.put(docBytes)
+          Right(())
+        }
+      }
+      .mapError[UpsertErrors](err => InternalError(s"Couldn't upsertOverwrite $key into $colName: $err", Some(err)))
+      .flatMap(ZIO.fromEither(_))
   }
 
   /** @inheritdoc */
@@ -780,14 +863,22 @@ class LMDBLive(
     *   record content
     */
   private def insertLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[InsertErrors, Unit] = {
-    for {
-      keyBB       <- makeKeyByteBuffer(key)
-      docBytes     = codec.encode(document)
-      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
-      _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
-      inserted    <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer, PutFlags.MDB_NOOVERWRITE)).mapError(err => InternalError(s"Couldn't insert $key into $colName: $err", Some(err)))
-      _           <- ZIO.unless(inserted)(ZIO.fail(KeyAlreadyExists(colName, key.toString): InsertErrors))
-    } yield ()
+    ZIO
+      .attempt {
+        val keyBytes = kodec.encode(key)
+        if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): InsertErrors)
+        else {
+          val keyBB    = fillKeyScratch(keyBytes)
+          val docBytes = codec.encode(document)
+          // NOOVERWRITE means dbi.put returns false on duplicate (clean Boolean result). We can't use dbi.reserve here because reserve throws KeyExistsException instead, which would force us to catch an exception in the hot path —
+          // dbi.put + valueScratch keeps the no-overwrite branch fast and exception-free.
+          val valBB    = fillValueScratch(docBytes)
+          if (!dbi.put(txn, keyBB, valBB, PutFlags.MDB_NOOVERWRITE)) Left(KeyAlreadyExists(colName, key.toString): InsertErrors)
+          else Right(())
+        }
+      }
+      .mapError[InsertErrors](err => InternalError(s"Couldn't insert $key into $colName: $err", Some(err)))
+      .flatMap(ZIO.fromEither(_))
   }
 
   /** @inheritdoc */
@@ -820,19 +911,30 @@ class LMDBLive(
     *   the updated or inserted record
     */
   private def upsertLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, modifier: Option[T] => T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, T] = {
-    for {
-      keyBB          <- makeKeyByteBuffer(key)
-      found          <- ZIO.attempt(Option(dbi.get(txn, keyBB))).mapError(err => InternalError(s"Couldn't fetch $key for upsert on $colName: $err", Some(err)))
-      mayBeRawValue  <- ZIO.foreach(found)(_ => ZIO.succeed(txn.`val`()))
-      mayBeDocBefore <- ZIO.foreach(mayBeRawValue) { rawValue =>
-                          ZIO.fromEither(codec.decode(rawValue)).mapError[UpsertErrors](msg => CodecFailure(msg))
-                        }
-      docAfter        = modifier(mayBeDocBefore)
-      docBytes        = codec.encode(docAfter)
-      valueBuffer    <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
-      _              <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
-      _              <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't upsert $key into $colName: $err", Some(err)))
-    } yield docAfter
+    ZIO
+      .attempt {
+        val keyBytes = kodec.encode(key)
+        if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): UpsertErrors)
+        else {
+          val keyBB         = fillKeyScratch(keyBytes)
+          val mayBeBefore   =
+            if (dbi.get(txn, keyBB) == null) Right(None: Option[T])
+            else codec.decode(txn.`val`()).map(Some(_))
+          mayBeBefore match {
+            case Left(msg)     => Left(CodecFailure(msg): UpsertErrors)
+            case Right(before) =>
+              val docAfter = modifier(before)
+              val docBytes = codec.encode(docAfter)
+              // Re-fill key scratch: lmdbjava's KV proxy was driven by the earlier dbi.get; we re-write the bytes so the buffer's position/limit are unambiguously fresh for the reserve call below.
+              val keyBB2   = fillKeyScratch(keyBytes)
+              val valBB    = dbi.reserve(txn, keyBB2, docBytes.length)
+              valBB.put(docBytes)
+              Right(docAfter)
+          }
+        }
+      }
+      .mapError[UpsertErrors](err => InternalError(s"Couldn't upsert $key into $colName: $err", Some(err)))
+      .flatMap(ZIO.fromEither(_))
   }
 
   private def makeRange(
@@ -1219,13 +1321,22 @@ class LMDBLive(
     *   target key to map to
     */
   private def indexLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Unit] = {
-    for {
-      keyBuffer   <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-      valueBuffer <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-      _           <- ZIO
-                       .attempt(dbi.put(txn, keyBuffer, valueBuffer))
-                       .mapError(err => InternalError(s"Couldn't index $key -> $targetKey in $name: $err", Some(err)))
-    } yield ()
+    ZIO
+      .attempt {
+        val keyBytes    = keyCodec.encode(key)
+        val targetBytes = toKeyCodec.encode(targetKey)
+        if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): IndexErrors)
+        else if (targetBytes.length > env.getMaxKeySize) Left(OverSizedKey(targetKey.toString, targetBytes.length, env.getMaxKeySize): IndexErrors)
+        else {
+          val keyBB = fillKeyScratch(keyBytes)
+          // DUPSORT collection: dbi.reserve is forbidden. Use the value-scratch buffer instead.
+          val valBB = fillValueScratch(targetBytes)
+          val _     = dbi.put(txn, keyBB, valBB)
+          Right(())
+        }
+      }
+      .mapError[IndexErrors](err => InternalError(s"Couldn't index $key -> $targetKey in $name: $err", Some(err)))
+      .flatMap(ZIO.fromEither(_))
   }
 
   /** @inheritdoc */
@@ -1265,17 +1376,18 @@ class LMDBLive(
   private def indexHasKeyLogic[FROM_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY)(implicit keyCodec: KeyCodec[FROM_KEY]): ZIO[Scope, IndexErrors, Boolean] = {
     // Same fused-JNI rationale as `indexSeekLogic`.
     for {
-      keyBuffer        <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-      cursorWithResult <- ZIO.acquireRelease(
-                            ZIO
-                              .attemptBlocking {
-                                val cursor = dbi.openCursor(txn)
-                                val found  = cursor.get(keyBuffer, GetOp.MDB_SET)
-                                (cursor, found)
-                              }
-                              .mapError(e => InternalError(s"Cursor error: $e", Some(e)))
-                          )(cw => ZIO.attemptBlocking(cw._1.close()).ignoreLogged)
-    } yield cursorWithResult._2
+      cursor <- ZIO.acquireRelease(
+                  ZIO.attemptBlocking(dbi.openCursor(txn)).mapError[IndexErrors](e => InternalError(s"Cursor error: $e", Some(e)))
+                )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
+      found  <- ZIO
+                  .attemptBlocking {
+                    val keyBytes = keyCodec.encode(key)
+                    if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): IndexErrors)
+                    else Right(cursor.get(fillKeyScratch(keyBytes), GetOp.MDB_SET))
+                  }
+                  .mapError[IndexErrors](e => InternalError(s"Cursor error: $e", Some(e)))
+                  .flatMap(ZIO.fromEither(_))
+    } yield found
   }
 
   private def indexSeek[FROM_KEY, TO_KEY](name: IndexName, recordKey: Option[FROM_KEY], seekOperation: SeekOp)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[FetchErrors, Option[(FROM_KEY, TO_KEY)]] = {
@@ -1415,26 +1527,32 @@ class LMDBLive(
   ): ZIO[Scope, IndexErrors, Boolean] = {
     // Same fused-JNI rationale as `indexSeekLogic`.
     for {
-      keyBuffer        <- makeKeyByteBuffer(key)(keyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-      valueBuffer      <- makeKeyByteBuffer(targetKey)(toKeyCodec).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-      cursorWithResult <- ZIO.acquireRelease(
-                            ZIO
-                              .attemptBlocking {
-                                val cursor               = dbi.openCursor(txn)
-                                @scala.annotation.tailrec
-                                def findValue(): Boolean = {
-                                  if (cursor.`val`().compareTo(valueBuffer) == 0) true
-                                  else if (cursor.seek(SeekOp.MDB_NEXT_DUP)) findValue()
-                                  else false
-                                }
-                                val found                =
-                                  if (cursor.get(keyBuffer, GetOp.MDB_SET)) findValue()
-                                  else false
-                                (cursor, found)
-                              }
-                              .mapError(e => InternalError(s"Cursor error: $e", Some(e)))
-                          )(cw => ZIO.attemptBlocking(cw._1.close()).ignoreLogged)
-    } yield cursorWithResult._2
+      cursor <- ZIO.acquireRelease(
+                  ZIO.attemptBlocking(dbi.openCursor(txn)).mapError[IndexErrors](e => InternalError(s"Cursor error: $e", Some(e)))
+                )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
+      found  <- ZIO
+                  .attemptBlocking {
+                    val keyBytes    = keyCodec.encode(key)
+                    val targetBytes = toKeyCodec.encode(targetKey)
+                    if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): IndexErrors)
+                    else if (targetBytes.length > env.getMaxKeySize) Left(OverSizedKey(targetKey.toString, targetBytes.length, env.getMaxKeySize): IndexErrors)
+                    else {
+                      // keyScratch is consumed by cursor.get(MDB_SET); valueScratch holds targetBytes for the duration of the dup-value scan.
+                      val keyBB    = fillKeyScratch(keyBytes)
+                      val valueBB  = fillValueScratch(targetBytes)
+                      @scala.annotation.tailrec
+                      def findValue(): Boolean = {
+                        if (cursor.`val`().compareTo(valueBB) == 0) true
+                        else if (cursor.seek(SeekOp.MDB_NEXT_DUP)) findValue()
+                        else false
+                      }
+                      val result   = if (cursor.get(keyBB, GetOp.MDB_SET)) findValue() else false
+                      Right(result)
+                    }
+                  }
+                  .mapError[IndexErrors](e => InternalError(s"Cursor error: $e", Some(e)))
+                  .flatMap(ZIO.fromEither(_))
+    } yield found
   }
 
   /** @inheritdoc */
@@ -1482,13 +1600,20 @@ class LMDBLive(
     *   true if the mapping was found and removed
     */
   private def unindexLogic[FROM_KEY, TO_KEY](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], name: IndexName, key: FROM_KEY, targetKey: TO_KEY)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, Boolean] = {
-    for {
-      keyBuffer   <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-      valueBuffer <- makeKeyByteBuffer(targetKey).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-      deleted     <- ZIO
-                       .attempt(dbi.delete(txn, keyBuffer, valueBuffer))
-                       .mapError(e => InternalError(s"Delete error: $e", Some(e)))
-    } yield deleted
+    ZIO
+      .attempt {
+        val keyBytes    = keyCodec.encode(key)
+        val targetBytes = toKeyCodec.encode(targetKey)
+        if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): IndexErrors)
+        else if (targetBytes.length > env.getMaxKeySize) Left(OverSizedKey(targetKey.toString, targetBytes.length, env.getMaxKeySize): IndexErrors)
+        else {
+          val keyBB   = fillKeyScratch(keyBytes)
+          val valueBB = fillValueScratch(targetBytes)
+          Right(dbi.delete(txn, keyBB, valueBB))
+        }
+      }
+      .mapError[IndexErrors](e => InternalError(s"Delete error: $e", Some(e)))
+      .flatMap(ZIO.fromEither(_))
   }
 
   /** @inheritdoc */
@@ -1517,17 +1642,21 @@ class LMDBLive(
     limitToKey: Boolean
   )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[Scope, IndexErrors, ZStream[Any, IndexErrors, (FROM_KEY, TO_KEY)]] = {
     for {
-      keyBuffer <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-
       cursor <- ZIO.acquireRelease(
                   ZIO
                     .attemptBlocking(dbi.openCursor(txn))
                     .mapError(err => InternalError(s"Couldn't acquire cursor on $name: $err", Some(err)))
                 )(cursor => ZIO.attemptBlocking(cursor.close()).ignoreLogged)
 
+      // keyScratch is consumed by cursor.get(MDB_SET) below; subsequent MDB_NEXT_DUP / MDB_NEXT iteration calls in the stream do not touch the buffer, so reuse is safe.
       found <- ZIO
-                 .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
-                 .mapError(err => InternalError(s"Seek error: $err", Some(err)))
+                 .attemptBlocking {
+                   val keyBytes = keyCodec.encode(key)
+                   if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): IndexErrors)
+                   else Right(cursor.get(fillKeyScratch(keyBytes), GetOp.MDB_SET))
+                 }
+                 .mapError[IndexErrors](err => InternalError(s"Seek error: $err", Some(err)))
+                 .flatMap(ZIO.fromEither(_))
 
     } yield {
       if (!found) ZStream.empty
@@ -1677,30 +1806,32 @@ class LMDBLive(
 
   private def multiFetchLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[Scope, FetchErrors, List[T]] = {
     for {
-      keyBuffer <- makeKeyByteBuffer(key).mapError { case e: OverSizedKey => e; case e: StorageSystemError => e }
-      cursor    <- ZIO.acquireRelease(
-                     ZIO.attemptBlocking(dbi.openCursor(txn)).mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
-                   )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
-      found     <- ZIO
-                     .attemptBlocking(cursor.get(keyBuffer, GetOp.MDB_SET))
-                     .mapError[FetchErrors](e => InternalError(s"Get error: $e", Some(e)))
-      result    <- if (found) {
-                     ZIO
-                       .attempt {
-                         val builder = List.newBuilder[T]
-                         var hasNext = true
-                         while (hasNext) {
-                           val valBuffer = cursor.`val`()
-                           codec.decode(valBuffer) match {
-                             case Right(v) => builder += v
-                             case Left(e)  => () // Ignore or fail? Let's ignore for now or we could fail. Actually, we should fail if codec fails.
-                           }
-                           hasNext = cursor.seek(SeekOp.MDB_NEXT_DUP)
-                         }
-                         builder.result()
-                       }
-                       .mapError[FetchErrors](e => InternalError(s"Iteration error: $e", Some(e)))
-                   } else ZIO.succeed(Nil)
+      cursor <- ZIO.acquireRelease(
+                  ZIO.attemptBlocking(dbi.openCursor(txn)).mapError[FetchErrors](e => InternalError(s"Cursor error: $e", Some(e)))
+                )(c => ZIO.attemptBlocking(c.close()).ignoreLogged)
+      result <- ZIO
+                  .attemptBlocking {
+                    val keyBytes = kodec.encode(key)
+                    if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): FetchErrors)
+                    else {
+                      val keyBB = fillKeyScratch(keyBytes)
+                      if (!cursor.get(keyBB, GetOp.MDB_SET)) Right(Nil: List[T])
+                      else {
+                        val builder = List.newBuilder[T]
+                        var hasNext = true
+                        while (hasNext) {
+                          codec.decode(cursor.`val`()) match {
+                            case Right(v) => builder += v
+                            case Left(_)  => ()
+                          }
+                          hasNext = cursor.seek(SeekOp.MDB_NEXT_DUP)
+                        }
+                        Right(builder.result())
+                      }
+                    }
+                  }
+                  .mapError[FetchErrors](e => InternalError(s"multiFetch error on $colName: $e", Some(e)))
+                  .flatMap(ZIO.fromEither(_))
     } yield result
   }
 
@@ -1721,13 +1852,21 @@ class LMDBLive(
   }
 
   private def multiPutLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
-    for {
-      keyBB       <- makeKeyByteBuffer(key)
-      docBytes     = codec.encode(document)
-      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
-      _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
-      _           <- ZIO.attempt(dbi.put(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't multiPut $key into $colName: $err", Some(err)))
-    } yield ()
+    ZIO
+      .attempt {
+        val keyBytes = kodec.encode(key)
+        if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): UpsertErrors)
+        else {
+          val keyBB    = fillKeyScratch(keyBytes)
+          val docBytes = codec.encode(document)
+          // DUPSORT collection: dbi.reserve is forbidden. Use the value-scratch buffer instead.
+          val valBB    = fillValueScratch(docBytes)
+          val _        = dbi.put(txn, keyBB, valBB)
+          Right(())
+        }
+      }
+      .mapError[UpsertErrors](err => InternalError(s"Couldn't multiPut $key into $colName: $err", Some(err)))
+      .flatMap(ZIO.fromEither(_))
   }
 
   override def multiPut[K, T](colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
@@ -1745,13 +1884,19 @@ class LMDBLive(
   }
 
   private def multiDeleteLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Boolean] = {
-    for {
-      keyBB       <- makeKeyByteBuffer(key)
-      docBytes     = codec.encode(document)
-      valueBuffer <- ZIO.attempt(ByteBuffer.allocateDirect(docBytes.length)).mapError(err => InternalError(s"Couldn't allocate byte buffer for encoded value: $err", Some(err)))
-      _           <- ZIO.attempt(valueBuffer.put(docBytes).flip).mapError(err => InternalError(s"Couldn't copy value bytes to buffer: $err", Some(err)))
-      deleted     <- ZIO.attempt(dbi.delete(txn, keyBB, valueBuffer)).mapError(err => InternalError(s"Couldn't multiDelete $key from $colName: $err", Some(err)))
-    } yield deleted
+    ZIO
+      .attempt {
+        val keyBytes = kodec.encode(key)
+        if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): DeleteErrors)
+        else {
+          val keyBB    = fillKeyScratch(keyBytes)
+          val docBytes = codec.encode(document)
+          val valBB    = fillValueScratch(docBytes)
+          Right(dbi.delete(txn, keyBB, valBB))
+        }
+      }
+      .mapError[DeleteErrors](err => InternalError(s"Couldn't multiDelete $key from $colName: $err", Some(err)))
+      .flatMap(ZIO.fromEither(_))
   }
 
   override def multiDelete[K, T](colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[DeleteErrors, Boolean] = {
@@ -1769,10 +1914,17 @@ class LMDBLive(
   }
 
   private def multiDeleteAllLogic[K](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): IO[DeleteErrors, Boolean] = {
-    for {
-      keyBB   <- makeKeyByteBuffer(key)
-      deleted <- ZIO.attempt(dbi.delete(txn, keyBB)).mapError(err => InternalError(s"Couldn't multiDeleteAll $key from $colName: $err", Some(err)))
-    } yield deleted
+    ZIO
+      .attempt {
+        val keyBytes = kodec.encode(key)
+        if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): DeleteErrors)
+        else {
+          val keyBB = fillKeyScratch(keyBytes)
+          Right(dbi.delete(txn, keyBB))
+        }
+      }
+      .mapError[DeleteErrors](err => InternalError(s"Couldn't multiDeleteAll $key from $colName: $err", Some(err)))
+      .flatMap(ZIO.fromEither(_))
   }
 
   override def multiDeleteAll[K](colName: CollectionName, key: K)(implicit kodec: KeyCodec[K]): IO[DeleteErrors, Boolean] = {
