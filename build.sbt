@@ -181,7 +181,7 @@ lazy val console = (project in file("console"))
     name                             := "zio-lmdb-console",
     description                      := "REPL for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "org.jline" % "jline"       % "4.1.0",
+      "org.jline" % "jline"       % "4.1.2",
       "dev.zio"  %% "zio"         % versions.zio,
       "dev.zio"  %% "zio-json"    % versions.ziojson,
       "dev.zio"  %% "zio-logging" % versions.ziologging
