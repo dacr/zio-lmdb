@@ -20,14 +20,14 @@ nav_order: 2
 
 ```scala
 // build.sbt
-libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.3"
+libraryDependencies += "fr.janalyse" %% "zio-lmdb" % "2.8.6"
 ```
 
 ### scala-cli
 
 ```scala
 //> using scala 3
-//> using dep fr.janalyse::zio-lmdb:2.8.3
+//> using dep fr.janalyse::zio-lmdb:2.8.6
 //> using javaOpt --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
 ```
 
