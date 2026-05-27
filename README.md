@@ -6,7 +6,7 @@ Embedded, ACID, key-value database for [ZIO][ZIO] — zero infrastructure, zero 
 
 Built on [lmdb-java][JLMDB] with a type-safe, ZIO-native API:
 - **Three collection kinds** — `LMDBCollection` (1 key → 1 value), `LMDBMulti` (1 key → N values), `LMDBIndex` (1 key → N keys)
-- **Customizable codecs** — JSON (`derives LMDBCodecJson`), bytes optimized codecs for keys, or your owwns
+- **Customizable codecs** — JSON (`derives LMDBCodecJson`), bytes optimized codecs for keys, or your own ones
 - **Atomic transactions** — single-collection or cross-collection, always consistent
 - **Lexicographic ordering** — keys are sorted; range scans and pagination come for free
 - **Scala-CLI friendly** — add one dependency line and run

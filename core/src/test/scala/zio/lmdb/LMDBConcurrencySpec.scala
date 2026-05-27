@@ -49,7 +49,7 @@ object LMDBConcurrencySpec extends ZIOSpecDefault with Commons {
   override def spec = suite("concurrency behavior checks")(
     List(1, 5, 10, 25, 50, 100).map { parallelism =>
       // -----------------------------------------------------------------------------
-      test(s"many collections writes in parallel ${recordsLimit * collectionLimit} records through $collectionLimit collections - parallelism=$parallelism") {
+      test(f"many collections writes in parallel ${recordsLimit * collectionLimit} records through $collectionLimit collections - parallelism=$parallelism%04d") {
         val strategy = ExecutionStrategy.ParallelN(parallelism)
         for {
           collections <- ZIO.foreachExec(1.to(collectionLimit))(strategy) { n =>
@@ -72,5 +72,5 @@ object LMDBConcurrencySpec extends ZIOSpecDefault with Commons {
         )
       }
     }
-  ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom @@ timed
+  ).provide(lmdbLayer) @@ withLiveClock @@ withLiveRandom @@ timed @@ sequential
 }

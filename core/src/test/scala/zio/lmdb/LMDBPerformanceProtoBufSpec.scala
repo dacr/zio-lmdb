@@ -27,7 +27,7 @@ object LMDBPerformanceProtoBufSpec extends ZIOSpecDefault with Commons {
 
   override val bootstrap: ZLayer[Any, Any, TestEnvironment] = logger >>> testEnvironment
 
-  private val recordCount = 50000
+  private val recordCount = 200000
 
   override def spec = suite("LMDB Performance Suite")(
     test("write and read throughput benchmark") {
@@ -70,11 +70,13 @@ object LMDBPerformanceProtoBufSpec extends ZIOSpecDefault with Commons {
         readDuration   = Duration.fromNanos(readEnd - readStart)
         readThroughput = recordCount.toDouble / (readDuration.toNanos.toDouble / 1e9)
 
-        _ <- Console.printLine(f"\nPerformance Results for $recordCount%,d records:")
-        _ <- Console.printLine(f"Average record size: $avgRecordSize%,.2f bytes")
-        _ <- Console.printLine(f"Write Throughput:    $writeThroughput%,.2f records/s (${writeDuration.toMillis} ms)")
-        _ <- Console.printLine(f"Read Throughput:     $readThroughput%,.2f records/s (${readDuration.toMillis} ms)\n")
+        benchmarkReport =
+          f"""|Performance Results for $recordCount%,d ProtoBuf records:
+              |Average record size: $avgRecordSize%,.2f bytes
+              |Write Throughput:    $writeThroughput%,.2f records/s (${writeDuration.toMillis} ms)
+              |Read Throughput:     $readThroughput%,.2f records/s (${readDuration.toMillis} ms)""".stripMargin
 
+        _ <- ZIO.debug(benchmarkReport)
       } yield assertTrue(true)
     }
   ).provide(lmdbLayer) @@ withLiveClock @@ timed
