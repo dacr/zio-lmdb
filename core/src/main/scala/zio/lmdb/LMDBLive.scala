@@ -1120,6 +1120,69 @@ class LMDBLive(
     }
   }
 
+  /** Iterator that stops as soon as the LMDB cursor reaches a key whose raw bytes no longer carry
+    * `prefixBytes` as a byte-level prefix. Used by `streamPrefix` / `streamPrefixWithKeys`.
+    */
+  private case class PrefixKeyValueIterator[K, T](
+    jiterator: java.util.Iterator[KeyVal[ByteBuffer]],
+    prefixBytes: Array[Byte]
+  )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]) extends Iterator[KeyValue[K, T]] {
+
+    private var nextEntry: KeyValue[K, T] = null
+    private var nextLoaded: Boolean       = false
+    private var done: Boolean             = false
+
+    private def keyStartsWithPrefix(keyBuf: ByteBuffer): Boolean = {
+      val limit    = keyBuf.limit()
+      val position = keyBuf.position()
+      if (limit - position < prefixBytes.length) false
+      else {
+        var i = 0
+        var ok = true
+        while (ok && i < prefixBytes.length) {
+          if (keyBuf.get(position + i) != prefixBytes(i)) ok = false
+          i += 1
+        }
+        ok
+      }
+    }
+
+    private def advance(): Unit = {
+      if (done) {
+        nextLoaded = true
+        nextEntry = null
+      } else if (!jiterator.hasNext) {
+        done = true
+        nextLoaded = true
+        nextEntry = null
+      } else {
+        val kv     = jiterator.next()
+        val keyBuf = kv.key()
+        if (!keyStartsWithPrefix(keyBuf)) {
+          done = true
+          nextLoaded = true
+          nextEntry = null
+        } else {
+          nextEntry = KeyValue(kodec.decode(keyBuf), codec.decode(kv.`val`()))
+          nextLoaded = true
+        }
+      }
+    }
+
+    override def hasNext: Boolean = {
+      if (!nextLoaded) advance()
+      nextEntry != null
+    }
+
+    override def next(): KeyValue[K, T] = {
+      if (!nextLoaded) advance()
+      val res = nextEntry
+      nextLoaded = false
+      nextEntry = null
+      res
+    }
+  }
+
   /** @inheritdoc */
   override def stream[K, T](
     colName: CollectionName,
@@ -1231,6 +1294,98 @@ class LMDBLive(
         case err: Throwable    => InternalError(s"Couldn't stream from $colName: $err", Some(err))
         case err               => InternalError(s"Couldn't stream from $colName : ${err.toString}", None)
       }
+  }
+
+  private def streamPrefixLogic[P, K, T](
+    txn: Txn[ByteBuffer],
+    dbi: Dbi[ByteBuffer],
+    colName: CollectionName,
+    prefix: P
+  )(implicit
+    pcodec: KeyCodec[P],
+    kcodec: KeyCodec[K],
+    codec: LMDBCodec[T]
+  ): ZIO[Scope, StreamErrors, ZStream[Any, StreamErrors, KeyValue[K, T]]] = {
+    val prefixBytes = pcodec.encode(prefix)
+    if (prefixBytes.length > env.getMaxKeySize)
+      ZIO.fail(OverSizedKey(prefix.toString, prefixBytes.length, env.getMaxKeySize))
+    else
+      for {
+        prefixBB <- ZIO.acquireRelease(
+                      ZIO
+                        .attempt {
+                          val buf = borrowKeyBuffer()
+                          buf.put(prefixBytes).flip()
+                          buf
+                        }
+                        .mapError[StreamErrors](err => InternalError(s"Couldn't borrow buffer for prefix on $colName: $err", Some(err)))
+                    )(buf => ZIO.succeed(releaseKeyBuffer(buf)))
+        iterable <- ZIO.acquireRelease(
+                      ZIO
+                        .attempt(dbi.iterate(txn, KeyRange.atLeast(prefixBB)))
+                        .mapError[StreamErrors](err => InternalError(s"Couldn't acquire iterable on $colName: $err", Some(err)))
+                    )(cursor =>
+                      ZIO
+                        .attempt(cursor.close())
+                        .ignoreLogged
+                    )
+      } yield ZStream
+        .fromIterator(PrefixKeyValueIterator[K, T](iterable.iterator(), prefixBytes))
+        .mapError[StreamErrors](err => InternalError(s"Couldn't streamPrefix from $colName: $err", Some(err)))
+  }
+
+  /** @inheritdoc */
+  override def streamPrefix[P, K, T](
+    colName: CollectionName,
+    prefix: P
+  )(implicit pcodec: KeyCodec[P], kcodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T] = {
+    val result =
+      for {
+        db  <- getCollectionDbi(colName)
+        _   <- readSemaphore.withPermitScoped
+        txn <- ZIO.acquireRelease(
+                 ZIO
+                   .attempt(env.txnRead())
+                   .mapError[StreamErrors](err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
+               )(txn =>
+                 ZIO
+                   .attempt(txn.close())
+                   .ignoreLogged
+               )
+        s   <- streamPrefixLogic[P, K, T](txn, db, colName, prefix)
+      } yield s
+        .mapZIO { entry => ZIO.fromEither(entry.value).mapError(err => CodecFailure(err): StreamErrors) }
+
+    ZStream.unwrapScoped(result).onExecutor(readExecutor)
+  }
+
+  /** @inheritdoc */
+  override def streamPrefixWithKeys[P, K, T](
+    colName: CollectionName,
+    prefix: P
+  )(implicit pcodec: KeyCodec[P], kcodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)] = {
+    val result =
+      for {
+        db  <- getCollectionDbi(colName)
+        _   <- readSemaphore.withPermitScoped
+        txn <- ZIO.acquireRelease(
+                 ZIO
+                   .attempt(env.txnRead())
+                   .mapError[StreamErrors](err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
+               )(txn =>
+                 ZIO
+                   .attempt(txn.close())
+                   .ignoreLogged
+               )
+        s   <- streamPrefixLogic[P, K, T](txn, db, colName, prefix)
+      } yield s
+        .mapZIO { entry =>
+          ZIO
+            .fromEither(entry.value.flatMap(value => entry.key.left.map(_.toString).map(key => key -> value)))
+            .mapError(err => CodecFailure(err): StreamErrors)
+        }
+
+    ZStream.unwrapScoped(result).onExecutor(readExecutor)
   }
 
   /** Gets a cached index DBI handle, or opens it if no transaction is in flight on this fiber. See `getCollectionDbi` for the safety contract.
@@ -1902,6 +2057,56 @@ class LMDBLive(
     } yield res
   }
 
+  private def multiContainsLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, document: T)(implicit
+    kodec: KeyCodec[K],
+    codec: LMDBCodec[T]
+  ): ZIO[Scope, ContainsErrors, Boolean] = {
+    // Mirrors `indexContainsLogic`: position the cursor at the key with MDB_SET,
+    // then scan dup values comparing each ByteBuffer to the encoded `document`.
+    // Equivalent to MDB_GET_BOTH without requiring the lmdbjava op exposure.
+    for {
+      cursor <- ZIO.acquireRelease(
+                  ZIO.attempt(dbi.openCursor(txn)).mapError[ContainsErrors](e => InternalError(s"Cursor error: $e", Some(e)))
+                )(c => ZIO.attempt(c.close()).ignoreLogged)
+      found  <- ZIO
+                  .attempt {
+                    val keyBytes   = kodec.encode(key)
+                    val valueBytes = codec.encode(document)
+                    if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): ContainsErrors)
+                    else {
+                      val keyBB   = fillKeyScratch(keyBytes)
+                      val valueBB = fillValueScratch(valueBytes)
+                      @scala.annotation.tailrec
+                      def findValue(): Boolean = {
+                        if (cursor.`val`().compareTo(valueBB) == 0) true
+                        else if (cursor.seek(SeekOp.MDB_NEXT_DUP)) findValue()
+                        else false
+                      }
+                      val result  = if (cursor.get(keyBB, GetOp.MDB_SET)) findValue() else false
+                      Right(result)
+                    }
+                  }
+                  .mapError[ContainsErrors](e => InternalError(s"multiContains error on $colName: $e", Some(e)))
+                  .flatMap(ZIO.fromEither(_))
+    } yield found
+  }
+
+  override def multiContains[K, T](colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[ContainsErrors, Boolean] = {
+    for {
+      db  <- getMultiDbi(colName)
+      res <- withReadLock(ZIO.scoped {
+               for {
+                 txn <- ZIO.acquireRelease(
+                          ZIO
+                            .attempt(env.txnRead())
+                            .mapError[ContainsErrors](err => InternalError(s"Couldn't acquire read transaction on $colName: $err", Some(err)))
+                        )(txn => ZIO.attempt(txn.close()).ignoreLogged)
+                 res <- multiContainsLogic(txn, db, colName, key, document)
+               } yield res
+             })
+    } yield res
+  }
+
   private def multiPutLogic[K, T](txn: Txn[ByteBuffer], dbi: Dbi[ByteBuffer], colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit] = {
     ZIO
       .attempt {
@@ -2228,6 +2433,36 @@ class LMDBLive(
     }
 
     /** @inheritdoc */
+    override def streamPrefix[P, K, T](
+      collectionName: CollectionName,
+      prefix: P
+    )(implicit pcodec: KeyCodec[P], kcodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T] = {
+      val result = for {
+        db     <- getCollectionDbi(collectionName, Some(txn))
+        stream <- streamPrefixLogic[P, K, T](txn, db, collectionName, prefix)
+      } yield stream
+        .mapZIO { entry => ZIO.fromEither(entry.value).mapError(err => CodecFailure(err): StreamErrors) }
+      ZStream.unwrapScoped(result)
+    }
+
+    /** @inheritdoc */
+    override def streamPrefixWithKeys[P, K, T](
+      collectionName: CollectionName,
+      prefix: P
+    )(implicit pcodec: KeyCodec[P], kcodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)] = {
+      val result = for {
+        db     <- getCollectionDbi(collectionName, Some(txn))
+        stream <- streamPrefixLogic[P, K, T](txn, db, collectionName, prefix)
+      } yield stream
+        .mapZIO { entry =>
+          ZIO
+            .fromEither(entry.value.flatMap(value => entry.key.left.map(_.toString).map(key => key -> value)))
+            .mapError(err => CodecFailure(err): StreamErrors)
+        }
+      ZStream.unwrapScoped(result)
+    }
+
+    /** @inheritdoc */
     override def multiExists(name: CollectionName): IO[StorageSystemError, Boolean] = {
       getMultiDbi(name, Some(txn)).as(true).catchAll(_ => ZIO.succeed(false))
     }
@@ -2245,6 +2480,14 @@ class LMDBLive(
       for {
         db  <- getMultiDbi(colName, Some(txn))
         res <- ZIO.scoped(multiFetchLogic(txn, db, colName, key))
+      } yield res
+    }
+
+    /** @inheritdoc */
+    override def multiContains[K, T](colName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[ContainsErrors, Boolean] = {
+      for {
+        db  <- getMultiDbi(colName, Some(txn))
+        res <- ZIO.scoped(multiContainsLogic(txn, db, colName, key, document))
       } yield res
     }
   }

@@ -217,6 +217,101 @@ object KeyCodecSpec extends ZIOSpecDefault {
 
         assert(decoded)(isRight(equalTo((s1, u1))))
       }
+    ),
+    suite("Tuple3 codec")(
+      test("All-Fixed (UUID, Int, Long) roundtrip and width") {
+        check(Gen.uuid, Gen.int, Gen.long) { (u, i, l) =>
+          val codec   = summon[KeyCodec[(UUID, Int, Long)]]
+          val tuple   = (u, i, l)
+          val encoded = codec.encode(tuple)
+          assert(codec.width)(isSome(equalTo(16 + 4 + 8))) &&
+          assert(encoded.length)(equalTo(28)) &&
+          assert(codec.decode(ByteBuffer.wrap(encoded)))(isRight(equalTo(tuple)))
+        }
+      },
+      test("Variable-Fixed-Fixed (String, UUID, Int) roundtrip") {
+        check(Gen.string, Gen.uuid, Gen.int) { (s, u, i) =>
+          val codec   = summon[KeyCodec[(String, UUID, Int)]]
+          val tuple   = (s, u, i)
+          val encoded = codec.encode(tuple)
+          assert(codec.decode(ByteBuffer.wrap(encoded)))(isRight(equalTo(tuple)))
+        }
+      },
+      test("Fixed-Variable-Fixed (UUID, String, Long) roundtrip") {
+        check(Gen.uuid, Gen.string, Gen.long) { (u, s, l) =>
+          val codec   = summon[KeyCodec[(UUID, String, Long)]]
+          val tuple   = (u, s, l)
+          val encoded = codec.encode(tuple)
+          assert(codec.decode(ByteBuffer.wrap(encoded)))(isRight(equalTo(tuple)))
+        }
+      },
+      test("All-Variable (String, String, String) roundtrip with embedded nulls") {
+        val s1      = "Hello World"
+        val s2      = " begins"
+        val s3      = "ends "
+        val codec   = summon[KeyCodec[(String, String, String)]]
+        val encoded = codec.encode((s1, s2, s3))
+        assert(codec.decode(ByteBuffer.wrap(encoded)))(isRight(equalTo((s1, s2, s3))))
+      },
+      test("encode((a, b, c)) shares a prefix with encode((a, b)) (Fixed-Fixed-*)") {
+        // Property that makes prefix scans cursor-friendly: when (a, b) has fixed
+        // width the first 20 bytes of encode((u, i, *)) equal encode((u, i)).
+        val u   = UUID.randomUUID()
+        val i   = 42
+        val l1  = 1L
+        val l2  = 2L
+        val ck2 = summon[KeyCodec[(UUID, Int)]]
+        val ck3 = summon[KeyCodec[(UUID, Int, Long)]]
+        val e12 = ck2.encode((u, i))
+        val e1  = ck3.encode((u, i, l1))
+        val e2  = ck3.encode((u, i, l2))
+        assertTrue(Arrays.equals(e1.take(e12.length), e12)) &&
+        assertTrue(Arrays.equals(e2.take(e12.length), e12))
+      },
+      test("byte order preserved on lexicographic suffix when prefix is shared") {
+        val u   = UUID.randomUUID()
+        val s   = "shared"
+        val ck3 = summon[KeyCodec[(UUID, String, Long)]]
+        check(Gen.long, Gen.long) { (l1, l2) =>
+          val e1  = ck3.encode((u, s, l1))
+          val e2  = ck3.encode((u, s, l2))
+          val cmp = Arrays.compareUnsigned(e1, e2)
+          assertTrue((cmp < 0) == (l1 < l2)) &&
+          assertTrue((cmp == 0) == (l1 == l2))
+        }
+      }
+    ),
+    suite("Tuple4 codec")(
+      test("All-Fixed (UUID, Int, Long, Short) roundtrip and width") {
+        check(Gen.uuid, Gen.int, Gen.long, Gen.short) { (u, i, l, s) =>
+          val codec   = summon[KeyCodec[(UUID, Int, Long, Short)]]
+          val tuple   = (u, i, l, s)
+          val encoded = codec.encode(tuple)
+          assert(codec.width)(isSome(equalTo(16 + 4 + 8 + 2))) &&
+          assert(encoded.length)(equalTo(30)) &&
+          assert(codec.decode(ByteBuffer.wrap(encoded)))(isRight(equalTo(tuple)))
+        }
+      },
+      test("Mixed widths (String, UUID, String, Long) roundtrip") {
+        check(Gen.string, Gen.uuid, Gen.string, Gen.long) { (s1, u, s2, l) =>
+          val codec   = summon[KeyCodec[(String, UUID, String, Long)]]
+          val tuple   = (s1, u, s2, l)
+          val encoded = codec.encode(tuple)
+          assert(codec.decode(ByteBuffer.wrap(encoded)))(isRight(equalTo(tuple)))
+        }
+      },
+      test("encode((a, b, c, d)) shares a prefix with encode((a, b, c))") {
+        val u   = UUID.randomUUID()
+        val i   = 7
+        val l   = 99L
+        val ck3 = summon[KeyCodec[(UUID, Int, Long)]]
+        val ck4 = summon[KeyCodec[(UUID, Int, Long, Short)]]
+        val e3  = ck3.encode((u, i, l))
+        val e4a = ck4.encode((u, i, l, 1.toShort))
+        val e4b = ck4.encode((u, i, l, 2.toShort))
+        assertTrue(Arrays.equals(e4a.take(e3.length), e3)) &&
+        assertTrue(Arrays.equals(e4b.take(e3.length), e3))
+      }
     )
   )
 }

@@ -315,6 +315,30 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters:
   ): ZStream[Any, StreamErrors, (K, T)] =
     lmdb.streamWithKeys(name, keyFilter, startAfter, backward)
 
+  /** Stream records whose key starts with the byte-encoding of the given prefix.
+    *
+    * @param prefix
+    *   a partial-key value of type `P`
+    * @tparam P
+    *   prefix type, e.g. the head tuple of a wider compound key
+    * @return
+    *   the stream of records
+    */
+  def streamPrefix[P](prefix: P)(implicit pcodec: KeyCodec[P]): ZStream[Any, StreamErrors, T] =
+    lmdb.streamPrefix[P, K, T](name, prefix)
+
+  /** Stream (key, record) pairs whose key starts with the byte-encoding of the given prefix.
+    *
+    * @param prefix
+    *   a partial-key value of type `P`
+    * @tparam P
+    *   prefix type, e.g. the head tuple of a wider compound key
+    * @return
+    *   the stream of (key, record) pairs
+    */
+  def streamPrefixWithKeys[P](prefix: P)(implicit pcodec: KeyCodec[P]): ZStream[Any, StreamErrors, (K, T)] =
+    lmdb.streamPrefixWithKeys[P, K, T](name, prefix)
+
   /** Execute a series of read operations on this collection within a single read-only transaction.
     * @param f
     *   function using collection read operations
@@ -461,6 +485,14 @@ case class LMDBCollectionReadOps[K, T](
     backward: Boolean = false
   ): ZStream[Any, StreamErrors, (K, T)] =
     ops.streamWithKeys(collection.name, keyFilter, startAfter, backward)
+
+  /** Stream records whose key starts with the byte-encoding of the given prefix. */
+  def streamPrefix[P](prefix: P)(implicit pcodec: KeyCodec[P]): ZStream[Any, StreamErrors, T] =
+    ops.streamPrefix[P, K, T](collection.name, prefix)
+
+  /** Stream (key, record) pairs whose key starts with the byte-encoding of the given prefix. */
+  def streamPrefixWithKeys[P](prefix: P)(implicit pcodec: KeyCodec[P]): ZStream[Any, StreamErrors, (K, T)] =
+    ops.streamPrefixWithKeys[P, K, T](collection.name, prefix)
 }
 
 /** Collection-specific read-write operations available within a transaction.

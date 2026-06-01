@@ -1,5 +1,12 @@
 # ZIO-LMDB RELEASE NOTES
 
+## Unreleased
+
+- Add `tuple3KeyCodec` and `tuple4KeyCodec` derived by nesting `tuple2KeyCodec` on the left, preserving the prefix-scan property for all-fixed-width components
+- Add `LMDBMulti.contains(key, document)` (and the matching `LMDBReadOps.multiContains`) for fast (key, value) existence checks against DUPSORT multi-collections
+- Add `LMDB.streamPrefix[P, K, T](name, prefix)` and `streamPrefixWithKeys[P, K, T]` for cursor-backed scans of all records whose key starts with the byte-encoding of a partial-key value. Exposed as `LMDBCollection.streamPrefix` / `streamPrefixWithKeys` on the collection facade
+- **Wire-format change (breaking for variable-width keys)**: `tuple2KeyCodec` now escapes `0x00 → 0x00 0x01` and uses a two-byte separator `0x00 0x00`, fixing a decoding bug that misread the separator whenever the second component's first byte was `0xFF`. Databases holding tuple keys with a variable-width first component (e.g. `(String, X)`) must be re-encoded. Tuples whose first component is fixed-width (`UUID`, `Int`, `Long`, `Short`) are unaffected. See `docs/internal/MIGRATION_TUPLE_KEY_CODEC.md`
+
 ## 2.8 - 2026-05-18
 
 - Introduce console with basic operations

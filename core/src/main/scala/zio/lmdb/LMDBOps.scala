@@ -282,6 +282,20 @@ trait LMDBReadOps {
     backward: Boolean = false
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): zio.stream.ZStream[Any, StreamErrors, (K, T)]
 
+  /** Stream all collection records whose key starts with the byte-encoding of the given prefix.
+    */
+  def streamPrefix[P, K, T](
+    collectionName: CollectionName,
+    prefix: P
+  )(implicit pcodec: KeyCodec[P], kcodec: KeyCodec[K], codec: LMDBCodec[T]): zio.stream.ZStream[Any, StreamErrors, T]
+
+  /** Stream all (key, record) pairs whose key starts with the byte-encoding of the given prefix.
+    */
+  def streamPrefixWithKeys[P, K, T](
+    collectionName: CollectionName,
+    prefix: P
+  )(implicit pcodec: KeyCodec[P], kcodec: KeyCodec[K], codec: LMDBCodec[T]): zio.stream.ZStream[Any, StreamErrors, (K, T)]
+
   /** check if a multi-collection exists
     * @param name
     *   the collection name
@@ -307,6 +321,18 @@ trait LMDBReadOps {
     *   a list of records
     */
   def multiFetch[K, T](collectionName: CollectionName, key: K)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[FetchErrors, List[T]]
+
+  /** Check if a multi-collection contains the given (key, value) pair
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the record to look for
+    * @param document
+    *   the specific document to look for under that key
+    * @return
+    *   true if the pair (key, document) is present in the multi-collection
+    */
+  def multiContains[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[ContainsErrors, Boolean]
 }
 
 /** LMDB operations available within a read-write transaction context. */

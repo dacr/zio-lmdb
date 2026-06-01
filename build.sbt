@@ -162,7 +162,7 @@ lazy val keycodecsUuidv7 = (project in file("codecs/keycodecs-uuidv7"))
   )
   .dependsOn(keycodecs)
 
-lazy val queryDsl = (project in file("codecs/query-dsl"))
+lazy val queryDsl = (project in file("query-dsl"))
   .settings(commonSettings)
   .settings(
     name        := "query-dsl",

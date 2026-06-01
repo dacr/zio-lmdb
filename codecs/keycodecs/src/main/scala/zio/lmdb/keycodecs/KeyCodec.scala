@@ -175,15 +175,19 @@ object KeyCodec {
           System.arraycopy(bytesB, 0, out, bytesA.length, bytesB.length)
           out
         case None    =>
-          // Variable width A: escape 0x00 -> 0x00 0xFF and append 0x00 separator
+          // Variable width A: escape 0x00 -> 0x00 0x01 (so naked 0x00 is impossible
+          // inside escape(bytesA)) and use a two-byte separator 0x00 0x00.
+          // Decoder finds the unique first 0x00 0x00 sequence; bytesB may then
+          // contain any bytes (including arbitrary 0x00 / 0xFF) without ambiguity.
           val builder = Array.newBuilder[Byte]
-          builder.sizeHint(bytesA.length + bytesB.length + 1) // Heuristic
+          builder.sizeHint(bytesA.length + bytesB.length + 2) // Heuristic
 
           bytesA.foreach {
-            case 0 => builder += 0; builder += -1
+            case 0 => builder += 0; builder += 1
             case b => builder += b
           }
-          builder += 0 // Separator
+          builder += 0 // Separator part 1
+          builder += 0 // Separator part 2
           builder ++= bytesB
           builder.result()
       }
@@ -220,9 +224,13 @@ object KeyCodec {
             else {
               val b = keyBytes.get(pos)
               if (b == 0) {
-                // Check for escape sequence 0x00 0xFF
-                if (pos + 1 < limit && keyBytes.get(pos + 1) == -1.toByte) findSeparator(pos + 2)
-                else Right(pos)
+                if (pos + 1 >= limit) Left(MissingSeparator(pos + 1))
+                else {
+                  val next = keyBytes.get(pos + 1)
+                  if (next == 0) Right(pos)            // Two-byte separator 0x00 0x00
+                  else if (next == 1) findSeparator(pos + 2) // Escape sequence 0x00 0x01
+                  else Left(UnescapedZero(pos))
+                }
               } else findSeparator(pos + 1)
             }
           }
@@ -241,7 +249,7 @@ object KeyCodec {
               } else {
                 val b = keyBytes.get(pos)
                 if (b == 0) {
-                  if (pos + 1 < limit && keyBytes.get(pos + 1) == -1.toByte) {
+                  if (pos + 1 < separatorPos && keyBytes.get(pos + 1) == 1.toByte) {
                     bufferA.put(0.toByte)
                     unescape(pos + 2)
                   } else Left(UnescapedZero(pos))
@@ -254,13 +262,45 @@ object KeyCodec {
 
             unescape(startPos).flatMap { rawA =>
               codecA.decode(rawA).flatMap { a =>
-                // Skip separator
-                keyBytes.position(separatorPos + 1)
+                // Skip the two-byte separator
+                keyBytes.position(separatorPos + 2)
                 codecB.decode(keyBytes).map(b => (a, b))
               }
             }
           }
       }
+    }
+  }
+
+  // Tuple3 / Tuple4 codecs are derived by nesting tuple2 on the left. The
+  // encoding of (a, b, c) coincides with the encoding of ((a, b), c), so a
+  // prefix scan over all triples sharing a given (a, b) becomes a byte-level
+  // prefix scan over encode((a, b)) followed by its terminating separator.
+  // Same property extends to tuple4 via ((a, b, c), d).
+
+  given tuple3KeyCodec[A, B, C](using KeyCodec[A], KeyCodec[B], KeyCodec[C]): KeyCodec[(A, B, C)] = {
+    val inner = summon[KeyCodec[((A, B), C)]]
+    new KeyCodec[(A, B, C)] {
+      override def width: Option[Int] = inner.width
+
+      override def encode(key: (A, B, C)): Array[Byte] =
+        inner.encode(((key._1, key._2), key._3))
+
+      override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, (A, B, C)] =
+        inner.decode(keyBytes).map { case ((a, b), c) => (a, b, c) }
+    }
+  }
+
+  given tuple4KeyCodec[A, B, C, D](using KeyCodec[A], KeyCodec[B], KeyCodec[C], KeyCodec[D]): KeyCodec[(A, B, C, D)] = {
+    val inner = summon[KeyCodec[((A, B, C), D)]]
+    new KeyCodec[(A, B, C, D)] {
+      override def width: Option[Int] = inner.width
+
+      override def encode(key: (A, B, C, D)): Array[Byte] =
+        inner.encode(((key._1, key._2, key._3), key._4))
+
+      override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, (A, B, C, D)] =
+        inner.decode(keyBytes).map { case ((a, b, c), d) => (a, b, c, d) }
     }
   }
 

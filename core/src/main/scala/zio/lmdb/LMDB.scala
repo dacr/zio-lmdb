@@ -190,6 +190,22 @@ trait LMDB {
     */
   def multiPut[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[UpsertErrors, Unit]
 
+  /** Check if a multi-collection contains the given (key, value) pair
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the record to look for
+    * @param document
+    *   the specific document to look for under that key
+    * @tparam K
+    *   key type
+    * @tparam T
+    *   record type
+    * @return
+    *   true if the pair (key, document) is present in the multi-collection
+    */
+  def multiContains[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[ContainsErrors, Boolean]
+
   /** Delete a specific record in a multi-collection
     * @param collectionName
     *   the collection name
@@ -459,6 +475,49 @@ trait LMDB {
     startAfter: Option[K] = None,
     backward: Boolean = false
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)]
+
+  /** Stream all collection records whose key starts with the byte-encoding of the given prefix.
+    *
+    * The prefix is encoded with its own `KeyCodec[P]`. Keys are decoded with `KeyCodec[K]`. The
+    * stream terminates as soon as the cursor reaches a key that no longer carries the prefix as
+    * a byte-level prefix. This makes typical "all (a, b, *)" scans cursor-backed and O(matches +
+    * log n).
+    * @param collectionName
+    *   the collection name
+    * @param prefix
+    *   a partial-key value encoded to bytes via `KeyCodec[P]`
+    * @tparam P
+    *   prefix type (e.g. `(UUID, Int)` when `K = (UUID, Int, UUID)`)
+    * @tparam K
+    *   full key type
+    * @tparam T
+    *   record type
+    * @return
+    *   the stream of records
+    */
+  def streamPrefix[P, K, T](
+    collectionName: CollectionName,
+    prefix: P
+  )(implicit pcodec: KeyCodec[P], kcodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, T]
+
+  /** Stream all (key, record) pairs whose key starts with the byte-encoding of the given prefix.
+    * @param collectionName
+    *   the collection name
+    * @param prefix
+    *   a partial-key value encoded to bytes via `KeyCodec[P]`
+    * @tparam P
+    *   prefix type (e.g. `(UUID, Int)` when `K = (UUID, Int, UUID)`)
+    * @tparam K
+    *   full key type
+    * @tparam T
+    *   record type
+    * @return
+    *   the stream of (key, record) pairs
+    */
+  def streamPrefixWithKeys[P, K, T](
+    collectionName: CollectionName,
+    prefix: P
+  )(implicit pcodec: KeyCodec[P], kcodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)]
 
   /** Create an index
     * @param name
@@ -947,6 +1006,20 @@ object LMDB {
     */
   def multiPut[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, UpsertErrors, Unit] = ZIO.serviceWithZIO(_.multiPut(collectionName, key, document))
 
+  /** Check if a multi-collection contains the given (key, value) pair
+    *
+    * @param collectionName
+    *   the collection name
+    * @param key
+    *   the key of the record to look for
+    * @param document
+    *   the specific document to look for under that key
+    * @return
+    *   true if the pair (key, document) is present in the multi-collection
+    */
+  def multiContains[K, T](collectionName: CollectionName, key: K, document: T)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, ContainsErrors, Boolean] =
+    ZIO.serviceWithZIO(_.multiContains(collectionName, key, document))
+
   /** Delete a specific record in a multi-collection
     *
     * @param collectionName
@@ -1214,6 +1287,22 @@ object LMDB {
     backward: Boolean = false
   )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[LMDB, StreamErrors, (K, T)] =
     ZStream.serviceWithStream(_.streamWithKeys(collectionName, keyFilter, startAfter, backward))
+
+  /** Stream all collection records whose key starts with the byte-encoding of the given prefix.
+    */
+  def streamPrefix[P, K, T](
+    collectionName: CollectionName,
+    prefix: P
+  )(implicit pcodec: KeyCodec[P], kcodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[LMDB, StreamErrors, T] =
+    ZStream.serviceWithStream(_.streamPrefix[P, K, T](collectionName, prefix))
+
+  /** Stream all (key, record) pairs whose key starts with the byte-encoding of the given prefix.
+    */
+  def streamPrefixWithKeys[P, K, T](
+    collectionName: CollectionName,
+    prefix: P
+  )(implicit pcodec: KeyCodec[P], kcodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[LMDB, StreamErrors, (K, T)] =
+    ZStream.serviceWithStream(_.streamPrefixWithKeys[P, K, T](collectionName, prefix))
 
   /** Create an index
     * @param name

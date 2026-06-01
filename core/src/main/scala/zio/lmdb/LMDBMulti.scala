@@ -52,6 +52,17 @@ case class LMDBMulti[K, T](name: CollectionName, lmdb: LMDB)(implicit val kodec:
     */
   def fetch(key: K): IO[FetchErrors, List[T]] = lmdb.multiFetch(name, key)
 
+  /** Check if the multi-collection contains the given (key, document) pair
+    *
+    * @param key
+    *   the key to look for
+    * @param document
+    *   the specific document to look for under that key
+    * @return
+    *   true if the pair (key, document) is present
+    */
+  def contains(key: K, document: T): IO[ContainsErrors, Boolean] = lmdb.multiContains(name, key, document)
+
   /** Insert a record in a multi-collection.
     *
     * @param key
@@ -146,6 +157,16 @@ case class LMDBMultiReadOps[K, T](
     *   a list of records
     */
   def fetch(key: K): IO[FetchErrors, List[T]] = ops.multiFetch(collection.name, key)
+
+  /** Check if the multi-collection contains the given (key, document) pair
+    * @param key
+    *   the key to look for
+    * @param document
+    *   the specific document to look for under that key
+    * @return
+    *   true if the pair (key, document) is present
+    */
+  def contains(key: K, document: T): IO[ContainsErrors, Boolean] = ops.multiContains(collection.name, key, document)
 }
 
 /** Collection-specific read-write operations available within a transaction.

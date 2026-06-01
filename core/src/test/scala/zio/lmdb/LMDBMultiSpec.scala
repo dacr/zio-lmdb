@@ -84,6 +84,35 @@ object LMDBMultiSpec extends ZIOSpecDefault with Commons {
                }
         group1 <- col.fetch("group1")
       } yield assert(group1)(hasSameElements(List(Person("Alice", 30), Person("Bob", 25))))
+    },
+    test("contains (key, value)") {
+      for {
+        col            <- LMDB.multiCreate[String, Person]("people7")
+        _              <- col.put("group1", Person("Alice", 30))
+        _              <- col.put("group1", Person("Bob", 25))
+        _              <- col.put("group2", Person("Charlie", 40))
+        hitAlice       <- col.contains("group1", Person("Alice", 30))
+        hitBob         <- col.contains("group1", Person("Bob", 25))
+        missByValue    <- col.contains("group1", Person("Dave", 99))
+        missByKey      <- col.contains("group3", Person("Alice", 30))
+        crossGroupMiss <- col.contains("group2", Person("Alice", 30))
+      } yield assert(hitAlice)(isTrue) &&
+        assert(hitBob)(isTrue) &&
+        assert(missByValue)(isFalse) &&
+        assert(missByKey)(isFalse) &&
+        assert(crossGroupMiss)(isFalse)
+    },
+    test("transactional contains") {
+      for {
+        col <- LMDB.multiCreate[String, Person]("people8")
+        _   <- col.put("group1", Person("Alice", 30))
+        res <- col.readOnly { ops =>
+                 for {
+                   hit  <- ops.contains("group1", Person("Alice", 30))
+                   miss <- ops.contains("group1", Person("Bob", 25))
+                 } yield (hit, miss)
+               }
+      } yield assert(res._1)(isTrue) && assert(res._2)(isFalse)
     }
   ).provideLayerShared(lmdbLayer)
 }
