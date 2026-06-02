@@ -28,22 +28,24 @@ object LMDBPerformanceJsonSpec extends ZIOSpecDefault with Commons {
 
   private val recordCount = 400000
 
-  override def spec = suite("LMDB Performance Suite")(
-    test("write and read throughput benchmark") {
-      for {
-        collection <- LMDB.collectionCreate[UUIDv7, UserProfile]("perf_test")
+  override def spec = suite("LMDB JSON Performance Suite")(
+    for {
+      round  <- 1 to 4
+      // Prepare data
+      records = (1 to recordCount).map { i =>
+                  val id      = UUIDv7.generate()
+                  val profile = UserProfile(
+                    id = id.asUUID.toString,
+                    name = s"User $i",
+                    email = s"user$i@example.com",
+                    age = 20 + (i % 50)
+                  )
+                  (id, profile)
+                }
 
-        // Prepare data
-        records = (1 to recordCount).map { i =>
-                    val id      = UUIDv7.generate()
-                    val profile = UserProfile(
-                      id = id.asUUID.toString,
-                      name = s"User $i",
-                      email = s"user$i@example.com",
-                      age = 20 + (i % 50)
-                    )
-                    (id, profile)
-                  }
+    } yield test(s"write and read throughput benchmark round $round") {
+      for {
+        collection <- LMDB.collectionCreate[UUIDv7, UserProfile](s"perf_test_json_$round")
 
         // Write Benchmark
         writeStart     <- Clock.nanoTime
@@ -79,5 +81,5 @@ object LMDBPerformanceJsonSpec extends ZIOSpecDefault with Commons {
 
       } yield assertTrue(true)
     }
-  ).provide(lmdbLayer) @@ withLiveClock @@ timed
+  ).provide(lmdbLayer) @@ withLiveClock @@ timed @@ sequential
 }
