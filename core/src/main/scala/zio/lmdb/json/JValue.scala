@@ -15,10 +15,12 @@
  */
 package zio.lmdb.json
 
-import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
+import com.github.plokhotnyuk.jsoniter_scala.core.{JsonReader, JsonValueCodec, JsonWriter}
 
 import java.time.Instant
 import java.util.UUID
+import scala.collection.immutable.ListMap
+import scala.collection.mutable
 
 /** Generic, JSON-shaped tagged value.
   *
@@ -33,56 +35,203 @@ import java.util.UUID
   * `IRIV` as an additive case when the semantic overlay loads. See
   * `docs/internal/EVOLUTION_PLAN_ITERATION_6.md` §6.5 for the design rationale.
   *
-  * == Deferred: recursive members (`ListV`, `MapV`) ==
+  * == Why the sum-type codec is hand-rolled ==
   *
-  * The iter‑6 §6.5 sketch includes `case class ListV(value: Vector[JValue])` and
-  * `case class MapV(value: Map[String, JValue])` as the JSON-shaped container variants.
-  * jsoniter-scala 2.38 + Scala 3.3.7 currently generate macro output with internal forward
-  * references (`d0 is a forward reference extending over the definition of c19`) when deriving a
-  * sum-type codec over a recursive case. The workaround is either a hand-rolled
-  * `JsonValueCodec[JValue]` or the optional `zio-lmdb-codec-json-circe` bridge module from §6.5,
-  * neither of which is needed by the current test surface (no test stores `Json.Obj` / `Json.Arr`
-  * values).
+  * `JsonCodecMaker.make[JValue]` (with `withAllowRecursiveTypes(true)`) hits a forward-reference
+  * emit-order bug in jsoniter-scala 2.38 whenever the variant set contains both recursive cases
+  * (`ListV[JValue]`, `MapV[String, JValue]`) AND more than one "special" string-encoded type
+  * (`Instant`, `UUID`, `BigDecimal`). Bisection showed each subset works alone, but the full set
+  * provokes `d0 is a forward reference extending over the definition of cN`.
   *
-  * The recursive variants are deferred until either (a) the upstream jsoniter-scala issue is
-  * resolved or (b) L3 implementation lands and a hand-rolled codec becomes a required deliverable.
-  * Tracking this against open question §14.4 of iter 6.
+  * Reproduced under jsoniter-scala 2.38.14 on:
+  *   - Scala 3.3.7    (LTS)
+  *   - Scala 3.8.3    (latest stable as of 2026-06)
+  *   - Scala 3.8.4-RC2
+  *
+  * A hand-rolled `JsonValueCodec[JValue]` sidesteps the macro entirely and keeps the same
+  * `{"type":"VariantName","value":...}` wire format the macro would have emitted. Per-variant
+  * case classes still use `derives LMDBCodecJson` for narrowly-typed collections; only the
+  * sum-type entry point is hand-rolled.
+  *
+  * '''Future check.''' When upgrading Scala or jsoniter-scala, re-test by swapping the
+  * `JValueValueCodec` definition below for the one-liner kept as `// MACRO-FUTURE-CHECK`
+  * comments after it. If `core / compile` succeeds, the hand-rolled object and its imports
+  * (`JsonReader`, `JsonWriter`, `ListMap`, `mutable`) can be deleted in favour of the macro
+  * derivation. `JValueCodecSpec` covers the wire format and round-trip surface either way.
   */
 sealed trait JValue
 
 object JValue {
   /** A JSON string value. */
-  case class StringV(value: String) extends JValue derives LMDBCodecJson
+  final case class StringV(value: String) extends JValue derives LMDBCodecJson
 
   /** A 64-bit integer. */
-  case class LongV(value: Long) extends JValue derives LMDBCodecJson
+  final case class LongV(value: Long) extends JValue derives LMDBCodecJson
 
   /** A double-precision floating-point number. */
-  case class DoubleV(value: Double) extends JValue derives LMDBCodecJson
+  final case class DoubleV(value: Double) extends JValue derives LMDBCodecJson
 
   /** Arbitrary-precision decimal — useful when the application cares about exact decimal
     * arithmetic (money, scientific data). Round-trip preserves precision via jsoniter-scala's
     * `BigDecimal` codec.
     */
-  case class DecimalV(value: BigDecimal) extends JValue derives LMDBCodecJson
+  final case class DecimalV(value: BigDecimal) extends JValue derives LMDBCodecJson
 
   /** A JSON boolean. */
-  case class BoolV(value: Boolean) extends JValue derives LMDBCodecJson
+  final case class BoolV(value: Boolean) extends JValue derives LMDBCodecJson
 
   /** ISO-8601 timestamp — first-class for time-typed properties (L3) and time-range scans (L4). */
-  case class InstantV(value: Instant) extends JValue derives LMDBCodecJson
+  final case class InstantV(value: Instant) extends JValue derives LMDBCodecJson
 
   /** Reference to another record by UUID identifier (typically a UUIDv7 in the L3 graph layer). */
-  case class IdentifierV(value: UUID) extends JValue derives LMDBCodecJson
+  final case class IdentifierV(value: UUID) extends JValue derives LMDBCodecJson
+
+  /** A heterogeneous JSON array. */
+  final case class ListV(value: Seq[JValue]) extends JValue
+
+  /** A JSON object — string-keyed bag of values. The recursive shape supports nested property
+    * bags, e.g. an L3 node whose property is itself a sub-document.
+    */
+  final case class MapV(value: Map[String, JValue]) extends JValue
 
   /** The JSON null literal. */
   case object NullV extends JValue
 
-  // ── Codec for the sum type ───────────────────────────────────────────────────────────────────
+  // ── Hand-rolled sum-type codec ───────────────────────────────────────────────────────────────
   //
-  // Single `LMDBCodecJson[JValue]` that handles every variant via the default jsoniter-scala
-  // discriminator (`{"type":"LongV","value":42}`). User code that needs a generic collection —
-  // `LMDB.collectionCreate[String, JValue](...)` — uses this codec.
+  // Wire format (same as `JsonCodecMaker.make`'s default would produce):
+  //   {"type":"StringV","value":"abc"}
+  //   {"type":"LongV","value":42}
+  //   {"type":"ListV","value":[…]}
+  //   {"type":"MapV","value":{…}}
+  //   {"type":"NullV"}                          (no value field)
+  //
+  // The encoder writes the discriminator first, then the typed value. The decoder requires
+  // "type" as the first key and dispatches on its string value before reading the (optional)
+  // "value" field. A depth guard prevents stack overflow on adversarially deep input.
 
-  given jValueCodec: LMDBCodecJson[JValue] = LMDBCodecJson(JsonCodecMaker.make[JValue])
+  private val MaxDepth: Int = 256
+
+  private object JValueValueCodec extends JsonValueCodec[JValue] {
+    override def nullValue: JValue = NullV
+
+    override def encodeValue(x: JValue, out: JsonWriter): Unit = encodeAt(x, out, MaxDepth)
+
+    private def encodeAt(x: JValue, out: JsonWriter, depth: Int): Unit = {
+      if (depth <= 0) throw new IllegalStateException("JValue encode depth limit exceeded")
+      out.writeObjectStart()
+      out.writeKey("type")
+      x match {
+        case StringV(v) =>
+          out.writeVal("StringV"); out.writeKey("value"); out.writeVal(v)
+        case LongV(v) =>
+          out.writeVal("LongV"); out.writeKey("value"); out.writeVal(v)
+        case DoubleV(v) =>
+          out.writeVal("DoubleV"); out.writeKey("value"); out.writeVal(v)
+        case DecimalV(v) =>
+          out.writeVal("DecimalV"); out.writeKey("value"); out.writeVal(v)
+        case BoolV(v) =>
+          out.writeVal("BoolV"); out.writeKey("value"); out.writeVal(v)
+        case InstantV(v) =>
+          out.writeVal("InstantV"); out.writeKey("value"); out.writeVal(v)
+        case IdentifierV(v) =>
+          out.writeVal("IdentifierV"); out.writeKey("value"); out.writeVal(v)
+        case ListV(items) =>
+          out.writeVal("ListV"); out.writeKey("value")
+          out.writeArrayStart()
+          val it = items.iterator
+          while (it.hasNext) encodeAt(it.next(), out, depth - 1)
+          out.writeArrayEnd()
+        case MapV(entries) =>
+          out.writeVal("MapV"); out.writeKey("value")
+          out.writeObjectStart()
+          val it = entries.iterator
+          while (it.hasNext) {
+            val (k, v) = it.next()
+            out.writeKey(k)
+            encodeAt(v, out, depth - 1)
+          }
+          out.writeObjectEnd()
+        case NullV =>
+          out.writeVal("NullV")
+      }
+      out.writeObjectEnd()
+    }
+
+    override def decodeValue(in: JsonReader, default: JValue): JValue = decodeAt(in, MaxDepth)
+
+    private def decodeAt(in: JsonReader, depth: Int): JValue = {
+      if (depth <= 0) in.decodeError("JValue decode depth limit exceeded")
+      if (!in.isNextToken('{')) in.decodeError("expected '{'")
+      if (in.isNextToken('}')) in.decodeError("expected discriminator field 'type'")
+      in.rollbackToken()
+      val firstKey = in.readKeyAsString()
+      if (firstKey != "type") in.decodeError(s"expected first key 'type', got '$firstKey'")
+      val tpe = in.readString(null)
+      val result: JValue = tpe match {
+        case "StringV"      => StringV(readValueAs(in, _.readString(null)))
+        case "LongV"        => LongV(readValueAs(in, _.readLong()))
+        case "DoubleV"      => DoubleV(readValueAs(in, _.readDouble()))
+        case "DecimalV"     => DecimalV(readValueAs(in, _.readBigDecimal(null)))
+        case "BoolV"        => BoolV(readValueAs(in, _.readBoolean()))
+        case "InstantV"     => InstantV(readValueAs(in, _.readInstant(null)))
+        case "IdentifierV"  => IdentifierV(readValueAs(in, _.readUUID(null)))
+        case "ListV"        => ListV(readValueAs(in, r => readArray(r, depth - 1)))
+        case "MapV"         => MapV(readValueAs(in, r => readMap(r, depth - 1)))
+        case "NullV"        => NullV
+        case other          => in.decodeError(s"unknown JValue discriminator '$other'"); null
+      }
+      if (!in.isNextToken('}')) in.decodeError("expected '}'")
+      result
+    }
+
+    /** Reads the comma, the `"value"` key, and dispatches the body via `read`. */
+    private inline def readValueAs[A](in: JsonReader, read: JsonReader => A): A = {
+      if (!in.isNextToken(',')) in.decodeError("expected ',' before 'value'")
+      val k = in.readKeyAsString()
+      if (k != "value") in.decodeError(s"expected key 'value', got '$k'")
+      read(in)
+    }
+
+    private def readArray(in: JsonReader, depth: Int): Seq[JValue] = {
+      if (!in.isNextToken('[')) in.decodeError("expected '['")
+      val buf = new mutable.ArrayBuffer[JValue]()
+      if (!in.isNextToken(']')) {
+        in.rollbackToken()
+        buf += decodeAt(in, depth)
+        while (in.isNextToken(',')) buf += decodeAt(in, depth)
+        in.rollbackToken()
+        if (!in.isNextToken(']')) in.decodeError("expected ']' or ','")
+      }
+      buf.toSeq
+    }
+
+    private def readMap(in: JsonReader, depth: Int): Map[String, JValue] = {
+      if (!in.isNextToken('{')) in.decodeError("expected '{'")
+      val builder = ListMap.newBuilder[String, JValue]
+      if (!in.isNextToken('}')) {
+        in.rollbackToken()
+        val k = in.readKeyAsString()
+        builder += k -> decodeAt(in, depth)
+        while (in.isNextToken(',')) {
+          val k2 = in.readKeyAsString()
+          builder += k2 -> decodeAt(in, depth)
+        }
+        in.rollbackToken()
+        if (!in.isNextToken('}')) in.decodeError("expected '}' or ','")
+      }
+      builder.result()
+    }
+  }
+
+  given jValueCodec: LMDBCodecJson[JValue] = LMDBCodecJson(JValueValueCodec)
+
+  // ── MACRO-FUTURE-CHECK ───────────────────────────────────────────────────────────────────────
+  //
+  // Re-test on each Scala / jsoniter-scala upgrade by uncommenting the block below (and adding
+  // `import com.github.plokhotnyuk.jsoniter_scala.macros.{CodecMakerConfig, JsonCodecMaker}` at
+  // the top of the file). Delete the hand-rolled path if it compiles.
+  //
+  // given jValueCodec: LMDBCodecJson[JValue] =
+  //   LMDBCodecJson(JsonCodecMaker.make[JValue](CodecMakerConfig.withAllowRecursiveTypes(true)))
 }

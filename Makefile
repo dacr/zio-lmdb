@@ -11,3 +11,6 @@ readme-test:
 
 console-assembly:
 	sbt console/assembly
+
+performance-test:
+	sbt "testOnly zio.lmdb.LMDBPerformanceProtoBufSpec zio.lmdb.LMDBPerformanceJsonSpec"
