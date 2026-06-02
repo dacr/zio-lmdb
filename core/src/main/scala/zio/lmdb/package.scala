@@ -27,7 +27,7 @@ package object lmdb {
   type SizeErrors     = CollectionNotFound | StorageSystemError
   type ClearErrors    = CollectionNotFound | NestedWriteTransactionError | StorageSystemError
   type DropErrors     = CollectionNotFound | StorageSystemError
-  type GetErrors      = CollectionNotFound | StorageSystemError
+  type GetErrors      = CollectionNotFound | SchemaDrift | StorageSystemError
   type CreateErrors   = CollectionAlreadExists | StorageSystemError
   type FetchErrors    = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
   type ContainsErrors = OverSizedKey | CollectionNotFound | StorageSystemError
@@ -37,5 +37,5 @@ package object lmdb {
   type DeleteErrors   = OverSizedKey | CollectionNotFound | CodecFailure | NestedWriteTransactionError | StorageSystemError
   type CollectErrors  = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
   type StreamErrors   = OverSizedKey | CollectionNotFound | CodecFailure | StorageSystemError
-  type IndexErrors    = IndexNotFound | IndexAlreadyExists | OverSizedKey | CodecFailure | NestedWriteTransactionError | StorageSystemError
+  type IndexErrors    = IndexNotFound | IndexAlreadyExists | OverSizedKey | CodecFailure | NestedWriteTransactionError | SchemaDrift | StorageSystemError
 }

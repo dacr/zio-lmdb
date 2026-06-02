@@ -16,6 +16,7 @@
 package zio.lmdb
 import zio.lmdb.keycodecs.KeyCodec
 import zio.lmdb.keycodecs.KeyCodecError
+import zio.lmdb.schema.{LMDBSchema, SchemaArtifact}
 
 import zio._
 import zio.stm._
@@ -78,14 +79,61 @@ class LMDBLive(
       }
   }
 
-  private def metadataUpdate(name: String, kind: CollectionKind): ZIO[Any, StorageSystemError, Unit] = {
-    val entry = MetaDataEntry(name, kind, None, None)
-    upsertOverwrite(config.metaDataCollectionName, name, entry)
+  /** Look up the persisted metadata entry for `name`, returning `None` if no entry exists yet
+    * (which happens for the metadata sub-collection itself and for collections written before the
+    * `MetaDataEntry` layout existed).
+    */
+  private def metadataLookup(name: String): IO[StorageSystemError, Option[MetaDataEntry]] = {
+    if (name == config.metaDataCollectionName) ZIO.succeed(None)
+    else
+      fetch[String, MetaDataEntry](config.metaDataCollectionName, name)
+        .mapError {
+          case e: StorageSystemError => e
+          case e                     => InternalError(s"Metadata lookup failed for $name: $e")
+        }
+  }
+
+  /** L2A drift detection. Compares the caller's expected schema against the persisted one.
+    *
+    * Policy: opaque schemas on either side are treated as "no claim", so they never raise drift.
+    * This keeps the opaque fallback usable for legacy or schemaless data while still catching
+    * real disagreements between concrete (JsonSchema/ProtobufSchema) declarations.
+    */
+  private def checkSchemaDrift(
+    name: String,
+    side: String,
+    persisted: Option[SchemaArtifact],
+    expected: SchemaArtifact
+  ): IO[SchemaDrift, Unit] = {
+    import SchemaArtifact._
+    (persisted, expected) match {
+      case (None, _)                             => ZIO.unit
+      case (Some(OpaqueSchema(_)), _)            => ZIO.unit
+      case (_, OpaqueSchema(_))                  => ZIO.unit
+      case (Some(p), e) if p.fingerprint == e.fingerprint => ZIO.unit
+      case (Some(p), e)                          =>
+        ZIO.fail(SchemaDrift(name, side, expectedFingerprint = e.fingerprint, actualFingerprint = p.fingerprint))
+    }
+  }
+
+  private def metadataUpdate(name: String, kind: CollectionKind): ZIO[Any, StorageSystemError, Unit] =
+    persistMetadata(MetaDataEntry.untyped(name, kind))
+
+  private def metadataUpdate(
+    name: String,
+    kind: CollectionKind,
+    keySchema: SchemaArtifact,
+    valueSchema: SchemaArtifact
+  ): ZIO[Any, StorageSystemError, Unit] =
+    persistMetadata(MetaDataEntry.typed(name, kind, keySchema, valueSchema))
+
+  private def persistMetadata(entry: MetaDataEntry): ZIO[Any, StorageSystemError, Unit] = {
+    upsertOverwrite(config.metaDataCollectionName, entry.collectionName, entry)
       .mapError {
         case e: StorageSystemError => e
-        case e: StorageUserError   => InternalError(s"Metadata update failed for $name: $e")
+        case e: StorageUserError   => InternalError(s"Metadata update failed for ${entry.collectionName}: $e")
       }
-      .when(name != config.metaDataCollectionName)
+      .when(entry.collectionName != config.metaDataCollectionName)
       .unit
   }
 
@@ -286,11 +334,14 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def collectionGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[GetErrors, LMDBCollection[K, T]] = {
+  override def collectionGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): IO[GetErrors, LMDBCollection[K, T]] = {
     for {
-      exists     <- collectionExists(name)
-      collection <- ZIO.cond[CollectionNotFound, LMDBCollection[K, T]](exists, LMDBCollection[K, T](name, this), CollectionNotFound(name))
-    } yield collection
+      exists <- collectionExists(name)
+      _      <- ZIO.cond[CollectionNotFound, Unit](exists, (), CollectionNotFound(name))
+      meta   <- metadataLookup(name)
+      _      <- checkSchemaDrift(name, "key", meta.flatMap(_.keySchema), keySchema.artifact)
+      _      <- checkSchemaDrift(name, "value", meta.flatMap(_.valueSchema), valueSchema.artifact)
+    } yield LMDBCollection[K, T](name, this)
   }
 
   /** @inheritdoc */
@@ -351,14 +402,14 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CreateErrors, LMDBCollection[K, T]] = {
+  override def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): IO[CreateErrors, LMDBCollection[K, T]] = {
+    val typedMeta = metadataUpdate(name, CollectionKind.Regular, keySchema.artifact, valueSchema.artifact).mapError(e => e: CreateErrors)
     val allocateLogic = if (failIfExists) {
-      collectionAllocate(name)
+      collectionAllocate(name) *> typedMeta
     } else {
       collectionAllocate(name).catchSome { case CollectionAlreadExists(_) =>
-        metadataUpdate(name, CollectionKind.Regular).mapError(e => e: CreateErrors) *>
-          getCollectionDbi(name).ignore
-      }
+        getCollectionDbi(name).ignore.unit
+      } *> typedMeta
     }
     allocateLogic.as(LMDBCollection[K, T](name, this))
   }
@@ -1442,23 +1493,26 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
+  override def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY], fromSchema: LMDBSchema[FROM_KEY], toSchema: LMDBSchema[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
+    val typedMeta = metadataUpdate(name, CollectionKind.Index, fromSchema.artifact, toSchema.artifact).mapError(e => e: IndexErrors)
     val allocateLogic = if (failIfExists) {
-      indexAllocate(name)
+      indexAllocate(name) *> typedMeta
     } else {
       indexAllocate(name).catchSome { case IndexAlreadyExists(_) =>
-        metadataUpdate(name, CollectionKind.Index).mapError(e => e: IndexErrors) *>
-          getIndexDbi(name).ignore
-      }
+        getIndexDbi(name).ignore.unit
+      } *> typedMeta
     }
     allocateLogic.as(LMDBIndex[FROM_KEY, TO_KEY](name, None, this))
   }
 
   /** @inheritdoc */
-  override def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
+  override def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY], fromSchema: LMDBSchema[FROM_KEY], toSchema: LMDBSchema[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
     for {
       exists <- indexExists(name)
       _      <- ZIO.cond[IndexNotFound, Unit](exists, (), IndexNotFound(name))
+      meta   <- metadataLookup(name).mapError(e => e: IndexErrors)
+      _      <- checkSchemaDrift(name, "fromKey", meta.flatMap(_.keySchema), fromSchema.artifact)
+      _      <- checkSchemaDrift(name, "toKey", meta.flatMap(_.valueSchema), toSchema.artifact)
     } yield LMDBIndex[FROM_KEY, TO_KEY](name, None, this)
   }
 
@@ -1951,22 +2005,25 @@ class LMDBLive(
     } yield ()
   }
 
-  override def multiCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CreateErrors, LMDBMulti[K, T]] = {
+  override def multiCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): IO[CreateErrors, LMDBMulti[K, T]] = {
+    val typedMeta = metadataUpdate(name, CollectionKind.Multi, keySchema.artifact, valueSchema.artifact).mapError(e => e: CreateErrors)
     val allocateLogic = if (failIfExists) {
-      multiAllocate(name)
+      multiAllocate(name) *> typedMeta
     } else {
       multiAllocate(name).catchSome { case CollectionAlreadExists(_) =>
-        metadataUpdate(name, CollectionKind.Multi).mapError(e => e: CreateErrors) *>
-          getMultiDbi(name).ignore
-      }
+        getMultiDbi(name).ignore.unit
+      } *> typedMeta
     }
     allocateLogic.as(LMDBMulti[K, T](name, this))
   }
 
-  override def multiGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[GetErrors, LMDBMulti[K, T]] = {
+  override def multiGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): IO[GetErrors, LMDBMulti[K, T]] = {
     for {
       exists <- multiExists(name)
       _      <- ZIO.cond[CollectionNotFound, Unit](exists, (), CollectionNotFound(name))
+      meta   <- metadataLookup(name)
+      _      <- checkSchemaDrift(name, "key", meta.flatMap(_.keySchema), keySchema.artifact)
+      _      <- checkSchemaDrift(name, "value", meta.flatMap(_.valueSchema), valueSchema.artifact)
     } yield LMDBMulti[K, T](name, this)
   }
 

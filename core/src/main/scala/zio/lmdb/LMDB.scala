@@ -16,6 +16,7 @@
 
 package zio.lmdb
 import zio.lmdb.keycodecs.KeyCodec
+import zio.lmdb.schema.LMDBSchema
 
 import zio.*
 import zio.stream.ZStream
@@ -68,7 +69,7 @@ trait LMDB {
     * @return
     *   the collection helper facade
     */
-  def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CreateErrors, LMDBCollection[K, T]]
+  def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): IO[CreateErrors, LMDBCollection[K, T]]
 
   /** Create a collection
     * @param name
@@ -86,7 +87,7 @@ trait LMDB {
     * @return
     *   the collection helper facade
     */
-  def collectionGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[GetErrors, LMDBCollection[K, T]]
+  def collectionGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): IO[GetErrors, LMDBCollection[K, T]]
 
   /** Get how many items a collection contains
     * @param name
@@ -120,7 +121,7 @@ trait LMDB {
     * @return
     *   the multi-collection helper facade
     */
-  def multiCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[CreateErrors, LMDBMulti[K, T]]
+  def multiCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): IO[CreateErrors, LMDBMulti[K, T]]
 
   /** Get a multi-collection helper facade.
     * @param name
@@ -132,7 +133,7 @@ trait LMDB {
     * @return
     *   the multi-collection helper facade
     */
-  def multiGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): IO[GetErrors, LMDBMulti[K, T]]
+  def multiGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): IO[GetErrors, LMDBMulti[K, T]]
 
   /** Get how many items a multi-collection contains
     * @param name
@@ -531,7 +532,7 @@ trait LMDB {
     * @return
     *   the index helper facade
     */
-  def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
+  def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY], fromSchema: LMDBSchema[FROM_KEY], toSchema: LMDBSchema[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
 
   /** Get an index helper facade.
     * @param name
@@ -543,7 +544,7 @@ trait LMDB {
     * @return
     *   the index helper facade
     */
-  def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
+  def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY], fromSchema: LMDBSchema[FROM_KEY], toSchema: LMDBSchema[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
 
   /** Check if an index exists
     * @param name
@@ -873,7 +874,7 @@ object LMDB {
     * @return
     *   the collection helper facade
     */
-  def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, CreateErrors, LMDBCollection[K, T]] = ZIO.serviceWithZIO(_.collectionCreate(name, failIfExists))
+  def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): ZIO[LMDB, CreateErrors, LMDBCollection[K, T]] = ZIO.serviceWithZIO(_.collectionCreate(name, failIfExists))
 
   /** Create a collection
     *
@@ -889,7 +890,7 @@ object LMDB {
     * @return
     *   the collection helper facade
     */
-  def collectionGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, GetErrors, LMDBCollection[K, T]] = ZIO.serviceWithZIO(_.collectionGet(name))
+  def collectionGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): ZIO[LMDB, GetErrors, LMDBCollection[K, T]] = ZIO.serviceWithZIO(_.collectionGet(name))
 
   /** Get how many items a collection contains
     *
@@ -929,7 +930,7 @@ object LMDB {
     * @return
     *   the multi-collection helper facade
     */
-  def multiCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, CreateErrors, LMDBMulti[K, T]] = ZIO.serviceWithZIO(_.multiCreate(name, failIfExists))
+  def multiCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): ZIO[LMDB, CreateErrors, LMDBMulti[K, T]] = ZIO.serviceWithZIO(_.multiCreate(name, failIfExists))
 
   /** Get a multi-collection helper facade.
     *
@@ -942,7 +943,7 @@ object LMDB {
     * @return
     *   the multi-collection helper facade
     */
-  def multiGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]): ZIO[LMDB, GetErrors, LMDBMulti[K, T]] = ZIO.serviceWithZIO(_.multiGet(name))
+  def multiGet[K, T](name: CollectionName)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): ZIO[LMDB, GetErrors, LMDBMulti[K, T]] = ZIO.serviceWithZIO(_.multiGet(name))
 
   /** Get how many items a multi-collection contains
     *
@@ -1316,7 +1317,7 @@ object LMDB {
     * @return
     *   the index helper facade
     */
-  def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[LMDB, IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] =
+  def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY], fromSchema: LMDBSchema[FROM_KEY], toSchema: LMDBSchema[TO_KEY]): ZIO[LMDB, IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] =
     ZIO.serviceWithZIO(_.indexCreate(name, failIfExists))
 
   /** Get an index helper facade.
@@ -1329,7 +1330,7 @@ object LMDB {
     * @return
     *   the index helper facade
     */
-  def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY]): ZIO[LMDB, IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] =
+  def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY], fromSchema: LMDBSchema[FROM_KEY], toSchema: LMDBSchema[TO_KEY]): ZIO[LMDB, IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] =
     ZIO.serviceWithZIO(_.indexGet(name))
 
   /** Check if an index exists

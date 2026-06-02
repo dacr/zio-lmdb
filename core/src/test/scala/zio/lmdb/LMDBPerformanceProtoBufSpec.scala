@@ -27,7 +27,7 @@ object LMDBPerformanceProtoBufSpec extends ZIOSpecDefault with Commons {
 
   override val bootstrap: ZLayer[Any, Any, TestEnvironment] = logger >>> testEnvironment
 
-  private val recordCount = 200000
+  private val recordCount = 400000
 
   override def spec = suite("LMDB Performance Suite")(
     test("write and read throughput benchmark") {

@@ -21,9 +21,14 @@ import zio.test.Assertion.*
 import zio.test.TestAspect.*
 import zio.json.*
 import zio.lmdb.json.*
+import zio.lmdb.schema.{LMDBSchema, SchemaArtifact}
 //import zio.lmdb.json.LMDBCodecJson.given
 
 object LMDBMetaDataSpec extends ZIOSpecDefault with Commons {
+
+  // Explicit schema attached to the type used by the schema-verification test below.
+  case class TaggedDoc(label: String) derives LMDBCodecJson
+  given LMDBSchema[TaggedDoc] = LMDBSchema.from(SchemaArtifact.JsonSchema(zio.json.ast.Json.Str("TaggedDoc/v1")))
 
   override val bootstrap: ZLayer[Any, Any, TestEnvironment] = logger >>> testEnvironment
 
@@ -77,6 +82,44 @@ object LMDBMetaDataSpec extends ZIOSpecDefault with Commons {
         metaCol     <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
         entry       <- metaCol.fetch(indexName)
       } yield assertTrue(entry.isEmpty)
+    },
+    test("typed collectionCreate persists key and value schema artifacts") {
+      for {
+        config <- ZIO.config(LMDB.config)
+        colName = "typed-col-schema"
+        _      <- LMDB.collectionCreate[String, TaggedDoc](colName)
+        metaCol <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
+        entry  <- metaCol.fetch(colName).some
+      } yield assertTrue(
+        entry.layoutVersion == MetaDataEntry.CurrentLayoutVersion,
+        entry.valueSchema.contains(SchemaArtifact.JsonSchema(zio.json.ast.Json.Str("TaggedDoc/v1"))),
+        entry.keySchema.nonEmpty
+      )
+    },
+    test("typed multiCreate persists schema artifacts") {
+      for {
+        config <- ZIO.config(LMDB.config)
+        colName = "typed-multi-schema"
+        _      <- LMDB.multiCreate[String, TaggedDoc](colName)
+        metaCol <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
+        entry  <- metaCol.fetch(colName).some
+      } yield assertTrue(
+        entry.collectionKind == CollectionKind.Multi,
+        entry.valueSchema.exists(_.fingerprint == SchemaArtifact.JsonSchema(zio.json.ast.Json.Str("TaggedDoc/v1")).fingerprint)
+      )
+    },
+    test("untyped collectionAllocate leaves schema fields as None") {
+      for {
+        config <- ZIO.config(LMDB.config)
+        colName = "untyped-col-schema"
+        _      <- LMDB.collectionAllocate(colName)
+        metaCol <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
+        entry  <- metaCol.fetch(colName).some
+      } yield assertTrue(
+        entry.keySchema.isEmpty,
+        entry.valueSchema.isEmpty,
+        entry.layoutVersion == MetaDataEntry.CurrentLayoutVersion
+      )
     },
     test("failIfExists=false updates metadata for existing collection") {
       for {
