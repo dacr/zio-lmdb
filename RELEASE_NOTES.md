@@ -10,6 +10,7 @@
 - Add `zio.lmdb.json.JValue`, a tagged sum type that fills the role of a generic JSON tree (`StringV`, `LongV`, `DoubleV`, `DecimalV`, `BoolV`, `InstantV`, `IdentifierV`, `ListV(Seq[JValue])`, `MapV(Map[String, JValue])`, `NullV`). `MapV` answers the `Map[String, Value]` open question for L3 property bags. The sum-type codec is hand-rolled (the jsoniter-scala 2.38 + Scala 3.3.7 macro emits a forward-reference error for this specific variant combination) and uses a `{"type":"VariantName","value":...}` wire format with a 256-deep recursion guard. Per-variant `derives LMDBCodecJson` is intact for narrowly-typed collections like `[String, StringV]`
 - `MetaDataEntry.keySchema` / `valueSchema` change type from `Option[zio.json.ast.Json]` to `Option[String]` (raw JSON text). These fields are unpopulated by L1 paths; the change preserves serialisation shape and is a no-op for existing metadata in practice
 - **Wire-format change (breaking for variable-width keys)**: `tuple2KeyCodec` now escapes `0x00 → 0x00 0x01` and uses a two-byte separator `0x00 0x00`, fixing a decoding bug that misread the separator whenever the second component's first byte was `0xFF`. Databases holding tuple keys with a variable-width first component (e.g. `(String, X)`) must be re-encoded. Tuples whose first component is fixed-width (`UUID`, `Int`, `Long`, `Short`) are unaffected. See `docs/internal/MIGRATION_TUPLE_KEY_CODEC.md`
+- Fix coordinate denormalization in GEOTools to ensure stable encoding-decoding behavior
 
 ## 2.8 - 2026-05-18
 

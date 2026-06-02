@@ -74,9 +74,14 @@ object GEOTools {
       lonInt |= (lonBit << i)
     }
 
-    // Denormalize coordinates
-    val lat = (latInt.toDouble / 4294967295.0) * 180.0 - 90.0
-    val lon = (lonInt.toDouble / 4294967295.0) * 360.0 - 180.0
+    // Denormalize coordinates to the MIDPOINT of the Morton bin so that
+    // re-encoding the decoded Location reliably yields the same long.
+    // Using the lower bound (latInt/4294967295*180-90) is unstable: IEEE 754
+    // rounding of (lat+90)/180*4294967295 can fall just below latInt and
+    // .toLong then truncates to latInt-1, breaking head()→indexed(firstKey)
+    // walks that depend on encode∘decode∘encode == encode.
+    val lat = ((latInt.toDouble + 0.5) / 4294967295.0) * 180.0 - 90.0
+    val lon = ((lonInt.toDouble + 0.5) / 4294967295.0) * 360.0 - 180.0
 
     Location(latitude = lat, longitude = lon)
   }
