@@ -20,26 +20,14 @@ import zio._
 import zio.test._
 import zio.test.Assertion._
 import zio.lmdb._
-import zio.lmdb.json.LMDBCodecJson.given
-import zio.json._
+import zio.lmdb.json.LMDBCodecJson
 import zio.lmdb.query.QueryBuilder._
 
 object QueryBuilderSpec extends ZIOSpecDefault {
 
-  case class User(id: String, name: String, age: Int, active: Boolean)
-  object User {
-    implicit val codec: JsonCodec[User] = DeriveJsonCodec.gen[User]
-  }
-
-  case class Post(id: String, authorId: String, title: String)
-  object Post {
-    implicit val codec: JsonCodec[Post] = DeriveJsonCodec.gen[Post]
-  }
-
-  case class Comment(id: String, postId: String, text: String)
-  object Comment {
-    implicit val codec: JsonCodec[Comment] = DeriveJsonCodec.gen[Comment]
-  }
+  case class User(id: String, name: String, age: Int, active: Boolean)       derives LMDBCodecJson
+  case class Post(id: String, authorId: String, title: String)               derives LMDBCodecJson
+  case class Comment(id: String, postId: String, text: String)               derives LMDBCodecJson
 
   val users = List(
     User("1", "Alice", 25, true),

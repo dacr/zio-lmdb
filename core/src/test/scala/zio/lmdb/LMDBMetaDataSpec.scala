@@ -19,9 +19,7 @@ import zio.*
 import zio.test.*
 import zio.test.Assertion.*
 import zio.test.TestAspect.*
-import zio.json.*
 import zio.lmdb.json.*
-//import zio.lmdb.json.LMDBCodecJson.given
 
 object LMDBMetaDataSpec extends ZIOSpecDefault with Commons {
 

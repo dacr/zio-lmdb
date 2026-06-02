@@ -18,7 +18,6 @@ package zio.lmdb
 import zio.*
 import zio.test.*
 import zio.test.TestAspect.*
-import zio.json.*
 import zio.lmdb.json.*
 import zio.lmdb.keycodecs.uuidv7.*
 import zio.lmdb.keycodecs.uuidv7.UUIDv7Codec.given
@@ -27,7 +26,7 @@ object LMDBPerformanceJsonSpec extends ZIOSpecDefault with Commons {
 
   override val bootstrap: ZLayer[Any, Any, TestEnvironment] = logger >>> testEnvironment
 
-  private val recordCount = 200000
+  private val recordCount = 400000
 
   override def spec = suite("LMDB Performance Suite")(
     test("write and read throughput benchmark") {

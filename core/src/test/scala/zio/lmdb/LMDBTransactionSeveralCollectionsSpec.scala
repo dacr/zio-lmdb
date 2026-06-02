@@ -18,7 +18,6 @@ package zio.lmdb
 import zio.*
 import zio.test.*
 import zio.test.TestAspect.*
-import zio.json.*
 import zio.lmdb.json.*
 
 object LMDBTransactionSeveralCollectionsSpec extends ZIOSpecDefault with Commons {
