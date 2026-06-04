@@ -3,7 +3,6 @@ package zio.lmdb.console
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.UUID
-import zio.json._
 import scala.util.Try
 import org.jline.utils.AttributedStringBuilder
 import org.jline.utils.AttributedStyle

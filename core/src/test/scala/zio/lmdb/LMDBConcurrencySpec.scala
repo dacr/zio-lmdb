@@ -16,7 +16,6 @@
 package zio.lmdb
 
 import zio.*
-import zio.json.*
 import zio.test.TestAspect.*
 import zio.test.*
 import zio.lmdb.json.*

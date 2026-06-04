@@ -29,22 +29,24 @@ object LMDBPerformanceProtoBufSpec extends ZIOSpecDefault with Commons {
 
   private val recordCount = 400000
 
-  override def spec = suite("LMDB Performance Suite")(
-    test("write and read throughput benchmark") {
-      for {
-        collection <- LMDB.collectionCreate[UUIDv7, UserProfilePB]("perf_test")
+  override def spec = suite("LMDB PROTOBUF Performance Suite")(
+    for {
+      round  <- 1 to 4
+      // Prepare data
+      records = (1 to recordCount).map { i =>
+                  val id      = UUIDv7.generate()
+                  val profile = UserProfilePB(
+                    id = id.asUUID.toString,
+                    name = s"User $i",
+                    email = s"user$i@example.com",
+                    age = 20 + (i % 50)
+                  )
+                  (id, profile)
+                }
 
-        // Prepare data
-        records = (1 to recordCount).map { i =>
-                    val id      = UUIDv7.generate()
-                    val profile = UserProfilePB(
-                      id = id.asUUID.toString,
-                      name = s"User $i",
-                      email = s"user$i@example.com",
-                      age = 20 + (i % 50)
-                    )
-                    (id, profile)
-                  }
+    } yield test(s"write and read throughput benchmark round $round") {
+      for {
+        collection <- LMDB.collectionCreate[UUIDv7, UserProfilePB](s"perf_test_pb_$round")
 
         // Write Benchmark
         writeStart     <- Clock.nanoTime
@@ -79,5 +81,5 @@ object LMDBPerformanceProtoBufSpec extends ZIOSpecDefault with Commons {
         _ <- ZIO.debug(benchmarkReport)
       } yield assertTrue(true)
     }
-  ).provide(lmdbLayer) @@ withLiveClock @@ timed
+  ).provide(lmdbLayer) @@ withLiveClock @@ timed @@ sequential
 }

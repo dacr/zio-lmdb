@@ -2,7 +2,7 @@
   description = "AI Coding Environment with Gemini or OpenCode";
 
   inputs = {
-    nixstable.url      = "github:NixOS/nixpkgs/nixos-25.11";
+    nixstable.url      = "github:NixOS/nixpkgs/nixos-26.05";
     nixunstable.url    = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url    = "github:numtide/flake-utils";
   };

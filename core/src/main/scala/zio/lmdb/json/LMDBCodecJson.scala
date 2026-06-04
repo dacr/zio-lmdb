@@ -15,74 +15,66 @@
  */
 package zio.lmdb.json
 
-import zio.json.internal.{RetractReader, Write}
-import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonCodec, JsonDecoder, JsonEncoder, JsonError}
+import com.github.plokhotnyuk.jsoniter_scala.core.*
+import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import zio.lmdb.LMDBCodec
 
 import java.nio.ByteBuffer
-import java.nio.charset.StandardCharsets
-import scala.deriving.Mirror
 
-/** A combined codec that provides both LMDB and JSON serialization/deserialization for type `T`.
+/** A combined codec that provides both LMDB and JSON serialization for type `T`, powered by
+  * jsoniter-scala.
   *
-  * @tparam T
-  *   the data class type
+  * The trait exposes the underlying `JsonValueCodec[T]` so callers can reach into jsoniter's
+  * `writeToString` / `readFromString` / `writeToArray` / `readFromArray` directly when they
+  * need the raw JSON text (e.g. for debugging, for testing, or for storing JSON as bytes
+  * outside of an LMDB collection).
+  *
+  * @tparam T the data class type
   */
-trait LMDBCodecJson[T] extends LMDBCodec[T] with JsonEncoder[T] with JsonDecoder[T]
+trait LMDBCodecJson[T] extends LMDBCodec[T] {
+  /** The underlying jsoniter-scala value codec. Exposed so callers can drive `writeToString`,
+    * `readFromString`, etc. without going through `LMDBCodec.encode` / `LMDBCodec.decode`.
+    */
+  def valueCodec: JsonValueCodec[T]
+
+  /** Encode the value to a JSON byte array. */
+  override final def encode(value: T): Array[Byte] = writeToArray(value)(valueCodec)
+
+  /** Decode the value from a `ByteBuffer` view of JSON bytes. */
+  override final def decode(bytes: ByteBuffer): Either[String, T] =
+    try Right(readFromByteBuffer(bytes)(valueCodec))
+    catch { case t: Throwable => Left(t.getMessage) }
+}
 
 object LMDBCodecJson {
 
-  /** Internal helper to encode a value efficiently using a JSON encoder.
-    */
-  private[lmdb] def encodeEfficiently[T](encoder: JsonEncoder[T], t: T): Array[Byte] = {
-    val out    = new java.io.ByteArrayOutputStream()
-    val writer = new java.io.OutputStreamWriter(out, StandardCharsets.UTF_8)
-    val jsonWrite = new Write {
-      override def write(s: String): Unit = writer.write(s)
-      override def write(c: Char): Unit   = writer.write(c.toInt)
-    }
-    encoder.unsafeEncode(t, None, jsonWrite)
-    writer.flush()
-    out.toByteArray
+  /** Wrap an existing `JsonValueCodec[T]` as an `LMDBCodecJson[T]`. */
+  def apply[T](codec: JsonValueCodec[T]): LMDBCodecJson[T] = new LMDBCodecJson[T] {
+    val valueCodec: JsonValueCodec[T] = codec
   }
 
-  /** Internal helper to create a codec from an encoder and decoder.
+  /** Auto-derive an `LMDBCodecJson[T]` from `T`'s structure via jsoniter-scala's macro.
     *
-    * @param encoder
-    *   the JSON encoder
-    * @param decoder
-    *   the JSON decoder
-    * @return
-    *   a combined LMDB and JSON codec
+    * Reached at the call site as `case class Foo(...) derives LMDBCodecJson` or
+    * `LMDBCodecJson.derived[Foo]`. The macro is inlined; no runtime reflection occurs.
     */
-  private def createCodec[T](encoder: JsonEncoder[T], decoder: JsonDecoder[T]): LMDBCodecJson[T] = {
-    val charset = StandardCharsets.UTF_8 // TODO enhance charset support
+  inline def derived[T]: LMDBCodecJson[T] = apply(JsonCodecMaker.make[T])
 
-    new LMDBCodecJson[T] {
-      override def unsafeEncode(a: T, indent: Option[Int], out: Write): Unit  = encoder.unsafeEncode(a, indent, out)
-      override def unsafeDecode(trace: List[JsonError], in: RetractReader): T = decoder.unsafeDecode(trace, in)
-
-      def encode(t: T): Array[Byte] = encodeEfficiently(encoder, t)
-
-      def decode(bytes: ByteBuffer): Either[String, T] =
-        decoder.decodeJson(charset.decode(bytes))
-    }
-  }
-
-  /** Derives an `LMDBCodecJson` instance for type `T`.
-    *
-    * @tparam T
-    *   the type to derive the codec for
-    * @return
-    *   the derived codec
+  /** Lowest-priority `given` so any `T` for which the macro can produce a codec is
+    * automatically usable as `LMDBCodec[T]`.
     */
-  inline def derived[T](using m: Mirror.Of[T]): LMDBCodecJson[T] = {
-    val encoder = DeriveJsonEncoder.gen[T]
-    val decoder = DeriveJsonDecoder.gen[T]
-    createCodec(encoder, decoder)
-  }
+  inline given [T]: LMDBCodecJson[T] = derived
 
-  /** Automatically provides a given instance of `LMDBCodecJson` for any type `T` that can be mirrored.
+  /** Convenience: encode a typed value to its JSON `String` representation. Used by tests
+    * and debug paths that previously called zio-json's `.toJson` extension method.
     */
-  inline given [T](using m: Mirror.Of[T]): LMDBCodecJson[T] = derived
+  def toJsonString[T](value: T)(using codec: LMDBCodecJson[T]): String =
+    writeToString(value)(codec.valueCodec)
+
+  /** Convenience: decode a JSON `String` into a typed value. Mirrors the test-time use of
+    * zio-json's `.fromJson[T]`.
+    */
+  def fromJsonString[T](json: String)(using codec: LMDBCodecJson[T]): Either[String, T] =
+    try Right(readFromString(json)(codec.valueCodec))
+    catch { case t: Throwable => Left(t.getMessage) }
 }
