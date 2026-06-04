@@ -20,13 +20,14 @@ import zio.test.*
 import zio.test.Assertion.*
 import zio.test.TestAspect.*
 import zio.lmdb.json.*
+import zio.lmdb.json.JValue.StringV
 import zio.lmdb.schema.{LMDBSchema, SchemaArtifact}
 
 object LMDBMetaDataSpec extends ZIOSpecDefault with Commons {
 
   // Explicit schema attached to the type used by the schema-verification test below.
   case class TaggedDoc(label: String) derives LMDBCodecJson
-  given LMDBSchema[TaggedDoc] = LMDBSchema.from(SchemaArtifact.JsonSchema(zio.json.ast.Json.Str("TaggedDoc/v1")))
+  given LMDBSchema[TaggedDoc] = LMDBSchema.from(SchemaArtifact.JsonSchema(StringV("TaggedDoc/v1")))
 
   override val bootstrap: ZLayer[Any, Any, TestEnvironment] = logger >>> testEnvironment
 
@@ -90,7 +91,7 @@ object LMDBMetaDataSpec extends ZIOSpecDefault with Commons {
         entry  <- metaCol.fetch(colName).some
       } yield assertTrue(
         entry.layoutVersion == MetaDataEntry.CurrentLayoutVersion,
-        entry.valueSchema.contains(SchemaArtifact.JsonSchema(zio.json.ast.Json.Str("TaggedDoc/v1"))),
+        entry.valueSchema.contains(SchemaArtifact.JsonSchema(StringV("TaggedDoc/v1"))),
         entry.keySchema.nonEmpty
       )
     },
@@ -103,7 +104,7 @@ object LMDBMetaDataSpec extends ZIOSpecDefault with Commons {
         entry  <- metaCol.fetch(colName).some
       } yield assertTrue(
         entry.collectionKind == CollectionKind.Multi,
-        entry.valueSchema.exists(_.fingerprint == SchemaArtifact.JsonSchema(zio.json.ast.Json.Str("TaggedDoc/v1")).fingerprint)
+        entry.valueSchema.exists(_.fingerprint == SchemaArtifact.JsonSchema(StringV("TaggedDoc/v1")).fingerprint)
       )
     },
     test("untyped collectionAllocate leaves schema fields as None") {

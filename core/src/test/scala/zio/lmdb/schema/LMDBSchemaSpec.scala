@@ -9,7 +9,7 @@
  */
 package zio.lmdb.schema
 
-import zio.json.ast.Json
+import zio.lmdb.json.JValue.StringV
 import zio.test.*
 import zio.test.Assertion.*
 
@@ -18,14 +18,14 @@ object LMDBSchemaSpec extends ZIOSpecDefault {
   case class Foo(x: Int)
 
   // Explicit schema for Foo — should win over the opaque fallback when both are visible.
-  given LMDBSchema[Foo] = LMDBSchema.from(SchemaArtifact.JsonSchema(Json.Str("Foo")))
+  given LMDBSchema[Foo] = LMDBSchema.from(SchemaArtifact.JsonSchema(StringV("Foo")))
 
   case class Bar(y: String)
 
   val spec = suite("LMDBSchema")(
     test("explicit given takes precedence over the opaque fallback") {
       val s = LMDBSchema[Foo].artifact
-      assert(s)(equalTo(SchemaArtifact.JsonSchema(Json.Str("Foo")): SchemaArtifact))
+      assert(s)(equalTo(SchemaArtifact.JsonSchema(StringV("Foo")): SchemaArtifact))
     },
     test("opaque fallback applies when no explicit given is in scope") {
       val s = LMDBSchema[Bar].artifact

@@ -224,6 +224,13 @@ object JValue {
     }
   }
 
+  /** Raw jsoniter codec exposed in implicit scope so that `JsonCodecMaker.make[T]` reuses it for
+    * any `T` that has a `JValue` field, instead of inlining `JValue`'s recursive structure (which
+    * would re-trigger the macro forward-reference bug documented above). This is jsoniter-scala's
+    * documented "implicitly accessible codec" escape hatch for recursion.
+    */
+  given jValueValueCodec: JsonValueCodec[JValue] = JValueValueCodec
+
   given jValueCodec: LMDBCodecJson[JValue] = LMDBCodecJson(JValueValueCodec)
 
   // ── MACRO-FUTURE-CHECK ───────────────────────────────────────────────────────────────────────

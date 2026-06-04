@@ -12,8 +12,8 @@ package zio.lmdb
 import zio.*
 import zio.test.*
 import zio.test.Assertion.*
-import zio.json.ast.Json
 import zio.lmdb.json.LMDBCodecJson
+import zio.lmdb.json.JValue.StringV
 import zio.lmdb.schema.{LMDBSchema, SchemaArtifact}
 import zio.lmdb.StorageUserError.SchemaDrift
 
@@ -25,8 +25,8 @@ object LMDBSchemaDriftSpec extends ZIOSpecDefault with Commons {
   case class DocA(label: String) derives LMDBCodecJson
   case class DocB(label: String) derives LMDBCodecJson
 
-  given LMDBSchema[DocA] = LMDBSchema.from(SchemaArtifact.JsonSchema(Json.Str("DocA/v1")))
-  given LMDBSchema[DocB] = LMDBSchema.from(SchemaArtifact.JsonSchema(Json.Str("DocB/v1")))
+  given LMDBSchema[DocA] = LMDBSchema.from(SchemaArtifact.JsonSchema(StringV("DocA/v1")))
+  given LMDBSchema[DocB] = LMDBSchema.from(SchemaArtifact.JsonSchema(StringV("DocB/v1")))
 
   val spec = suite("LMDBSchemaDriftSpec")(
     test("collectionGet succeeds when caller's schema matches the persisted one") {
@@ -56,9 +56,9 @@ object LMDBSchemaDriftSpec extends ZIOSpecDefault with Commons {
       // We use two distinct schemas that resolve to different fingerprints under the same
       // KeyCodec wiring. fromKey stays the same so only the toKey side trips drift.
       given LMDBSchema[String] = LMDBSchema.from(SchemaArtifact.OpaqueSchema("string-default"))
-      val fromConcrete         = LMDBSchema.from[String](SchemaArtifact.JsonSchema(Json.Str("FromKey/v1")))
-      val toConcreteA          = LMDBSchema.from[String](SchemaArtifact.JsonSchema(Json.Str("ToKey/vA")))
-      val toConcreteB          = LMDBSchema.from[String](SchemaArtifact.JsonSchema(Json.Str("ToKey/vB")))
+      val fromConcrete         = LMDBSchema.from[String](SchemaArtifact.JsonSchema(StringV("FromKey/v1")))
+      val toConcreteA          = LMDBSchema.from[String](SchemaArtifact.JsonSchema(StringV("ToKey/vA")))
+      val toConcreteB          = LMDBSchema.from[String](SchemaArtifact.JsonSchema(StringV("ToKey/vB")))
       for {
         // Create with the A pair
         _    <- ZIO.serviceWithZIO[LMDB](_.indexCreate[String, String]("drift_idx")(using summon, summon, fromConcrete, toConcreteA))
