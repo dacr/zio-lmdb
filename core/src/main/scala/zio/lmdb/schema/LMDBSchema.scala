@@ -9,6 +9,9 @@
  */
 package zio.lmdb.schema
 
+import scala.compiletime.summonInline
+import scala.deriving.Mirror
+
 /** Typeclass providing the persisted [[SchemaArtifact]] for a type `T`.
   *
   * The typeclass is intentionally separate from `LMDBCodec[T]`: the codec is concerned with byte
@@ -31,6 +34,14 @@ object LMDBSchema {
   def from[T](a: SchemaArtifact): LMDBSchema[T] = new LMDBSchema[T] {
     val artifact: SchemaArtifact = a
   }
+
+  /** Derive the schema automatically from `T`'s structure, reached as
+    * `case class Foo(...) derives LMDBSchema`. Produces a `JsonSchema` artifact whose payload is
+    * the [[SchemaShape]] of `T` (field names, types, `required`). Opt-in per type: a type that does
+    * not derive (and has no explicit `given`) still resolves to the permissive [[opaque]] fallback.
+    */
+  inline def derived[T](using Mirror.Of[T]): LMDBSchema[T] =
+    from(SchemaArtifact.JsonSchema(summonInline[SchemaShape[T]].shape))
 
   /** Lowest-priority fallback. Any more specific `given LMDBSchema[T]` in scope takes precedence.
     *
