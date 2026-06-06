@@ -28,7 +28,10 @@ trait LMDBCodec[T]:
 
 ### JSON codec (default)
 
-The `zio.lmdb.json` package provides `LMDBCodecJson`, backed by [zio-json](https://github.com/zio/zio-json).
+The `zio.lmdb.json` package provides `LMDBCodecJson`, backed by [jsoniter-scala](https://github.com/plokhotnyuk/jsoniter-scala).
+
+{: .note }
+The JSON codec moved from zio-json to jsoniter-scala in 3.x. `derives LMDBCodecJson` is unchanged at the call site.
 
 ```scala
 import zio.lmdb.json.*
@@ -36,7 +39,12 @@ import zio.lmdb.json.*
 case class Product(id: String, name: String, price: Double) derives LMDBCodecJson
 ```
 
-`derives LMDBCodecJson` generates the `JsonEncoder` and `JsonDecoder` and wires them to `LMDBCodec[Product]`. No additional code required.
+`derives LMDBCodecJson` generates a jsoniter-scala `JsonValueCodec` (via `JsonCodecMaker.make`, fully inlined — no runtime reflection) and wires it to `LMDBCodec[Product]`. A lowest-priority `given` also makes any macro-derivable type usable as a value without an explicit `derives`.
+
+The trait exposes the underlying `valueCodec: JsonValueCodec[T]`, plus `LMDBCodecJson.toJsonString` / `fromJsonString` helpers for reaching the raw JSON text directly (debugging, tests, storing JSON outside a collection).
+
+{: .note }
+To make a collection self-describing for the catalog and the [SQL](sql.html) layer, also `derives LMDBSchema` — see [Schemas](schema.html).
 
 ### Custom codec
 

@@ -1,6 +1,6 @@
 ---
 title: Configuration
-nav_order: 9
+nav_order: 11
 ---
 
 # Configuration
