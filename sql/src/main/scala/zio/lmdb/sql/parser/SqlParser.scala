@@ -26,7 +26,7 @@ import zio.lmdb.sql.SqlError
 object SqlParser {
 
   private val reserved: Set[String] =
-    Set("select", "from", "where", "order", "by", "asc", "desc", "limit", "insert", "into", "values",
+    Set("select", "distinct", "as", "from", "where", "group", "having", "order", "by", "asc", "desc", "limit", "insert", "into", "values",
         "update", "set", "delete", "describe", "show", "collections", "indexes", "and", "or", "not",
         "like", "is", "null", "true", "false")
 
@@ -61,7 +61,18 @@ object SqlParser {
     )
 
   private def primary[$: P]: P[Expr] =
-    P(("(" ~ expr ~ ")") | literal.map(Expr.Lit(_)) | ident.map(Expr.Col(_)))
+    P(("(" ~ expr ~ ")") | aggExpr | scalarFuncExpr | literal.map(Expr.Lit(_)) | ident.map(Expr.Col(_)))
+
+  /** An aggregate reference inside an expression (e.g. in HAVING): COUNT(*), SUM(col), … */
+  private def aggExpr[$: P]: P[Expr] =
+    P(
+      (kw("count") ~ "(" ~ "*" ~ ")").map(_ => Expr.Aggregate(AggFunc.Count, None)) |
+        (aggFunc ~ "(" ~ ident ~ ")").map { case (f, c) => Expr.Aggregate(f, Some(c)) }
+    )
+
+  /** Scalar functions usable in WHERE/HAVING. Currently LENGTH(<expr>). */
+  private def scalarFuncExpr[$: P]: P[Expr] =
+    P(kw("length").map(_ => "length") ~ "(" ~ expr ~ ")").map { case (name, arg) => Expr.Func(name, List(arg)) }
 
   private def term[$: P]: P[Expr] =
     P(
@@ -78,19 +89,46 @@ object SqlParser {
 
   private def expr[$: P]: P[Expr] = P(andExpr ~ (kw("or") ~ andExpr).rep).map { case (h, t) => t.foldLeft(h)(Expr.Or(_, _)) }
 
-  private def countProj[$: P]: P[Projection] =
-    P(kw("count") ~ "(" ~ (P("*").map(_ => None) | ident.map(Some(_))) ~ ")").map(Projection.Count(_))
+  // Aggregate function names are not reserved, so `count`, `sum`, ... stay usable as column names;
+  // they only read as aggregates when directly followed by `(`.
+  private def aggFunc[$: P]: P[AggFunc] =
+    P(
+      kw("count").map(_ => AggFunc.Count) | kw("sum").map(_ => AggFunc.Sum) | kw("avg").map(_ => AggFunc.Avg) |
+        kw("min").map(_ => AggFunc.Min) | kw("max").map(_ => AggFunc.Max)
+    )
+
+  private def aggItem[$: P]: P[SelectItem.Agg] =
+    P(
+      (kw("count") ~ "(" ~ "*" ~ ")").map(_ => SelectItem.Agg(AggFunc.Count, None)) |
+        (aggFunc ~ "(" ~ ident ~ ")").map { case (f, c) => SelectItem.Agg(f, Some(c)) }
+    )
+
+  /** Optional `AS <name>` column alias. */
+  private def aliasOpt[$: P]: P[Option[String]] = P((kw("as") ~ ident).?)
+
+  private def selectItem[$: P]: P[SelectItem] =
+    P(
+      (aggItem ~ aliasOpt).map { case (agg, al) => agg.copy(alias = al) } |
+        (ident ~ aliasOpt).map { case (n, al) => SelectItem.Col(n, al) }
+    )
 
   private def projection[$: P]: P[Projection] =
-    P(countProj | P("*").map(_ => Projection.Star) | ident.rep(1, sep = ",").map(ns => Projection.Columns(ns.toList)))
+    P(P("*").map(_ => Projection.Star) | selectItem.rep(1, sep = ",").map(items => Projection.Items(items.toList)))
 
   private def orderBy[$: P]: P[OrderBy] =
     P(kw("order") ~ kw("by") ~ ident ~ (kw("asc").map(_ => false) | kw("desc").map(_ => true)).?.map(_.getOrElse(false)))
       .map { case (c, d) => OrderBy(c, d) }
 
+  private def distinctKw[$: P]: P[Boolean] =
+    P((kw("distinct").map(_ => true)).?).map(_.getOrElse(false))
+
+  private def groupByClause[$: P]: P[List[String]] =
+    P(kw("group") ~ kw("by") ~ ident.rep(1, sep = ",")).map(_.toList)
+
+  // Standard SQL clause order: SELECT … FROM … WHERE … GROUP BY … HAVING … ORDER BY … LIMIT.
   private def selectStmt[$: P]: P[Statement.Select] =
-    P(kw("select") ~ projection ~ kw("from") ~ ident ~ (kw("where") ~ expr).? ~ orderBy.? ~ (kw("limit") ~ intNumber).?)
-      .map { case (proj, from, w, ob, lim) => Statement.Select(proj, from, w, ob, lim) }
+    P(kw("select") ~ distinctKw ~ projection ~ kw("from") ~ ident ~ (kw("where") ~ expr).? ~ groupByClause.? ~ (kw("having") ~ expr).? ~ orderBy.? ~ (kw("limit") ~ intNumber).?)
+      .map { case (distinct, proj, from, w, gb, hv, ob, lim) => Statement.Select(proj, distinct, from, w, gb.getOrElse(Nil), hv, ob, lim) }
 
   private def insertStmt[$: P]: P[Statement.Insert] =
     P(kw("insert") ~ kw("into") ~ ident ~ "(" ~ ident.rep(1, sep = ",") ~ ")" ~ kw("values") ~ "(" ~ literal.rep(1, sep = ",") ~ ")")

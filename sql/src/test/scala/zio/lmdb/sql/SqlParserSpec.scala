@@ -23,8 +23,11 @@ object SqlParserSpec extends ZIOSpecDefault {
       assertTrue(
         s == Statement.Select(
           Projection.Star,
+          false,
           "orders",
           Some(Expr.Cmp(CmpOp.Eq, Expr.Col("customer"), Expr.Lit(Literal.StrLit("Alice")))),
+          Nil,
+          None,
           Some(OrderBy("_key", descending = true)),
           Some(10L)
         )
@@ -32,10 +35,55 @@ object SqlParserSpec extends ZIOSpecDefault {
     },
     test("COUNT(*) and COUNT(col) projections; bare 'count' stays a column") {
       assertTrue(
-        ok("select count(*) from t")            == Statement.Select(Projection.Count(None), "t", None, None, None),
-        ok("SELECT COUNT(*) FROM t WHERE a > 1") == Statement.Select(Projection.Count(None), "t", Some(Expr.Cmp(CmpOp.Gt, Expr.Col("a"), Expr.Lit(Literal.IntLit(1)))), None, None),
-        ok("select count(amount) from t")        == Statement.Select(Projection.Count(Some("amount")), "t", None, None, None),
-        ok("select count from t")                == Statement.Select(Projection.Columns(List("count")), "t", None, None, None)
+        ok("select count(*) from t")            == Statement.Select(Projection.Items(List(SelectItem.Agg(AggFunc.Count, None))), false, "t", None, Nil, None, None, None),
+        ok("SELECT COUNT(*) FROM t WHERE a > 1") == Statement.Select(Projection.Items(List(SelectItem.Agg(AggFunc.Count, None))), false, "t", Some(Expr.Cmp(CmpOp.Gt, Expr.Col("a"), Expr.Lit(Literal.IntLit(1)))), Nil, None, None, None),
+        ok("select count(amount) from t")        == Statement.Select(Projection.Items(List(SelectItem.Agg(AggFunc.Count, Some("amount")))), false, "t", None, Nil, None, None, None),
+        ok("select count from t")                == Statement.Select(Projection.Items(List(SelectItem.Col("count"))), false, "t", None, Nil, None, None, None)
+      )
+    },
+    test("aggregates with GROUP BY, MIN/MAX/SUM/AVG, and SELECT DISTINCT") {
+      assertTrue(
+        ok("select customer, sum(amount), avg(amount) from orders group by customer")
+          == Statement.Select(
+            Projection.Items(List(SelectItem.Col("customer"), SelectItem.Agg(AggFunc.Sum, Some("amount")), SelectItem.Agg(AggFunc.Avg, Some("amount")))),
+            false, "orders", None, List("customer"), None, None, None
+          ),
+        ok("select min(age), max(age) from people")
+          == Statement.Select(Projection.Items(List(SelectItem.Agg(AggFunc.Min, Some("age")), SelectItem.Agg(AggFunc.Max, Some("age")))), false, "people", None, Nil, None, None, None),
+        ok("select distinct customer from orders")
+          == Statement.Select(Projection.Items(List(SelectItem.Col("customer"))), true, "orders", None, Nil, None, None, None),
+        ok("select distinct city, country from people order by country limit 5")
+          == Statement.Select(Projection.Items(List(SelectItem.Col("city"), SelectItem.Col("country"))), true, "people", None, Nil, None, Some(OrderBy("country", descending = false)), Some(5L))
+      )
+    },
+    test("AS aliases and ORDER BY an alias (standard GROUP BY … ORDER BY order)") {
+      assertTrue(
+        ok("select cameraName, count(*) as count from originals group by cameraName order by count")
+          == Statement.Select(
+            Projection.Items(List(SelectItem.Col("cameraName"), SelectItem.Agg(AggFunc.Count, None, Some("count")))),
+            false, "originals", None, List("cameraName"), None, Some(OrderBy("count", descending = false)), None
+          ),
+        ok("select name as n from t") == Statement.Select(Projection.Items(List(SelectItem.Col("name", Some("n")))), false, "t", None, Nil, None, None, None)
+      )
+    },
+    test("LENGTH function in WHERE, and HAVING with an aggregate (the full pipeline)") {
+      assertTrue(
+        ok("select * from t where length(name) > 0")
+          == Statement.Select(
+            Projection.Star, false, "t",
+            Some(Expr.Cmp(CmpOp.Gt, Expr.Func("length", List(Expr.Col("name"))), Expr.Lit(Literal.IntLit(0)))),
+            Nil, None, None, None
+          ),
+        ok("select cameraName, count(*) as count from originals where length(cameraName) > 0 group by cameraName having count(*) > 100 order by count")
+          == Statement.Select(
+            Projection.Items(List(SelectItem.Col("cameraName"), SelectItem.Agg(AggFunc.Count, None, Some("count")))),
+            false, "originals",
+            Some(Expr.Cmp(CmpOp.Gt, Expr.Func("length", List(Expr.Col("cameraName"))), Expr.Lit(Literal.IntLit(0)))),
+            List("cameraName"),
+            Some(Expr.Cmp(CmpOp.Gt, Expr.Aggregate(AggFunc.Count, None), Expr.Lit(Literal.IntLit(100)))),
+            Some(OrderBy("count", descending = false)),
+            None
+          )
       )
     },
     test("projection columns and AND/OR/comparison precedence") {
@@ -48,14 +96,14 @@ object SqlParserSpec extends ZIOSpecDefault {
           ),
           Expr.Cmp(CmpOp.Ge, Expr.Col("c"), Expr.Lit(Literal.IntLit(3)))
         )
-      assertTrue(s == Statement.Select(Projection.Columns(List("_key", "amount")), "t", Some(expectedWhere), None, None))
+      assertTrue(s == Statement.Select(Projection.Items(List(SelectItem.Col("_key"), SelectItem.Col("amount"))), false, "t", Some(expectedWhere), Nil, None, None, None))
     },
     test("decimal, boolean, null literals; IS NULL and LIKE") {
       assertTrue(
-        ok("select * from t where p = 9.99")     == Statement.Select(Projection.Star, "t", Some(Expr.Cmp(CmpOp.Eq, Expr.Col("p"), Expr.Lit(Literal.DecLit(BigDecimal("9.99"))))), None, None),
-        ok("select * from t where note is null")  == Statement.Select(Projection.Star, "t", Some(Expr.IsNull(Expr.Col("note"), negated = false)), None, None),
-        ok("select * from t where note is not null") == Statement.Select(Projection.Star, "t", Some(Expr.IsNull(Expr.Col("note"), negated = true)), None, None),
-        ok("select * from t where name like 'A%'") == Statement.Select(Projection.Star, "t", Some(Expr.Like(Expr.Col("name"), "A%")), None, None)
+        ok("select * from t where p = 9.99")     == Statement.Select(Projection.Star, false, "t", Some(Expr.Cmp(CmpOp.Eq, Expr.Col("p"), Expr.Lit(Literal.DecLit(BigDecimal("9.99"))))), Nil, None, None, None),
+        ok("select * from t where note is null")  == Statement.Select(Projection.Star, false, "t", Some(Expr.IsNull(Expr.Col("note"), negated = false)), Nil, None, None, None),
+        ok("select * from t where note is not null") == Statement.Select(Projection.Star, false, "t", Some(Expr.IsNull(Expr.Col("note"), negated = true)), Nil, None, None, None),
+        ok("select * from t where name like 'A%'") == Statement.Select(Projection.Star, false, "t", Some(Expr.Like(Expr.Col("name"), "A%")), Nil, None, None, None)
       )
     },
     test("INSERT / UPDATE / DELETE") {
@@ -73,7 +121,7 @@ object SqlParserSpec extends ZIOSpecDefault {
         ok("describe orders")        == Statement.Describe("orders"),
         ok("show collections;")      == Statement.Show(ShowTarget.Collections),
         ok("show indexes")           == Statement.Show(ShowTarget.Indexes),
-        ok("select * from t where s = 'it''s'") == Statement.Select(Projection.Star, "t", Some(Expr.Cmp(CmpOp.Eq, Expr.Col("s"), Expr.Lit(Literal.StrLit("it's")))), None, None)
+        ok("select * from t where s = 'it''s'") == Statement.Select(Projection.Star, false, "t", Some(Expr.Cmp(CmpOp.Eq, Expr.Col("s"), Expr.Lit(Literal.StrLit("it's")))), Nil, None, None, None)
       )
     },
     test("a malformed statement reports a parse error") {

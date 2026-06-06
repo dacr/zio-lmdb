@@ -20,10 +20,11 @@ import org.jline.reader.impl.DefaultParser
 import org.jline.terminal.{Terminal, TerminalBuilder}
 import zio.*
 import zio.lmdb.*
-import zio.lmdb.sql.engine.SqlEngine
+import zio.lmdb.sql.engine.{Catalog, SqlEngine}
 import zio.lmdb.sql.result.{Format, Renderer}
 
 import java.nio.file.{Files, Path, Paths}
+import java.util.concurrent.atomic.AtomicReference
 
 /** The interactive SQL shell. The terminal is the only I/O; statements go through the pure
   * `SqlEngine` pipeline and are rendered with the selected [[Format]]. Anything that does not start
@@ -37,7 +38,8 @@ object Main extends ZIOAppDefault {
     dbHome: Path,
     active: Ref[Option[LMDB]],
     scope: Ref[Option[Scope.Closeable]],
-    format: Ref[Format]
+    format: Ref[Format],
+    catalog: AtomicReference[CatalogSnapshot]
   ) {
     def out(s: String): UIO[Unit]  = ZIO.attempt { terminal.writer().println(s); terminal.writer().flush() }.orDie
     def err(s: String): UIO[Unit]  = out(s"! $s")
@@ -52,6 +54,7 @@ object Main extends ZIOAppDefault {
       active    <- Ref.make[Option[LMDB]](None)
       scope     <- Ref.make[Option[Scope.Closeable]](None)
       format    <- Ref.make[Format](Format.Table)
+      catalog    = new AtomicReference(CatalogSnapshot.empty)
       ctx       <- ZIO.attempt {
                      // JLine 4.x probes the terminal for DEC mode 2027 (grapheme-cluster) support when a
                      // terminal is built, emitting ESC[?2027$p ESC[c ESC[6n. The cursor-position (CPR)
@@ -74,13 +77,15 @@ object Main extends ZIOAppDefault {
                                       .builder()
                                       .terminal(terminal)
                                       .parser(parser)
+                                      .completer(new SqlCompleter(catalog))
                                       .variable(LineReader.HISTORY_FILE, history)
                                       .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
                                       .build()
-                     Ctx(terminal, reader, dbHome, active, scope, format)
+                     Ctx(terminal, reader, dbHome, active, scope, format, catalog)
                    }
       _         <- ctx.out(s"zio-lmdb-sql  —  databases home: $dbHome")
       _         <- ctx.out("Type SQL, or \\h for help. \\q to quit.")
+      _         <- refreshDatabases(ctx) // populate \c completion before any connection
       _         <- loop(ctx)
     } yield ()).catchAll(e => Console.printLineError(s"Fatal: $e").orDie)
 
@@ -137,12 +142,16 @@ object Main extends ZIOAppDefault {
       case other   => ctx.err(s"unknown format '$other' (table|json|csv)")
     }
 
-  private def listDatabases(ctx: Ctx): Task[Unit] =
+  /** The LMDB database directories (those containing a `data.mdb`) under the databases home. */
+  private def listDbDirs(dbHome: Path): Task[List[String]] =
     ZIO.attemptBlocking {
-      val stream = Files.list(ctx.dbHome)
+      val stream = Files.list(dbHome)
       try stream.filter(p => Files.isDirectory(p) && Files.exists(p.resolve("data.mdb"))).map(_.getFileName.toString).sorted().toArray.toList.map(_.toString)
       finally stream.close()
-    }.flatMap {
+    }
+
+  private def listDatabases(ctx: Ctx): Task[Unit] =
+    listDbDirs(ctx.dbHome).flatMap {
       case Nil => ctx.out("(no databases)")
       case dbs => ctx.out(dbs.map(d => s" - $d").mkString("\n"))
     }
@@ -163,11 +172,30 @@ object Main extends ZIOAppDefault {
                           .provide(ZLayer.succeed(newScope))
             _        <- ctx.active.set(Some(lmdb))
             _        <- ctx.scope.set(Some(newScope))
+            _        <- refreshDatabases(ctx)
+            _        <- refreshCatalog(ctx, lmdb)
             _        <- ctx.out(s"connected to '$name'")
           } yield ()
         }
     }
   }
+
+  /** Refresh the database list used for `\c` completion (independent of any connection). */
+  private def refreshDatabases(ctx: Ctx): UIO[Unit] =
+    listDbDirs(ctx.dbHome).orElseSucceed(Nil).flatMap(dbs => ZIO.succeed(ctx.catalog.updateAndGet(_.copy(databases = dbs)))).unit
+
+  /** Refresh the collection/column lists (for `\d`, FROM, … completion) from the connected database. */
+  private def refreshCatalog(ctx: Ctx, lmdb: LMDB): UIO[Unit] =
+    Catalog
+      .list(lmdb)
+      .map { entries =>
+        val names = entries.map(_.collectionName).sorted
+        val cols  = entries.map(e => e.collectionName -> ("_key" :: Catalog.toInfo(e).columns.map(_.name))).toMap
+        (names, cols)
+      }
+      .orElseSucceed((Nil, Map.empty[String, List[String]]))
+      .flatMap { case (names, cols) => ZIO.succeed(ctx.catalog.updateAndGet(_.copy(collections = names, columns = cols))) }
+      .unit
 
   private def help(ctx: Ctx): UIO[Unit] =
     ctx.out(
@@ -182,8 +210,12 @@ object Main extends ZIOAppDefault {
         |  \h                     this help
         |  \q                     quit
         |
+        |TAB completes commands, keywords, collection and column names.
         |The key is the pseudo-column _key; value fields are columns (see \d). Examples:
         |  SELECT _key, customer FROM orders WHERE customer = 'Alice' ORDER BY _key LIMIT 10;
-        |  SELECT COUNT(*) FROM orders WHERE customer = 'Alice';""".stripMargin
+        |  SELECT DISTINCT customer FROM orders ORDER BY customer;
+        |  SELECT customer, COUNT(*) AS n, SUM(amount), AVG(amount), MIN(amount), MAX(amount)
+        |    FROM orders WHERE LENGTH(customer) > 0
+        |    GROUP BY customer HAVING COUNT(*) > 1 ORDER BY n;""".stripMargin
     )
 }

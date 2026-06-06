@@ -18,6 +18,7 @@ import zio.lmdb.sql.result.QueryResult
 object SqlEngineSpec extends ZIOSpecDefault {
 
   final case class Person(name: String, age: Long) derives LMDBCodecJson, LMDBSchema
+  final case class Order(customer: String, amount: Long) derives LMDBCodecJson, LMDBSchema
 
   private def deleteRecursively(f: java.io.File): Unit = {
     if (f.isDirectory) Option(f.listFiles()).foreach(_.foreach(deleteRecursively))
@@ -45,6 +46,14 @@ object SqlEngineSpec extends ZIOSpecDefault {
       _      <- people.upsertOverwrite("p2", Person("Bob", 25))
       _      <- people.upsertOverwrite("p3", Person("Carol", 40))
     } yield people
+
+  private val seedOrders =
+    for {
+      orders <- LMDB.collectionCreate[String, Order]("orders")
+      _      <- orders.upsertOverwrite("o1", Order("Alice", 10))
+      _      <- orders.upsertOverwrite("o2", Order("Alice", 30))
+      _      <- orders.upsertOverwrite("o3", Order("Bob", 5))
+    } yield orders
 
   override def spec = suite("SqlEngine")(
     test("SELECT with WHERE, ORDER BY and projection over real stored data") {
@@ -85,10 +94,12 @@ object SqlEngineSpec extends ZIOSpecDefault {
         _   <- seed
         all <- query("select count(*) from people")
         big <- query("select count(*) from people where age >= 30")
+        nun <- query("select count(*) from people where age > 100")
       } yield assertTrue(
         all.size == 1,
-        field(all.head, "count") == LongV(3),
-        field(big.head, "count") == LongV(2)
+        field(all.head, "count(*)") == LongV(3),
+        field(big.head, "count(*)") == LongV(2),
+        field(nun.head, "count(*)") == LongV(0) // empty result is still one row, count 0
       )
     },
     test("COUNT(col) counts only non-null values of that column") {
@@ -97,7 +108,71 @@ object SqlEngineSpec extends ZIOSpecDefault {
         _   <- query("insert into people (_key, name) values ('p4', 'Dave')")
         age <- query("select count(age) from people")
         nme <- query("select count(name) from people")
-      } yield assertTrue(field(age.head, "count") == LongV(3), field(nme.head, "count") == LongV(4))
+      } yield assertTrue(field(age.head, "count(age)") == LongV(3), field(nme.head, "count(name)") == LongV(4))
+    },
+    test("SUM / AVG / MIN / MAX aggregate over rows") {
+      for {
+        _ <- seed
+        r <- query("select sum(age), min(age), max(age) from people")
+        a <- query("select avg(age) from people where age >= 30") // (30 + 40) / 2 = 35
+      } yield assertTrue(
+        field(r.head, "sum(age)") == DecimalV(BigDecimal(95)),
+        field(r.head, "min(age)") == LongV(25),
+        field(r.head, "max(age)") == LongV(40),
+        field(a.head, "avg(age)") == DecimalV(BigDecimal(35))
+      )
+    },
+    test("GROUP BY with COUNT and SUM, ordered by the group key") {
+      for {
+        _    <- seedOrders
+        rows <- query("select customer, count(*), sum(amount) from orders group by customer order by customer")
+      } yield assertTrue(
+        rows.map(r => field(r, "customer"))    == List(StringV("Alice"), StringV("Bob")),
+        rows.map(r => field(r, "count(*)"))     == List(LongV(2), LongV(1)),
+        rows.map(r => field(r, "sum(amount)"))  == List(DecimalV(BigDecimal(40)), DecimalV(BigDecimal(5)))
+      )
+    },
+    test("alias (AS count) and ORDER BY the alias") {
+      for {
+        _    <- seedOrders
+        rows <- query("select customer, count(*) as count from orders group by customer order by count")
+      } yield assertTrue(
+        rows.map(r => field(r, "count"))    == List(LongV(1), LongV(2)), // Bob:1, Alice:2 — ascending by the alias
+        rows.map(r => field(r, "customer")) == List(StringV("Bob"), StringV("Alice"))
+      )
+    },
+    test("LENGTH() is usable in WHERE") {
+      for {
+        _    <- seedOrders
+        rows <- query("select distinct customer from orders where length(customer) > 3 order by customer")
+      } yield assertTrue(rows.map(r => field(r, "customer")) == List(StringV("Alice"))) // "Bob" has length 3
+    },
+    test("HAVING filters groups by an aggregate") {
+      for {
+        _    <- seedOrders
+        rows <- query("select customer, count(*) as count from orders group by customer having count(*) > 1 order by customer")
+      } yield assertTrue(
+        rows.map(r => field(r, "customer")) == List(StringV("Alice")), // Bob has only 1 order
+        rows.map(r => field(r, "count"))    == List(LongV(2))
+      )
+    },
+    test("an aggregate in WHERE is rejected (belongs in HAVING)") {
+      for {
+        _    <- seedOrders
+        exit <- query("select customer from orders where count(*) > 1 group by customer").exit
+      } yield assert(exit)(Assertion.fails(Assertion.isSubtype[SqlError.Unsupported](Assertion.anything)))
+    },
+    test("SELECT DISTINCT removes duplicate projected rows") {
+      for {
+        _    <- seedOrders
+        rows <- query("select distinct customer from orders order by customer")
+      } yield assertTrue(rows.map(r => field(r, "customer")) == List(StringV("Alice"), StringV("Bob")))
+    },
+    test("a non-aggregated column without GROUP BY is rejected") {
+      for {
+        _    <- seed
+        exit <- query("select name, count(*) from people").exit
+      } yield assert(exit)(Assertion.fails(Assertion.isSubtype[SqlError.Unsupported](Assertion.anything)))
     },
     test("DESCRIBE shows the key's codec id and the value columns (no guessing)") {
       for {
