@@ -33,8 +33,10 @@ enum ShowTarget    { case Collections, Indexes }
 
 sealed trait Projection
 object Projection {
-  case object Star                              extends Projection
-  final case class Columns(names: List[String]) extends Projection
+  case object Star                               extends Projection
+  final case class Columns(names: List[String])  extends Projection
+  /** `COUNT(*)` when `column` is `None`; `COUNT(<column>)` (non-null values) otherwise. */
+  final case class Count(column: Option[String]) extends Projection
 }
 
 final case class OrderBy(column: String, descending: Boolean)

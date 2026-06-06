@@ -78,8 +78,11 @@ object SqlParser {
 
   private def expr[$: P]: P[Expr] = P(andExpr ~ (kw("or") ~ andExpr).rep).map { case (h, t) => t.foldLeft(h)(Expr.Or(_, _)) }
 
+  private def countProj[$: P]: P[Projection] =
+    P(kw("count") ~ "(" ~ (P("*").map(_ => None) | ident.map(Some(_))) ~ ")").map(Projection.Count(_))
+
   private def projection[$: P]: P[Projection] =
-    P(P("*").map(_ => Projection.Star) | ident.rep(1, sep = ",").map(ns => Projection.Columns(ns.toList)))
+    P(countProj | P("*").map(_ => Projection.Star) | ident.rep(1, sep = ",").map(ns => Projection.Columns(ns.toList)))
 
   private def orderBy[$: P]: P[OrderBy] =
     P(kw("order") ~ kw("by") ~ ident ~ (kw("asc").map(_ => false) | kw("desc").map(_ => true)).?.map(_.getOrElse(false)))

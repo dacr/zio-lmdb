@@ -16,6 +16,7 @@
 package zio.lmdb.sql.repl
 
 import org.jline.reader.{EndOfFileException, LineReader, LineReaderBuilder, UserInterruptException}
+import org.jline.reader.impl.DefaultParser
 import org.jline.terminal.{Terminal, TerminalBuilder}
 import zio.*
 import zio.lmdb.*
@@ -52,9 +53,30 @@ object Main extends ZIOAppDefault {
       scope     <- Ref.make[Option[Scope.Closeable]](None)
       format    <- Ref.make[Format](Format.Table)
       ctx       <- ZIO.attempt {
+                     // JLine 4.x probes the terminal for DEC mode 2027 (grapheme-cluster) support when a
+                     // terminal is built, emitting ESC[?2027$p ESC[c ESC[6n. The cursor-position (CPR)
+                     // reply leaks onto stdin: it prints `^[[27;1R` before our banner and gets prepended
+                     // to the first line read, so e.g. `\c name` no longer starts with `\` and is treated
+                     // as SQL ("no database selected"). We don't need grapheme-width precision here, so
+                     // turn the probe off. Must be set before TerminalBuilder.build().
+                     java.lang.System.setProperty("org.jline.terminal.graphemeCluster", "false")
                      val terminal = TerminalBuilder.builder().system(true).build()
                      val history  = Paths.get(java.lang.System.getProperty("user.home"), ".zio-lmdb-sql-history")
-                     val reader   = LineReaderBuilder.builder().terminal(terminal).variable(LineReader.HISTORY_FILE, history).build()
+                     // Our commands are psql-style and start with '\' (\c, \l, \h, \d, \format, \q). JLine's
+                     // history "event expansion" treats a leading '\' as an escape and strips it, so readLine
+                     // would return "l" for "\l"; the line then fails the startsWith("\\") dispatch and is run
+                     // as SQL ("no database selected"). Disable event expansion to keep '\' literal (and '!',
+                     // as in SQL "!="), and drop '\' as a parser escape char so word-splitting/continuation
+                     // leave our commands intact.
+                     val parser   = new DefaultParser()
+                     parser.setEscapeChars(null)
+                     val reader   = LineReaderBuilder
+                                      .builder()
+                                      .terminal(terminal)
+                                      .parser(parser)
+                                      .variable(LineReader.HISTORY_FILE, history)
+                                      .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
+                                      .build()
                      Ctx(terminal, reader, dbHome, active, scope, format)
                    }
       _         <- ctx.out(s"zio-lmdb-sql  —  databases home: $dbHome")
@@ -160,7 +182,8 @@ object Main extends ZIOAppDefault {
         |  \h                     this help
         |  \q                     quit
         |
-        |The key is the pseudo-column _key; value fields are columns (see \d). Example:
-        |  SELECT _key, customer FROM orders WHERE customer = 'Alice' ORDER BY _key LIMIT 10;""".stripMargin
+        |The key is the pseudo-column _key; value fields are columns (see \d). Examples:
+        |  SELECT _key, customer FROM orders WHERE customer = 'Alice' ORDER BY _key LIMIT 10;
+        |  SELECT COUNT(*) FROM orders WHERE customer = 'Alice';""".stripMargin
     )
 }

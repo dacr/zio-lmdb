@@ -80,6 +80,25 @@ object SqlEngineSpec extends ZIOSpecDefault {
         rows <- query("select name from people where name like 'A%'")
       } yield assertTrue(rows.map(r => field(r, "name")) == List(StringV("Alice")))
     },
+    test("COUNT(*) counts all rows, and with WHERE counts the matches") {
+      for {
+        _   <- seed
+        all <- query("select count(*) from people")
+        big <- query("select count(*) from people where age >= 30")
+      } yield assertTrue(
+        all.size == 1,
+        field(all.head, "count") == LongV(3),
+        field(big.head, "count") == LongV(2)
+      )
+    },
+    test("COUNT(col) counts only non-null values of that column") {
+      for {
+        _   <- seed
+        _   <- query("insert into people (_key, name) values ('p4', 'Dave')")
+        age <- query("select count(age) from people")
+        nme <- query("select count(name) from people")
+      } yield assertTrue(field(age.head, "count") == LongV(3), field(nme.head, "count") == LongV(4))
+    },
     test("DESCRIBE shows the key's codec id and the value columns (no guessing)") {
       for {
         _    <- seed

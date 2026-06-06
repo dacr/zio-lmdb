@@ -182,7 +182,7 @@ lazy val sql = (project in file("sql"))
     name                             := "zio-lmdb-sql",
     description                      := "SQL REPL for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "org.jline"  % "jline"               % "4.1.2",
+      "org.jline"  % "jline"               % "4.1.3",
       "com.lihaoyi" %% "fastparse"          % "3.1.1",
       "dev.zio"   %% "zio"                  % versions.zio,
       "dev.zio"   %% "zio-streams"          % versions.zio,

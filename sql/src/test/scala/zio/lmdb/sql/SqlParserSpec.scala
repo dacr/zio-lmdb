@@ -30,6 +30,14 @@ object SqlParserSpec extends ZIOSpecDefault {
         )
       )
     },
+    test("COUNT(*) and COUNT(col) projections; bare 'count' stays a column") {
+      assertTrue(
+        ok("select count(*) from t")            == Statement.Select(Projection.Count(None), "t", None, None, None),
+        ok("SELECT COUNT(*) FROM t WHERE a > 1") == Statement.Select(Projection.Count(None), "t", Some(Expr.Cmp(CmpOp.Gt, Expr.Col("a"), Expr.Lit(Literal.IntLit(1)))), None, None),
+        ok("select count(amount) from t")        == Statement.Select(Projection.Count(Some("amount")), "t", None, None, None),
+        ok("select count from t")                == Statement.Select(Projection.Columns(List("count")), "t", None, None, None)
+      )
+    },
     test("projection columns and AND/OR/comparison precedence") {
       val s = ok("SELECT _key, amount FROM t WHERE a > 1 AND b < 2 OR c >= 3")
       val expectedWhere =

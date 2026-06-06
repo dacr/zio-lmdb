@@ -65,19 +65,36 @@ object SqlEngine {
 
   // ── SELECT ─────────────────────────────────────────────────────────────────────────────────
 
-  private def selectResult(lmdb: LMDB, info: CollectionInfo, sel: Statement.Select): QueryResult = {
-    val cols  = projectionColumns(info, sel.projection)
-    val names = cols.map(_.name)
+  private def selectResult(lmdb: LMDB, info: CollectionInfo, sel: Statement.Select): QueryResult =
+    sel.projection match {
+      case Projection.Count(arg) => countResult(lmdb, info, sel.where, arg)
+      case proj                  =>
+        val cols  = projectionColumns(info, proj)
+        val names = cols.map(_.name)
 
-    val filtered = filterWhere(rawStream(lmdb, info), sel.where)
+        val filtered = filterWhere(rawStream(lmdb, info), sel.where)
 
-    val ordered: ZStream[Any, SqlError, RawRow] = sel.orderBy match {
-      case Some(ob) => ZStream.fromIterableZIO(filtered.runCollect.map(c => sortRows(c.toList, ob)))
-      case None     => filtered
+        val ordered: ZStream[Any, SqlError, RawRow] = sel.orderBy match {
+          case Some(ob) => ZStream.fromIterableZIO(filtered.runCollect.map(c => sortRows(c.toList, ob)))
+          case None     => filtered
+        }
+        val limited   = sel.limit.fold(ordered)(n => ordered.take(n))
+        val projected = limited.map(r => projectRow(r, names))
+        QueryResult(cols, projected)
     }
-    val limited   = sel.limit.fold(ordered)(n => ordered.take(n))
-    val projected = limited.map(r => projectRow(r, names))
-    QueryResult(cols, projected)
+
+  /** `SELECT COUNT(*)` / `COUNT(col)`: a single scalar row, counted by streaming once over the
+    * WHERE-filtered rows (no buffering). `COUNT(col)` counts rows whose `col` is non-null. ORDER BY
+    * and LIMIT are meaningless on a lone aggregate and are ignored.
+    */
+  private def countResult(lmdb: LMDB, info: CollectionInfo, where: Option[Expr], arg: Option[String]): QueryResult = {
+    val filtered = filterWhere(rawStream(lmdb, info), where)
+    val counted  = arg match {
+      case None      => filtered.runCount
+      case Some(col) => filtered.filter(r => lookup(r)(col) != NullV).runCount
+    }
+    val row = counted.map(n => MapV(ListMap("count" -> LongV(n))): JValue)
+    QueryResult(List(Column("count", "integer")), ZStream.fromZIO(row))
   }
 
   private def projectionColumns(info: CollectionInfo, proj: Projection): List[Column] =
@@ -88,6 +105,7 @@ object SqlEngine {
           else List(Column("_value", "any"))
         Column("_key", info.keyId.getOrElse("key")) :: valueCols
       case Projection.Columns(ns) => ns.map(n => Column(n, hintFor(info, n)))
+      case Projection.Count(_)    => List(Column("count", "integer"))
     }
 
   private def hintFor(info: CollectionInfo, name: String): String =

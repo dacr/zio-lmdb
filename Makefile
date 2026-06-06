@@ -12,5 +12,8 @@ readme-test:
 sql-assembly:
 	sbt sql/assembly
 
+sql-console:
+	java --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED -jar sql/target/scala-*/zio-lmdb-sql.jar
+
 performance-test:
 	sbt "testOnly zio.lmdb.LMDBPerformanceProtoBufSpec zio.lmdb.LMDBPerformanceJsonSpec"
