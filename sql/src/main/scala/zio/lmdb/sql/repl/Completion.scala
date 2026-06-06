@@ -75,12 +75,13 @@ object SqlCompleter {
   val keywords: List[String] = List(
     "select", "distinct", "as", "from", "where", "group", "by", "order", "limit", "asc", "desc",
     "insert", "into", "values", "update", "set", "delete", "describe", "show", "collections", "indexes",
+    "join", "inner", "left", "outer", "on",
     "and", "or", "not", "like", "is", "null", "count(", "sum(", "avg(", "min(", "max("
   )
 
   /** Positions where a collection name is expected next. */
   private def collectionSlot(prev: String): Boolean =
-    prev == "from" || prev == "into" || prev == "update" || prev == "describe" || prev == "desc"
+    prev == "from" || prev == "into" || prev == "update" || prev == "describe" || prev == "desc" || prev == "join"
 
   /** Columns of the collection named after the statement's FROM / INTO / UPDATE token, if known. */
   private def columnsOfFrom(words: List[String], snap: CatalogSnapshot): List[String] = {

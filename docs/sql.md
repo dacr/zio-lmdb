@@ -234,13 +234,75 @@ individual rows *before* grouping; `HAVING` filters groups *after*.
 
 ---
 
+## JOIN
+
+Two or more collections can be joined. Tables may take an alias (`FROM sales s`, `JOIN customers c`),
+and columns are then referenced qualified (`s.amount`, `c.name`). `INNER JOIN` (the default for a bare
+`JOIN`) keeps only matched rows; `LEFT [OUTER] JOIN` keeps every left row, filling the right side with
+`NULL` when there is no match. The `ON` condition is a conjunction of equalities (anything else becomes
+a residual filter).
+
+```sql
+-- match a value field to the other collection's key
+SELECT s._key, c.name, s.amount
+  FROM sales s
+  JOIN customers c ON s.customerId = c._key
+  ORDER BY s._key;
+
+-- keep sales whose customer is missing (c.name is NULL for them)
+SELECT s._key, c.name
+  FROM sales s
+  LEFT JOIN customers c ON s.customerId = c._key;
+
+-- aggregate across a join
+SELECT c.country, COUNT(*) AS n, SUM(s.amount) AS total
+  FROM sales s
+  JOIN customers c ON s.customerId = c._key
+  GROUP BY c.country
+  ORDER BY total DESC;
+
+-- join two value fields
+SELECT c.name, m.tier
+  FROM customers c
+  JOIN markets m ON c.country = m.country;
+
+-- chained joins
+SELECT a._key, b.label, c.tier
+  FROM a
+  JOIN b ON a.bId = b._key
+  JOIN c ON a.cId = c._key;
+```
+
+### Key-type coercion
+
+The join key is compared by value. Because a `_key`'s exact datatype is known (from its key codec),
+when one side of an equality is a `_key`, the **other side is converted to the key's type**. So a value
+field stored as the string `"100"` joins to a `Long` key `100`:
+
+```sql
+-- refs.itemCode is the string "100"; items is keyed by Long
+SELECT r._key, i.label
+  FROM refs r
+  JOIN items i ON r.itemCode = i._key;
+```
+
+{: .note }
+When **both** sides are value fields (no `_key` involved), no conversion happens — the values must be of
+the same type to match (e.g. two `String` columns). `NULL` never joins.
+
+{: .warning }
+A join buffers both sides (hash join), so it is not a streaming operation. Put the smaller collection on
+the right (the built side). `SELECT *` over a join emits every column from every table, **qualified**
+(`s._key`, `c.name`, …) to avoid name collisions.
+
 ## Clause order
 
 The dialect follows standard SQL order. Writing clauses out of order is a parse error.
 
 ```sql
 SELECT [DISTINCT] <projection>
-  FROM <collection>
+  FROM <collection> [[AS] <alias>]
+  [[INNER|LEFT [OUTER]] JOIN <collection> [[AS] <alias>] ON <equalities>]...
   [WHERE <condition>]
   [GROUP BY <columns>]
   [HAVING <condition>]
@@ -341,12 +403,13 @@ small results can be materialised with `result.toList` and large ones consumed l
 
 ## What is supported (and what is not)
 
-**Supported:** `SELECT` (`*`, columns, aggregates, `AS` aliases), `DISTINCT`, `WHERE`
-(`= != <> < <= > >=`, `AND`/`OR`/`NOT`, parentheses, `LIKE`, `IS [NOT] NULL`, `LENGTH`), `GROUP BY`,
-`HAVING`, `ORDER BY` (`ASC`/`DESC`), `LIMIT`, `COUNT`/`SUM`/`AVG`/`MIN`/`MAX`, `INSERT`/`UPDATE`/
-`DELETE`, `DESCRIBE`, `SHOW COLLECTIONS`/`SHOW INDEXES`, and the `_key`/`_value` pseudo-columns.
+**Supported:** `SELECT` (`*`, columns, aggregates, `AS` aliases), `DISTINCT`, `INNER`/`LEFT JOIN`
+(with table aliases, qualified columns, and value→key coercion), `WHERE` (`= != <> < <= > >=`,
+`AND`/`OR`/`NOT`, parentheses, `LIKE`, `IS [NOT] NULL`, `LENGTH`), `GROUP BY`, `HAVING`, `ORDER BY`
+(`ASC`/`DESC`), `LIMIT`, `COUNT`/`SUM`/`AVG`/`MIN`/`MAX`, `INSERT`/`UPDATE`/`DELETE`, `DESCRIBE`,
+`SHOW COLLECTIONS`/`SHOW INDEXES`, and the `_key`/`_value` pseudo-columns.
 
-**Not (yet) supported:** joins, subqueries, `UNION`, window functions, `CASE`, arithmetic
-expressions, scalar functions beyond `LENGTH`, aggregate arguments that are expressions
-(e.g. `SUM(a + b)`), and DDL (`CREATE`/`DROP`). Identifiers are letters/digits/underscore; keywords
-are case-insensitive.
+**Not (yet) supported:** `RIGHT`/`FULL`/`CROSS` joins, non-equi join conditions as the *only*
+predicate, subqueries, `UNION`, window functions, `CASE`, arithmetic expressions, scalar functions
+beyond `LENGTH`, aggregate arguments that are expressions (e.g. `SUM(a + b)`), and DDL (`CREATE`/
+`DROP`). Identifiers are letters/digits/underscore; keywords are case-insensitive.

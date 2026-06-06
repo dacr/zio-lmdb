@@ -19,6 +19,11 @@ object SqlEngineSpec extends ZIOSpecDefault {
 
   final case class Person(name: String, age: Long) derives LMDBCodecJson, LMDBSchema
   final case class Order(customer: String, amount: Long) derives LMDBCodecJson, LMDBSchema
+  final case class Customer(name: String, country: String) derives LMDBCodecJson, LMDBSchema
+  final case class Sale(customerId: String, amount: Long) derives LMDBCodecJson, LMDBSchema
+  final case class Item(label: String) derives LMDBCodecJson, LMDBSchema
+  final case class Ref(itemCode: String) derives LMDBCodecJson, LMDBSchema
+  final case class Market(country: String, tier: String) derives LMDBCodecJson, LMDBSchema
 
   private def deleteRecursively(f: java.io.File): Unit = {
     if (f.isDirectory) Option(f.listFiles()).foreach(_.foreach(deleteRecursively))
@@ -54,6 +59,40 @@ object SqlEngineSpec extends ZIOSpecDefault {
       _      <- orders.upsertOverwrite("o2", Order("Alice", 30))
       _      <- orders.upsertOverwrite("o3", Order("Bob", 5))
     } yield orders
+
+  /** sales.customerId references a customers _key; s4 points at an absent customer (LEFT-join orphan). */
+  private val seedSales =
+    for {
+      customers <- LMDB.collectionCreate[String, Customer]("customers")
+      _         <- customers.upsertOverwrite("c1", Customer("Alice", "FR"))
+      _         <- customers.upsertOverwrite("c2", Customer("Bob", "US"))
+      sales     <- LMDB.collectionCreate[String, Sale]("sales")
+      _         <- sales.upsertOverwrite("s1", Sale("c1", 10))
+      _         <- sales.upsertOverwrite("s2", Sale("c1", 30))
+      _         <- sales.upsertOverwrite("s3", Sale("c2", 5))
+      _         <- sales.upsertOverwrite("s4", Sale("c3", 7))
+    } yield ()
+
+  /** refs.itemCode holds the numeric key as a *string*, to exercise value→key coercion. items keyed by Long. */
+  private val seedItems =
+    for {
+      items <- LMDB.collectionCreate[Long, Item]("items")
+      _     <- items.upsertOverwrite(100L, Item("Widget"))
+      _     <- items.upsertOverwrite(200L, Item("Gadget"))
+      refs  <- LMDB.collectionCreate[String, Ref]("refs")
+      _     <- refs.upsertOverwrite("r1", Ref("100"))
+      _     <- refs.upsertOverwrite("r2", Ref("200"))
+    } yield ()
+
+  private val seedMarkets =
+    for {
+      customers <- LMDB.collectionCreate[String, Customer]("customers")
+      _         <- customers.upsertOverwrite("c1", Customer("Alice", "FR"))
+      _         <- customers.upsertOverwrite("c2", Customer("Bob", "US"))
+      markets   <- LMDB.collectionCreate[String, Market]("markets")
+      _         <- markets.upsertOverwrite("m1", Market("FR", "A"))
+      _         <- markets.upsertOverwrite("m2", Market("US", "B"))
+    } yield ()
 
   override def spec = suite("SqlEngine")(
     test("SELECT with WHERE, ORDER BY and projection over real stored data") {
@@ -218,6 +257,53 @@ object SqlEngineSpec extends ZIOSpecDefault {
       } yield assertTrue(
         field(del.head, "affected") == LongV(1),
         rows.map(r => field(r, "_key")) == List(StringV("p1"), StringV("p3"))
+      )
+    },
+    test("INNER JOIN matches a value field to the other collection's _key") {
+      for {
+        _    <- seedSales
+        rows <- query("select s._key, c.name, s.amount from sales s join customers c on s.customerId = c._key order by s._key")
+      } yield assertTrue(
+        rows.map(r => field(r, "_key"))   == List(StringV("s1"), StringV("s2"), StringV("s3")), // s4 (absent customer) excluded
+        rows.map(r => field(r, "name"))   == List(StringV("Alice"), StringV("Alice"), StringV("Bob")),
+        rows.map(r => field(r, "amount")) == List(LongV(10), LongV(30), LongV(5))
+      )
+    },
+    test("LEFT JOIN keeps unmatched left rows with NULLs") {
+      for {
+        _    <- seedSales
+        rows <- query("select s._key, c.name from sales s left join customers c on s.customerId = c._key order by s._key")
+      } yield assertTrue(
+        rows.map(r => field(r, "_key")) == List(StringV("s1"), StringV("s2"), StringV("s3"), StringV("s4")),
+        rows.map(r => field(r, "name")) == List(StringV("Alice"), StringV("Alice"), StringV("Bob"), NullV)
+      )
+    },
+    test("GROUP BY over a JOIN aggregates joined columns") {
+      for {
+        _    <- seedSales
+        rows <- query("select c.country, count(*) as n, sum(s.amount) as total from sales s join customers c on s.customerId = c._key group by c.country order by c.country")
+      } yield assertTrue(
+        rows.map(r => field(r, "country")) == List(StringV("FR"), StringV("US")),
+        rows.map(r => field(r, "n"))       == List(LongV(2), LongV(1)),
+        rows.map(r => field(r, "total"))   == List(DecimalV(BigDecimal(40)), DecimalV(BigDecimal(5)))
+      )
+    },
+    test("JOIN coerces a value field to the joined _key's datatype (string → Long key)") {
+      for {
+        _    <- seedItems
+        rows <- query("select r._key, i.label from refs r join items i on r.itemCode = i._key order by r._key")
+      } yield assertTrue(
+        rows.map(r => field(r, "_key"))  == List(StringV("r1"), StringV("r2")),
+        rows.map(r => field(r, "label")) == List(StringV("Widget"), StringV("Gadget"))
+      )
+    },
+    test("JOIN on two value fields of the same type") {
+      for {
+        _    <- seedMarkets
+        rows <- query("select c.name, m.tier from customers c join markets m on c.country = m.country order by c.name")
+      } yield assertTrue(
+        rows.map(r => field(r, "name")) == List(StringV("Alice"), StringV("Bob")),
+        rows.map(r => field(r, "tier")) == List(StringV("A"), StringV("B"))
       )
     },
     test("an unknown collection is a clean error") {

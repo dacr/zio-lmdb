@@ -55,7 +55,7 @@ object SqlEngine {
 
   private def execute(lmdb: LMDB, stmt: Statement): IO[SqlError, QueryResult] =
     stmt match {
-      case s: Statement.Select   => Catalog.lookup(lmdb, s.from).flatMap(selectResult(lmdb, _, s))
+      case s: Statement.Select   => selectResult(lmdb, s)
       case i: Statement.Insert   => Catalog.lookup(lmdb, i.into).flatMap(insertResult(lmdb, _, i))
       case u: Statement.Update   => Catalog.lookup(lmdb, u.table).flatMap(updateResult(lmdb, _, u))
       case d: Statement.Delete   => Catalog.lookup(lmdb, d.from).flatMap(deleteResult(lmdb, _, d))
@@ -65,14 +65,32 @@ object SqlEngine {
 
   // ── SELECT ─────────────────────────────────────────────────────────────────────────────────
 
+  /** A read row, looked up by (possibly `alias.`-qualified) column name. This abstraction unifies
+    * single-table and join rows, so WHERE / ORDER BY / GROUP BY / projection share one pipeline. */
+  private type Row    = String => JValue
+  private type Source = (String, CollectionInfo)
+
   /** Three shapes: an aggregate/`GROUP BY` query (buffers per-group state), a `DISTINCT` query
-    * (buffers to de-duplicate), or a plain streaming `SELECT` (the only one that never buffers).
+    * (buffers to de-duplicate), or a plain streaming `SELECT` (the only one that never buffers; a
+    * JOIN buffers regardless).
     */
-  private def selectResult(lmdb: LMDB, info: CollectionInfo, sel: Statement.Select): IO[SqlError, QueryResult] =
-    ZIO.fromEither(validateNoAggregatesInWhere(sel.where)) *> {
-      if (isAggregate(sel)) aggregateResult(lmdb, info, sel)
-      else if (sel.distinct) ZIO.succeed(distinctResult(lmdb, info, sel))
-      else ZIO.succeed(streamingResult(lmdb, info, sel))
+  private def selectResult(lmdb: LMDB, sel: Statement.Select): IO[SqlError, QueryResult] =
+    for {
+      _       <- ZIO.fromEither(validateNoAggregatesInWhere(sel.where))
+      sources <- resolveSources(lmdb, sel)
+      result  <-
+        if (isAggregate(sel)) aggregateResult(lmdb, sources, sel)
+        else if (sel.distinct) ZIO.succeed(distinctResult(lmdb, sources, sel))
+        else ZIO.succeed(streamingResult(lmdb, sources, sel))
+    } yield result
+
+  /** The row sources in order: FROM first, then each JOIN, paired with the alias used to qualify its
+    * columns (the explicit alias, else the collection name). */
+  private def resolveSources(lmdb: LMDB, sel: Statement.Select): IO[SqlError, List[Source]] =
+    Catalog.lookup(lmdb, sel.from).flatMap { fromInfo =>
+      ZIO
+        .foreach(sel.joins)(j => Catalog.lookup(lmdb, j.table.collection).map(info => (j.table.alias.getOrElse(j.table.collection), info)))
+        .map(joinSources => (sel.fromAlias.getOrElse(sel.from), fromInfo) :: joinSources)
     }
 
   /** HAVING and aggregate projections both put the query on the grouping path. */
@@ -88,45 +106,50 @@ object SqlEngine {
 
   // ── plain streaming SELECT ─────────────────────────────────────────────────────────────────────
 
-  private def streamingResult(lmdb: LMDB, info: CollectionInfo, sel: Statement.Select): QueryResult = {
-    val cols = projectionColumns(info, sel.projection)
-    val plan = plainProjection(info, sel.projection)
+  private def streamingResult(lmdb: LMDB, sources: List[Source], sel: Statement.Select): QueryResult = {
+    val cols = projectionColumns(sources, sel.projection)
+    val plan = plainProjection(sources, sel.projection)
 
-    val filtered = filterWhere(rawStream(lmdb, info), sel.where)
-
-    val ordered: ZStream[Any, SqlError, RawRow] = sel.orderBy match {
-      case Some(ob) => ZStream.fromIterableZIO(filtered.runCollect.map(c => sortRows(c.toList, resolveOrderSource(sel.projection, ob))))
+    val filtered = filterRows(rowSource(lmdb, sources, sel), sel.where)
+    val ordered: ZStream[Any, SqlError, Row] = sel.orderBy match {
+      case Some(ob) => ZStream.fromIterableZIO(filtered.runCollect.map(c => sortRowsBy(c.toList, resolveOrderSource(plan, ob))))
       case None     => filtered
     }
     val limited   = sel.limit.fold(ordered)(n => ordered.take(n))
-    val projected = limited.map(r => projectRow(r, plan))
+    val projected = limited.map(row => projectRow(row, plan))
     QueryResult(cols, projected)
   }
 
-  /** Output-name → source-column pairs for a non-aggregate projection (resolves `AS` aliases). */
-  private def plainProjection(info: CollectionInfo, proj: Projection): List[(String, String)] =
+  /** Output-name → source-column pairs for a non-aggregate projection (resolves `AS` aliases and `*`). */
+  private def plainProjection(sources: List[Source], proj: Projection): List[(String, String)] =
     proj match {
-      case Projection.Star         => projectionColumns(info, proj).map(c => c.name -> c.name)
-      case Projection.Items(items) => items.collect { case SelectItem.Col(n, al) => al.getOrElse(n) -> n }
+      case Projection.Star         => projectionColumns(sources, proj).map(c => c.name -> c.name)
+      case Projection.Items(items) => items.collect { case SelectItem.Col(n, al) => al.getOrElse(unqualify(n)) -> n }
     }
 
-  /** When ORDER BY targets a column alias, sort the underlying rows by the aliased source column. */
-  private def resolveOrderSource(proj: Projection, ob: OrderBy): OrderBy =
-    proj match {
-      case Projection.Items(items) => items.collectFirst { case SelectItem.Col(n, Some(al)) if al == ob.column => n }.fold(ob)(src => ob.copy(column = src))
-      case _                       => ob
-    }
+  /** If ORDER BY names an output column (e.g. an `AS` alias), sort by its source column instead. */
+  private def resolveOrderSource(plan: List[(String, String)], ob: OrderBy): OrderBy =
+    plan.collectFirst { case (out, src) if out == ob.column => src }.fold(ob)(src => ob.copy(column = src))
+
+  private def filterRows(rows: ZStream[Any, SqlError, Row], where: Option[Expr]): ZStream[Any, SqlError, Row] =
+    where.fold(rows)(w => rows.filter(row => evalBool(w, row)))
+
+  private def sortRowsBy(rows: List[Row], ob: OrderBy): List[Row] =
+    rows.sortWith { (a, b) => val c = cmpTotal(a(ob.column), b(ob.column)); if (ob.descending) c > 0 else c < 0 }
+
+  private def projectRow(row: Row, plan: List[(String, String)]): JValue =
+    MapV(ListMap.from(plan.map { case (out, src) => out -> row(src) }))
 
   // ── SELECT DISTINCT ────────────────────────────────────────────────────────────────────────────
 
   /** Project, then de-duplicate the projected rows (buffering, like ORDER BY). ORDER BY/LIMIT apply
     * to the distinct rows; ORDER BY references the projected (output) column name.
     */
-  private def distinctResult(lmdb: LMDB, info: CollectionInfo, sel: Statement.Select): QueryResult = {
-    val cols = projectionColumns(info, sel.projection)
-    val plan = plainProjection(info, sel.projection)
+  private def distinctResult(lmdb: LMDB, sources: List[Source], sel: Statement.Select): QueryResult = {
+    val cols = projectionColumns(sources, sel.projection)
+    val plan = plainProjection(sources, sel.projection)
     val rows =
-      filterWhere(rawStream(lmdb, info), sel.where).map(r => projectRow(r, plan)).runCollect.map { chunk =>
+      filterRows(rowSource(lmdb, sources, sel), sel.where).map(row => projectRow(row, plan)).runCollect.map { chunk =>
         val distinct = chunk.toList.distinct
         val ordered  = sel.orderBy.fold(distinct)(ob => sortJRows(distinct, ob))
         sel.limit.fold(ordered)(n => ordered.take(n.toInt))
@@ -134,20 +157,147 @@ object SqlEngine {
     QueryResult(cols, ZStream.fromIterableZIO(rows))
   }
 
+  // ── row sources & JOIN ─────────────────────────────────────────────────────────────────────────
+
+  private def rowSource(lmdb: LMDB, sources: List[Source], sel: Statement.Select): ZStream[Any, SqlError, Row] =
+    if (sel.joins.isEmpty) {
+      val (alias, info) = sources.head
+      rawStream(lmdb, info).map(r => combinedLookup(List((alias, Some(r)))))
+    } else
+      ZStream.fromIterableZIO(executeJoins(lmdb, sources, sel.joins)).map(parts => combinedLookup(parts))
+
+  /** Resolve a (possibly `alias.`-qualified) column against a combined row. An unqualified name is
+    * taken from the first source that has a non-null value for it; a `None` part (an unmatched LEFT
+    * join side) yields NULL for all of its columns. */
+  private def combinedLookup(parts: List[(String, Option[RawRow])])(name: String): JValue = {
+    val dot = name.indexOf('.')
+    if (dot >= 0) {
+      val alias = name.substring(0, dot)
+      val col   = name.substring(dot + 1)
+      parts.collectFirst { case (a, ro) if a == alias => ro.fold(NullV: JValue)(r => lookup(r)(col)) }.getOrElse(NullV)
+    } else
+      parts.iterator.map { case (_, ro) => ro.fold(NullV: JValue)(r => lookup(r)(name)) }.find(_ != NullV).getOrElse(NullV)
+  }
+
+  /** Execute the JOINs left-to-right, one hash join per step (buffers both sides). Each result is a
+    * combined row: the per-alias `RawRow`s, with `None` where a LEFT join found no match. */
+  private def executeJoins(lmdb: LMDB, sources: List[Source], joins: List[Join]): IO[SqlError, List[List[(String, Option[RawRow])]]] = {
+    val (fromAlias, fromInfo) = sources.head
+    val start: IO[SqlError, List[List[(String, Option[RawRow])]]] =
+      rawStream(lmdb, fromInfo).map(r => List((fromAlias, Some(r): Option[RawRow]))).runCollect.map(_.toList)
+    joins.zip(sources.tail).foldLeft(start) { case (leftZ, (join, (rightAlias, rightInfo))) =>
+      leftZ.flatMap(leftRows => rawStream(lmdb, rightInfo).runCollect.map(rs => hashJoin(sources, leftRows, rightAlias, rs.toList, join)))
+    }
+  }
+
+  private def hashJoin(
+    sources: List[Source],
+    leftRows: List[List[(String, Option[RawRow])]],
+    rightAlias: String,
+    rightRows: List[RawRow],
+    join: Join
+  ): List[List[(String, Option[RawRow])]] = {
+    val (pairs, residual) = joinKeys(join.on, rightAlias)
+    // Coercion per equi-pair: if either side is a `_key`, normalize both sides to that key's type;
+    // otherwise compare value fields structurally (their types must already match).
+    val coercions = pairs.map { case (probeCol, buildCol) => colKeyId(sources, buildCol).orElse(colKeyId(sources, probeCol)) }
+
+    val index: Map[List[JValue], List[RawRow]] =
+      rightRows.foldLeft(Map.empty[List[JValue], List[RawRow]]) { (m, r) =>
+        val rl = combinedLookup(List((rightAlias, Some(r))))
+        val k  = pairs.zip(coercions).map { case ((_, buildCol), c) => normalizeJoinVal(rl(buildCol), c) }
+        if (k.contains(NullV)) m else m.updated(k, r :: m.getOrElse(k, Nil)) // NULL never joins
+      }
+
+    leftRows.flatMap { left =>
+      val leftRow  = combinedLookup(left)
+      val probeKey = pairs.zip(coercions).map { case ((probeCol, _), c) => normalizeJoinVal(leftRow(probeCol), c) }
+      val matched  =
+        if (probeKey.contains(NullV)) Nil
+        else index.getOrElse(probeKey, Nil).reverse.map(r => left :+ (rightAlias, Some(r): Option[RawRow]))
+      val passing  = matched.filter(row => residual.forall(rp => evalBool(rp, combinedLookup(row))))
+      join.joinType match {
+        case JoinType.Inner => passing
+        case JoinType.Left  => if (passing.nonEmpty) passing else List(left :+ (rightAlias, None: Option[RawRow]))
+      }
+    }
+  }
+
+  /** Split an ON condition into equi-join pairs `(probeColumn on the left, buildColumn on the right)`
+    * and a residual predicate (anything that is not a simple `left = right` equality). */
+  private def joinKeys(on: Expr, rightAlias: String): (List[(String, String)], List[Expr]) = {
+    def conjuncts(e: Expr): List[Expr] = e match { case Expr.And(l, r) => conjuncts(l) ++ conjuncts(r); case _ => List(e) }
+    conjuncts(on).foldLeft((List.empty[(String, String)], List.empty[Expr])) {
+      case ((ps, rs), c @ Expr.Cmp(CmpOp.Eq, Expr.Col(a), Expr.Col(b))) =>
+        (refersTo(a, rightAlias), refersTo(b, rightAlias)) match {
+          case (true, false) => (ps :+ (b, a), rs)
+          case (false, true) => (ps :+ (a, b), rs)
+          case _             => (ps, rs :+ c)
+        }
+      case ((ps, rs), other) => (ps, rs :+ other)
+    }
+  }
+
+  private def refersTo(col: String, alias: String): Boolean = { val d = col.indexOf('.'); d >= 0 && col.substring(0, d) == alias }
+
+  /** The key id if `col` is an `alias._key` of a known source, else `None` (a value field). */
+  private def colKeyId(sources: List[Source], col: String): Option[String] = {
+    val dot = col.indexOf('.')
+    if (dot < 0 || col.substring(dot + 1) != "_key") None
+    else sources.collectFirst { case (a, info) if a == col.substring(0, dot) => info }.flatMap(_.keyId)
+  }
+
+  private def normalizeJoinVal(jv: JValue, coercion: Option[String]): JValue = coercion.fold(jv)(keyId => coerceToKey(jv, keyId))
+
+  /** Convert a value field to the JValue type a key of `keyId` decodes to, so a value column can be
+    * joined against a `_key`. NULL stays NULL; a value that cannot be converted becomes NULL (no match). */
+  private def coerceToKey(jv: JValue, keyId: String): JValue =
+    if (jv == NullV) NullV
+    else keyId match {
+      case "lmdb:str" | "lmdb-ulid:v1" | "lmdb:bytes" => StringV(jvToString(jv))
+      case "lmdb:int64" | "lmdb:int32" | "lmdb:int16" => coerceToLong(jv)
+      case "lmdb:uuid" | "lmdb-uuidv7:v1"             => coerceToUuid(jv)
+      case "lmdb-ts:instant/v1"                       => coerceToInstant(jv)
+      case _                                          => jv
+    }
+
+  private def coerceToLong(jv: JValue): JValue =
+    jv match {
+      case LongV(_)    => jv
+      case DoubleV(d)  => LongV(d.toLong)
+      case DecimalV(d) => LongV(d.toLong)
+      case StringV(s)  => s.toLongOption.fold(NullV: JValue)(LongV(_))
+      case _           => NullV
+    }
+
+  private def coerceToUuid(jv: JValue): JValue =
+    jv match {
+      case IdentifierV(_) => jv
+      case StringV(s)     => scala.util.Try(java.util.UUID.fromString(s)).toOption.fold(NullV: JValue)(IdentifierV(_))
+      case _              => NullV
+    }
+
+  private def coerceToInstant(jv: JValue): JValue =
+    jv match {
+      case InstantV(_) => jv
+      case StringV(s)  => scala.util.Try(java.time.Instant.parse(s)).toOption.fold(NullV: JValue)(InstantV(_))
+      case _           => NullV
+    }
+
   // ── aggregates / GROUP BY ──────────────────────────────────────────────────────────────────────
 
   /** Aggregate query: fold the WHERE-filtered rows into one accumulator set per group key (so memory
     * scales with the number of groups, not rows), then emit one row per group. With no GROUP BY there
     * is a single, always-present group — `COUNT(*)` of an empty table is `0`, other aggregates `NULL`.
     */
-  private def aggregateResult(lmdb: LMDB, info: CollectionInfo, sel: Statement.Select): IO[SqlError, QueryResult] =
+  private def aggregateResult(lmdb: LMDB, sources: List[Source], sel: Statement.Select): IO[SqlError, QueryResult] =
     for {
       items <- ZIO.fromEither(aggregateItems(sel.projection))
       _     <- ZIO.fromEither(validateGrouping(items, sel.groupBy))
       _     <- ZIO.fromEither(validateHaving(sel.having, sel.groupBy))
       _     <- ZIO.fromEither(validateOrderBy(items, sel.orderBy))
-      cols   = items.map(outputColumn(info, _))
-    } yield QueryResult(cols, ZStream.fromIterableZIO(computeGroups(lmdb, info, sel, items)))
+      cols   = items.map(outputColumn(sources, _))
+    } yield QueryResult(cols, ZStream.fromIterableZIO(computeGroups(lmdb, sources, sel, items)))
 
   private def aggregateItems(proj: Projection): Either[SqlError, List[SelectItem]] =
     proj match {
@@ -170,17 +320,29 @@ object SqlEngine {
       case None    => Right(())
     }
 
-  /** In an aggregate query ORDER BY can only target a projected column (group columns are
-    * identifiers; aggregate output names like `sum(x)` are not, so they can't be written anyway).
-    */
+  /** In an aggregate query ORDER BY can only target a projected column — referenced either by its
+    * output name (e.g. an `AS` alias) or by the column as written in the SELECT (e.g. `c.country`). */
   private def validateOrderBy(items: List[SelectItem], orderBy: Option[OrderBy]): Either[SqlError, Unit] =
     orderBy match {
-      case Some(ob) if !items.map(outputName).contains(ob.column) =>
+      case Some(ob) if !orderColumnOf(items, ob.column).isDefined =>
         Left(SqlError.Unsupported(s"ORDER BY '${ob.column}' must be one of the selected columns: ${items.map(outputName).mkString(", ")}"))
       case _ => Right(())
     }
 
-  private def computeGroups(lmdb: LMDB, info: CollectionInfo, sel: Statement.Select, items: List[SelectItem]): IO[SqlError, List[JValue]] = {
+  /** Resolve an aggregate-query ORDER BY column to the output column it names (by output name or by
+    * the source column as written), or `None` if it names neither. */
+  private def orderColumnOf(items: List[SelectItem], column: String): Option[String] =
+    items.collectFirst {
+      case i @ SelectItem.Col(n, _) if n == column || outputName(i) == column => outputName(i)
+      case i: SelectItem.Agg if outputName(i) == column                       => outputName(i)
+    }
+
+  /** Output-name of each GROUP BY column (for the default, deterministic group ordering); a column
+    * that is grouped but not selected keeps its unqualified name (and simply won't reorder). */
+  private def groupOutputNames(items: List[SelectItem], groupBy: List[String]): List[String] =
+    groupBy.map(g => items.collectFirst { case i @ SelectItem.Col(n, _) if n == g => outputName(i) }.getOrElse(unqualify(g)))
+
+  private def computeGroups(lmdb: LMDB, sources: List[Source], sel: Statement.Select, items: List[SelectItem]): IO[SqlError, List[JValue]] = {
     // Every aggregate to compute per group: those projected, plus those referenced only by HAVING.
     val projAggs   = items.collect { case SelectItem.Agg(f, c, _) => (f, c) }
     val havingAggs = sel.having.toList.flatMap(aggsInExpr)
@@ -188,9 +350,9 @@ object SqlEngine {
     val freshAccs  = aggKeys.map { case (f, _) => initAcc(f) }.toVector
     val seed: Map[List[JValue], Vector[Acc]] =
       if (sel.groupBy.isEmpty) Map(Nil -> freshAccs) else Map.empty
-    filterWhere(rawStream(lmdb, info), sel.where)
+    filterRows(rowSource(lmdb, sources, sel), sel.where)
       .runFold(seed) { (groups, row) =>
-        val key     = sel.groupBy.map(c => lookup(row)(c))
+        val key     = sel.groupBy.map(c => row(c))
         val current = groups.getOrElse(key, freshAccs)
         val updated = current.zip(aggKeys).map { case (acc, (_, c)) => acc.add(aggInput(c, row)) }
         groups.updated(key, updated)
@@ -204,9 +366,9 @@ object SqlEngine {
         }
         val deduped = if (sel.distinct) kept.distinct else kept
         val ordered = sel.orderBy match {
-          case Some(ob)                    => sortJRows(deduped, ob)
+          case Some(ob)                    => sortJRows(deduped, ob.copy(column = orderColumnOf(items, ob.column).getOrElse(ob.column)))
           case None if sel.groupBy.isEmpty => deduped
-          case None                        => deduped.sortWith((a, b) => compareByColumns(a, b, sel.groupBy) < 0)
+          case None                        => deduped.sortWith((a, b) => compareByColumns(a, b, groupOutputNames(items, sel.groupBy)) < 0)
         }
         sel.limit.fold(ordered)(n => ordered.take(n.toInt))
       }
@@ -220,36 +382,40 @@ object SqlEngine {
     MapV(ListMap.from(fields))
   }
 
-  /** The output column name: the `AS` alias when given, otherwise the column name or `func(arg)`. */
+  /** The output column name: the `AS` alias when given, otherwise the (unqualified) column name or
+    * `func(arg)`. A qualifying table alias is dropped, so `o.amount` → `amount`, `SUM(o.amount)` →
+    * `sum(amount)`. */
   private def outputName(item: SelectItem): String =
     item.alias.getOrElse {
       item match {
-        case SelectItem.Col(n, _)          => n
+        case SelectItem.Col(n, _)          => unqualify(n)
         case SelectItem.Agg(f, None, _)    => s"${aggLabel(f)}(*)"
-        case SelectItem.Agg(f, Some(c), _) => s"${aggLabel(f)}($c)"
+        case SelectItem.Agg(f, Some(c), _) => s"${aggLabel(f)}(${unqualify(c)})"
       }
     }
+
+  private def unqualify(name: String): String = { val i = name.lastIndexOf('.'); if (i >= 0) name.substring(i + 1) else name }
 
   private def aggLabel(f: AggFunc): String =
     f match { case AggFunc.Count => "count"; case AggFunc.Sum => "sum"; case AggFunc.Avg => "avg"; case AggFunc.Min => "min"; case AggFunc.Max => "max" }
 
-  private def outputColumn(info: CollectionInfo, item: SelectItem): Column =
+  private def outputColumn(sources: List[Source], item: SelectItem): Column =
     item match {
-      case SelectItem.Col(n, _)        => Column(outputName(item), hintFor(info, n))
+      case SelectItem.Col(n, _)        => Column(outputName(item), hintFor(sources, n))
       case SelectItem.Agg(f, col, _) =>
         val tpe = f match {
           case AggFunc.Count             => "integer"
           case AggFunc.Sum | AggFunc.Avg => "number"
-          case AggFunc.Min | AggFunc.Max => col.map(hintFor(info, _)).getOrElse("any")
+          case AggFunc.Min | AggFunc.Max => col.map(hintFor(sources, _)).getOrElse("any")
         }
         Column(outputName(item), tpe)
     }
 
   /** The value fed to an aggregate from a row: the column, or a non-null tally for `COUNT(*)`. */
-  private def aggInput(column: Option[String], row: RawRow): JValue =
+  private def aggInput(column: Option[String], row: Row): JValue =
     column match {
       case None    => BoolV(true) // COUNT(*) — always a non-null tally
-      case Some(c) => lookup(row)(c)
+      case Some(c) => row(c)
     }
 
   // ── aggregate accumulators (immutable; folded over the stream) ──────────────────────────────────
@@ -285,22 +451,30 @@ object SqlEngine {
       case AggFunc.Max   => MaxAcc(None)
     }
 
-  private def projectionColumns(info: CollectionInfo, proj: Projection): List[Column] =
+  private def projectionColumns(sources: List[Source], proj: Projection): List[Column] =
     proj match {
       case Projection.Star =>
-        val valueCols =
-          if (info.columns.nonEmpty) info.columns.map(c => Column(c.name, c.typeHint))
-          else List(Column("_value", "any"))
-        Column("_key", info.keyId.getOrElse("key")) :: valueCols
-      case Projection.Items(items) => items.map(outputColumn(info, _))
+        sources match {
+          case (_, info) :: Nil => Column("_key", info.keyId.getOrElse("key")) :: valueColumns(info)
+          // SELECT * over a JOIN: every column from every source, qualified to avoid collisions.
+          case _                => sources.flatMap { case (alias, info) => Column(s"$alias._key", info.keyId.getOrElse("key")) :: valueColumns(info).map(c => Column(s"$alias.${c.name}", c.typeHint)) }
+        }
+      case Projection.Items(items) => items.map(outputColumn(sources, _))
     }
 
-  private def hintFor(info: CollectionInfo, name: String): String =
-    name match {
-      case "_key"   => info.keyId.getOrElse("key")
+  private def valueColumns(info: CollectionInfo): List[Column] =
+    if (info.columns.nonEmpty) info.columns.map(c => Column(c.name, c.typeHint)) else List(Column("_value", "any"))
+
+  /** Type hint for a (possibly `alias.`-qualified) column across the query's sources. */
+  private def hintFor(sources: List[Source], name: String): String = {
+    val dot   = name.indexOf('.')
+    val infos = if (dot >= 0) sources.collect { case (a, info) if a == name.substring(0, dot) => info } else sources.map(_._2)
+    unqualify(name) match {
+      case "_key"   => infos.headOption.flatMap(_.keyId).getOrElse("key")
       case "_value" => "any"
-      case other    => info.columns.find(_.name == other).map(_.typeHint).getOrElse("any")
+      case other    => infos.flatMap(_.columns).find(_.name == other).map(_.typeHint).getOrElse("any")
     }
+  }
 
   // ── writes ───────────────────────────────────────────────────────────────────────────────────
 
@@ -398,16 +572,6 @@ object SqlEngine {
       case "_key"   => r.key.toJValue
       case "_value" => r.value
       case other    => r.value match { case MapV(m) => m.getOrElse(other, NullV); case _ => NullV }
-    }
-
-  /** Build an output row from `(outputName, sourceColumn)` pairs, reading each source via `lookup`. */
-  private def projectRow(r: RawRow, plan: List[(String, String)]): JValue =
-    MapV(ListMap.from(plan.map { case (out, src) => out -> lookup(r)(src) }))
-
-  private def sortRows(rows: List[RawRow], ob: OrderBy): List[RawRow] =
-    rows.sortWith { (a, b) =>
-      val c = cmpTotal(lookup(a)(ob.column), lookup(b)(ob.column))
-      if (ob.descending) c > 0 else c < 0
     }
 
   /** Read a named field from an already-projected `MapV` row (NULL if absent). */

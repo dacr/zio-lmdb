@@ -26,9 +26,12 @@ import zio.lmdb.sql.SqlError
 object SqlParser {
 
   private val reserved: Set[String] =
-    Set("select", "distinct", "as", "from", "where", "group", "having", "order", "by", "asc", "desc", "limit", "insert", "into", "values",
-        "update", "set", "delete", "describe", "show", "collections", "indexes", "and", "or", "not",
+    Set("select", "distinct", "as", "from", "join", "inner", "left", "outer", "on", "where", "group", "having", "order", "by", "asc", "desc", "limit",
+        "insert", "into", "values", "update", "set", "delete", "describe", "show", "collections", "indexes", "and", "or", "not",
         "like", "is", "null", "true", "false")
+
+  /** A column reference, optionally qualified by a table alias: `col` or `alias.col`. */
+  private def colName[$: P]: P[String] = P(ident ~~ ("." ~~ ident).?).map { case (a, b) => b.fold(a)(c => s"$a.$c") }
 
   private def kw[$: P](s: String): P[Unit] = P(IgnoreCase(s) ~~ !CharPred(c => c.isLetterOrDigit || c == '_'))
 
@@ -61,13 +64,13 @@ object SqlParser {
     )
 
   private def primary[$: P]: P[Expr] =
-    P(("(" ~ expr ~ ")") | aggExpr | scalarFuncExpr | literal.map(Expr.Lit(_)) | ident.map(Expr.Col(_)))
+    P(("(" ~ expr ~ ")") | aggExpr | scalarFuncExpr | literal.map(Expr.Lit(_)) | colName.map(Expr.Col(_)))
 
   /** An aggregate reference inside an expression (e.g. in HAVING): COUNT(*), SUM(col), … */
   private def aggExpr[$: P]: P[Expr] =
     P(
       (kw("count") ~ "(" ~ "*" ~ ")").map(_ => Expr.Aggregate(AggFunc.Count, None)) |
-        (aggFunc ~ "(" ~ ident ~ ")").map { case (f, c) => Expr.Aggregate(f, Some(c)) }
+        (aggFunc ~ "(" ~ colName ~ ")").map { case (f, c) => Expr.Aggregate(f, Some(c)) }
     )
 
   /** Scalar functions usable in WHERE/HAVING. Currently LENGTH(<expr>). */
@@ -100,7 +103,7 @@ object SqlParser {
   private def aggItem[$: P]: P[SelectItem.Agg] =
     P(
       (kw("count") ~ "(" ~ "*" ~ ")").map(_ => SelectItem.Agg(AggFunc.Count, None)) |
-        (aggFunc ~ "(" ~ ident ~ ")").map { case (f, c) => SelectItem.Agg(f, Some(c)) }
+        (aggFunc ~ "(" ~ colName ~ ")").map { case (f, c) => SelectItem.Agg(f, Some(c)) }
     )
 
   /** Optional `AS <name>` column alias. */
@@ -109,26 +112,39 @@ object SqlParser {
   private def selectItem[$: P]: P[SelectItem] =
     P(
       (aggItem ~ aliasOpt).map { case (agg, al) => agg.copy(alias = al) } |
-        (ident ~ aliasOpt).map { case (n, al) => SelectItem.Col(n, al) }
+        (colName ~ aliasOpt).map { case (n, al) => SelectItem.Col(n, al) }
     )
 
   private def projection[$: P]: P[Projection] =
     P(P("*").map(_ => Projection.Star) | selectItem.rep(1, sep = ",").map(items => Projection.Items(items.toList)))
 
   private def orderBy[$: P]: P[OrderBy] =
-    P(kw("order") ~ kw("by") ~ ident ~ (kw("asc").map(_ => false) | kw("desc").map(_ => true)).?.map(_.getOrElse(false)))
+    P(kw("order") ~ kw("by") ~ colName ~ (kw("asc").map(_ => false) | kw("desc").map(_ => true)).?.map(_.getOrElse(false)))
       .map { case (c, d) => OrderBy(c, d) }
 
   private def distinctKw[$: P]: P[Boolean] =
     P((kw("distinct").map(_ => true)).?).map(_.getOrElse(false))
 
   private def groupByClause[$: P]: P[List[String]] =
-    P(kw("group") ~ kw("by") ~ ident.rep(1, sep = ",")).map(_.toList)
+    P(kw("group") ~ kw("by") ~ colName.rep(1, sep = ",")).map(_.toList)
 
-  // Standard SQL clause order: SELECT … FROM … WHERE … GROUP BY … HAVING … ORDER BY … LIMIT.
+  /** `<collection> [[AS] <alias>]`. The alias parser stops at keywords (reserved), so a missing alias
+    * followed by JOIN/WHERE/… is handled naturally. */
+  private def tableRef[$: P]: P[TableRef] =
+    P(ident ~ (kw("as").? ~ ident).?).map { case (name, alias) => TableRef(name, alias) }
+
+  private def joinType[$: P]: P[JoinType] =
+    P((kw("left") ~ kw("outer").?).map(_ => JoinType.Left) | kw("inner").map(_ => JoinType.Inner) | Pass.map(_ => JoinType.Inner))
+
+  private def joinClause[$: P]: P[Join] =
+    P(joinType ~ kw("join") ~ tableRef ~ kw("on") ~ expr).map { case (jt, tr, on) => Join(jt, tr, on) }
+
+  // Standard SQL clause order: SELECT … FROM … [JOIN …] WHERE … GROUP BY … HAVING … ORDER BY … LIMIT.
   private def selectStmt[$: P]: P[Statement.Select] =
-    P(kw("select") ~ distinctKw ~ projection ~ kw("from") ~ ident ~ (kw("where") ~ expr).? ~ groupByClause.? ~ (kw("having") ~ expr).? ~ orderBy.? ~ (kw("limit") ~ intNumber).?)
-      .map { case (distinct, proj, from, w, gb, hv, ob, lim) => Statement.Select(proj, distinct, from, w, gb.getOrElse(Nil), hv, ob, lim) }
+    P(kw("select") ~ distinctKw ~ projection ~ kw("from") ~ tableRef ~ joinClause.rep ~ (kw("where") ~ expr).? ~ groupByClause.? ~ (kw("having") ~ expr).? ~ orderBy.? ~ (kw("limit") ~ intNumber).?)
+      .map { case (distinct, proj, fromRef, joins, w, gb, hv, ob, lim) =>
+        Statement.Select(proj, distinct, fromRef.collection, w, gb.getOrElse(Nil), hv, ob, lim, fromRef.alias, joins.toList)
+      }
 
   private def insertStmt[$: P]: P[Statement.Insert] =
     P(kw("insert") ~ kw("into") ~ ident ~ "(" ~ ident.rep(1, sep = ",") ~ ")" ~ kw("values") ~ "(" ~ literal.rep(1, sep = ",") ~ ")")

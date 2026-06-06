@@ -86,6 +86,22 @@ object SqlParserSpec extends ZIOSpecDefault {
           )
       )
     },
+    test("JOINs: table aliases, qualified columns, INNER and LEFT") {
+      assertTrue(
+        ok("select s._key, c.name from sales s join customers c on s.customerId = c._key")
+          == Statement.Select(
+            Projection.Items(List(SelectItem.Col("s._key"), SelectItem.Col("c.name"))),
+            false, "sales", None, Nil, None, None, None,
+            Some("s"),
+            List(Join(JoinType.Inner, TableRef("customers", Some("c")), Expr.Cmp(CmpOp.Eq, Expr.Col("s.customerId"), Expr.Col("c._key"))))
+          ),
+        ok("select * from a left join b on a.x = b._key")
+          == Statement.Select(
+            Projection.Star, false, "a", None, Nil, None, None, None, None,
+            List(Join(JoinType.Left, TableRef("b", None), Expr.Cmp(CmpOp.Eq, Expr.Col("a.x"), Expr.Col("b._key"))))
+          )
+      )
+    },
     test("projection columns and AND/OR/comparison precedence") {
       val s = ok("SELECT _key, amount FROM t WHERE a > 1 AND b < 2 OR c >= 3")
       val expectedWhere =

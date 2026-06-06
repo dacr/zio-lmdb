@@ -21,7 +21,18 @@ package zio.lmdb.sql.parser
   */
 sealed trait Statement
 object Statement {
-  final case class Select(projection: Projection, distinct: Boolean, from: String, where: Option[Expr], groupBy: List[String], having: Option[Expr], orderBy: Option[OrderBy], limit: Option[Long]) extends Statement
+  final case class Select(
+    projection: Projection,
+    distinct: Boolean,
+    from: String,
+    where: Option[Expr],
+    groupBy: List[String],
+    having: Option[Expr],
+    orderBy: Option[OrderBy],
+    limit: Option[Long],
+    fromAlias: Option[String] = None,
+    joins: List[Join] = Nil
+  ) extends Statement
   final case class Insert(into: String, columns: List[String], values: List[Literal])                                              extends Statement
   final case class Update(table: String, assignments: List[(String, Literal)], where: Option[Expr])                                extends Statement
   final case class Delete(from: String, where: Option[Expr])                                                                       extends Statement
@@ -30,6 +41,14 @@ object Statement {
 }
 
 enum ShowTarget    { case Collections, Indexes }
+
+enum JoinType { case Inner, Left }
+
+/** A table in a FROM clause: its collection name and optional alias used to qualify columns. */
+final case class TableRef(collection: String, alias: Option[String])
+
+/** A JOIN of a [[TableRef]] with an `ON` condition (a conjunction of equalities, plus any residual). */
+final case class Join(joinType: JoinType, table: TableRef, on: Expr)
 
 /** SQL aggregate functions. `COUNT` may take `*` (no column); the rest require a column. */
 enum AggFunc { case Count, Sum, Avg, Min, Max }

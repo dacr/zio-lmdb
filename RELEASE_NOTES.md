@@ -14,7 +14,8 @@
 - Fix coordinate denormalization in GEOTools to ensure stable encoding-decoding behavior
 - Add `derives LMDBSchema`: automatic structural schema derivation via the new `SchemaShape[T]` (Mirror-based, no reflection) emitting a JSON-Schema-like `JValue`; keys resolve automatically to a `SchemaArtifact.KeySchema(keyId)`. Makes derived collections self-describing for the catalog and SQL `DESCRIBE`
 - Add a SQL layer (`zio-lmdb-sql`) that treats a collection as a table (key = `_key`, value fields = columns): `SELECT` (projections, `AS` aliases, `DISTINCT`), `WHERE` (`= != <> < <= > >=`, `AND`/`OR`/`NOT`, `LIKE`, `IS [NOT] NULL`, `LENGTH`), `GROUP BY`/`HAVING`, `ORDER BY`/`LIMIT`, aggregates (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`), `INSERT`/`UPDATE`/`DELETE`, `DESCRIBE`, `SHOW`. Ships an interactive REPL (psql-style `\c`/`\l`/`\d`/`\format`, TAB completion, table/json/csv output) and a pure streaming `SqlEngine.run` pipeline
-- Document the jsoniter codec migration, schema support, and SQL layer under `docs/` (new `schema.md` and `sql.md` pages)
+- Add `INNER`/`LEFT JOIN` to the SQL layer: table aliases, qualified columns (`alias.col`), `ON` equi-conditions, and value→key coercion — when one side of a join equality is a `_key`, the other side is converted to that key's datatype (value↔value joins require matching types). Joins compose with `WHERE`/`GROUP BY`/`HAVING`/`ORDER BY` and run as hash joins
+- Document the jsoniter codec migration, schema support, and SQL layer (including JOINs) under `docs/` (new `schema.md` and `sql.md` pages)
 
 ## 2.8 - 2026-05-18
 
