@@ -15,13 +15,15 @@
  */
 package zio.lmdb.keycodecs.geo
 
-import zio.lmdb.keycodecs.{KeyCodec, KeyCodecError}
+import zio.lmdb.keycodecs.{KeyCodec, KeyCodecError, KeyTypeId}
 import zio.lmdb.keycodecs.KeyCodecError.*
 
 import java.nio.ByteBuffer
 
 object GeoCodec {
   given locationKeyCodec: KeyCodec[GEOTools.Location] = new KeyCodec[GEOTools.Location] {
+    override val keyId: KeyTypeId = KeyTypeId("lmdb-geo:location/v1")
+
     override def encode(key: GEOTools.Location): Array[Byte] = GEOTools.locationToBytes(key)
 
     override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, GEOTools.Location] = {

@@ -144,6 +144,26 @@ object JValueCodecSpec extends ZIOSpecDefault {
       val p3 = readFromString[Profile]("""{"id":"u1"}""")(codec)
       val p4 = readFromString[Profile]("""{"id":"u1","name":"alice","age":30}""")(codec)
       assertTrue(p3 == p1) && assertTrue(p4 == p2)
+    },
+    test("fromPlainJson parses a generic JSON document (object, integral vs fractional, array, null)") {
+      val parsed = JValue.fromPlainJson("""{"name":"Alice","age":30,"price":9.99,"tags":["a","b"],"note":null,"ok":true}""".getBytes("UTF-8"))
+      assertTrue(
+        parsed == Right(
+          MapV(scala.collection.immutable.ListMap(
+            "name"  -> StringV("Alice"),
+            "age"   -> LongV(30),
+            "price" -> DecimalV(BigDecimal("9.99")),
+            "tags"  -> ListV(Seq(StringV("a"), StringV("b"))),
+            "note"  -> NullV,
+            "ok"    -> BoolV(true)
+          ))
+        )
+      )
+    },
+    test("toPlainJson emits a plain JSON document that fromPlainJson reads back") {
+      val tree = MapV(scala.collection.immutable.ListMap("k" -> LongV(1), "s" -> StringV("x")))
+      val json = new String(JValue.toPlainJson(tree), "UTF-8")
+      assertTrue(json == """{"k":1,"s":"x"}""", JValue.fromPlainJson(json.getBytes("UTF-8")) == Right(tree))
     }
   )
 }

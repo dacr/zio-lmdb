@@ -16,7 +16,7 @@
 package zio.lmdb.keycodecs.uuidv7
 
 import com.github.f4b6a3.uuid.UuidCreator
-import zio.lmdb.keycodecs.{KeyCodec, KeyCodecError}
+import zio.lmdb.keycodecs.{KeyCodec, KeyCodecError, KeyTypeId}
 
 import java.nio.ByteBuffer
 import java.time.Instant
@@ -36,6 +36,9 @@ object UUIDv7 {
 
 object UUIDv7Codec {
   given KeyCodec[UUIDv7] = new KeyCodec[UUIDv7] {
+    // Same 16 bytes as a plain UUID, but a distinct id: the bytes are time-ordered, not random.
+    override val keyId: KeyTypeId = KeyTypeId("lmdb-uuidv7:v1")
+
     private val codec = zio.lmdb.keycodecs.KeyCodec.uuidKeyCodec
 
     override def encode(key: UUIDv7): Array[Byte] = codec.encode(key.asUUID)

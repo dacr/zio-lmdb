@@ -26,13 +26,15 @@ import scala.deriving.Mirror
   * Schema document and derived from the Scala model via `Mirror` — no runtime reflection, no extra
   * dependency.
   *
-  *   - leaf types  → `{"type":"string"}` / `{"type":"integer"}` / … (`Instant`, `UUID` add a
-  *     `format`)
+  *   - leaf types  → `{"type":"string"}` / `{"type":"integer"}` / … (`Instant` and
+  *     `OffsetDateTime` add `format:"date-time"`, `UUID` adds `format:"uuid"`)
   *   - case class  → `{"type":"object","properties":{…},"required":[…]}`
   *   - sealed/enum → `{"oneOf":[…]}`
   *   - `Option[T]` → the inner shape, with the field omitted from the enclosing `required` list
-  *   - `Seq`/`List`/`Vector`/`Set[T]` → `{"type":"array","items":…}`
-  *   - `Map[String, V]` → `{"type":"object","additionalProperties":…}`
+  *   - `Seq`/`List`/`Vector`/`Set`/`Array[T]` → `{"type":"array","items":…}`
+  *   - `Map[K, V]` → `{"type":"object","additionalProperties":…}` (keys are stringified on the wire)
+  *   - `(A, B[, C[, D]])` tuple → `{"type":"array","prefixItems":[…]}` (describes composite keys
+  *     positionally rather than as a generic `_1`/`_2` object)
   *
   * This is the source the L2A catalog uses when a type opts in via `derives LMDBSchema`. It is
   * deliberately not a spec-complete JSON Schema 2020-12 document (no `$schema`, no `$ref`/`$defs`);
@@ -68,16 +70,33 @@ object SchemaShape extends SchemaShapeLowPriority {
   given SchemaShape[Float]             = typeOnly("number")
   given SchemaShape[Double]            = typeOnly("number")
   given SchemaShape[BigDecimal]        = typeOnly("number")
-  given SchemaShape[java.time.Instant] = stringFormat("date-time")
-  given SchemaShape[java.util.UUID]    = stringFormat("uuid")
+  given SchemaShape[java.time.Instant]        = stringFormat("date-time")
+  given SchemaShape[java.time.OffsetDateTime] = stringFormat("date-time")
+  given SchemaShape[java.util.UUID]           = stringFormat("uuid")
 
   given optionShape[T](using s: SchemaShape[T]): SchemaShape[Option[T]] = make(s.shape)
   given seqShape[T](using s: SchemaShape[T]): SchemaShape[Seq[T]]       = make(array(s.shape))
   given listShape[T](using s: SchemaShape[T]): SchemaShape[List[T]]     = make(array(s.shape))
   given vectorShape[T](using s: SchemaShape[T]): SchemaShape[Vector[T]] = make(array(s.shape))
   given setShape[T](using s: SchemaShape[T]): SchemaShape[Set[T]]       = make(array(s.shape))
-  given mapShape[V](using s: SchemaShape[V]): SchemaShape[Map[String, V]] =
+  given arrayShape[T](using s: SchemaShape[T]): SchemaShape[Array[T]]   = make(array(s.shape))
+  // Any key type: JSON object keys are always strings on the wire (jsoniter stringifies the key),
+  // so the schema describes the value via `additionalProperties` and leaves the key implicit.
+  given mapShape[K, V](using s: SchemaShape[V]): SchemaShape[Map[K, V]] =
     make(MapV(ListMap("type" -> StringV("object"), "additionalProperties" -> s.shape)))
+
+  private def tuple(items: List[JValue]): JValue =
+    MapV(ListMap("type" -> StringV("array"), "prefixItems" -> ListV(items)))
+
+  // Composite-key shapes, mirroring the tuple2/3/4 KeyCodecs. Declared explicitly (and at higher
+  // priority than the Mirror `derived` below) so a tuple key is described as a positional array
+  // rather than as an object with `_1`/`_2` fields.
+  given tuple2Shape[A, B](using a: SchemaShape[A], b: SchemaShape[B]): SchemaShape[(A, B)] =
+    make(tuple(List(a.shape, b.shape)))
+  given tuple3Shape[A, B, C](using a: SchemaShape[A], b: SchemaShape[B], c: SchemaShape[C]): SchemaShape[(A, B, C)] =
+    make(tuple(List(a.shape, b.shape, c.shape)))
+  given tuple4Shape[A, B, C, D](using a: SchemaShape[A], b: SchemaShape[B], c: SchemaShape[C], d: SchemaShape[D]): SchemaShape[(A, B, C, D)] =
+    make(tuple(List(a.shape, b.shape, c.shape, d.shape)))
 }
 
 /** The `Mirror`-based product / sum derivation lives at lower priority than the explicit leaf and

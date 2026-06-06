@@ -53,7 +53,7 @@ lazy val root = (project in file("."))
     keycodecsTimestamp,
     keycodecsUca,
     queryDsl,
-    console
+    sql
   )
 
 lazy val core = (project in file("core"))
@@ -176,18 +176,23 @@ lazy val queryDsl = (project in file("query-dsl"))
   )
   .dependsOn(core)
 
-lazy val console = (project in file("console"))
+lazy val sql = (project in file("sql"))
   .settings(commonSettings)
   .settings(
-    name                             := "zio-lmdb-console",
-    description                      := "REPL for ZIO LMDB",
+    name                             := "zio-lmdb-sql",
+    description                      := "SQL REPL for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "org.jline" % "jline"       % "4.1.2",
-      "dev.zio"  %% "zio"         % versions.zio,
-      "dev.zio"  %% "zio-logging" % versions.ziologging
+      "org.jline"  % "jline"               % "4.1.2",
+      "com.lihaoyi" %% "fastparse"          % "3.1.1",
+      "dev.zio"   %% "zio"                  % versions.zio,
+      "dev.zio"   %% "zio-streams"          % versions.zio,
+      "dev.zio"   %% "zio-logging"          % versions.ziologging,
+      "dev.zio"   %% "zio-test"             % versions.zio % Test,
+      "dev.zio"   %% "zio-test-sbt"         % versions.zio % Test,
+      "dev.zio"   %% "zio-test-scalacheck"  % versions.zio % Test
     ),
-    assembly / mainClass             := Some("zio.lmdb.console.Main"),
-    assembly / assemblyJarName       := "zio-lmdb-console.jar",
+    assembly / mainClass             := Some("zio.lmdb.sql.repl.Main"),
+    assembly / assemblyJarName       := "zio-lmdb-sql.jar",
     assembly / assemblyMergeStrategy := {
       case PathList("module-info.class") => MergeStrategy.discard
       case x                             =>

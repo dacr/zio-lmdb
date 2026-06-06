@@ -15,7 +15,7 @@
  */
 package zio.lmdb.json
 
-import com.github.plokhotnyuk.jsoniter_scala.core.{JsonReader, JsonValueCodec, JsonWriter}
+import com.github.plokhotnyuk.jsoniter_scala.core.{JsonReader, JsonValueCodec, JsonWriter, readFromArray, writeToArray}
 
 import java.time.Instant
 import java.util.UUID
@@ -232,6 +232,102 @@ object JValue {
   given jValueValueCodec: JsonValueCodec[JValue] = JValueValueCodec
 
   given jValueCodec: LMDBCodecJson[JValue] = LMDBCodecJson(JValueValueCodec)
+
+  // ── Plain-JSON view (for the L2C SQL engine) ─────────────────────────────────────────────────
+  //
+  // The codec above uses the {"type":…,"value":…} envelope. Stored *values* are plain JSON (the
+  // jsoniter output of the value type), so the SQL engine reads/writes them as a generic JSON tree.
+  // This lenient codec maps JSON object→MapV, array→ListV, string→StringV, integral number→LongV,
+  // fractional number→DecimalV (precision-preserving), bool→BoolV, null→NullV. It is intentionally
+  // separate from the envelope codec and is not exposed as a given (it would clash with it).
+
+  private object PlainJValueCodec extends JsonValueCodec[JValue] {
+    override def nullValue: JValue = NullV
+
+    override def decodeValue(in: JsonReader, default: JValue): JValue = decodePlain(in, MaxDepth)
+
+    private def decodePlain(in: JsonReader, depth: Int): JValue = {
+      if (depth <= 0) in.decodeError("plain JValue decode depth limit exceeded")
+      if (in.isNextToken('n')) in.readNullOrError(NullV, "expected a JSON value")
+      else {
+        in.rollbackToken()
+        val t = in.nextToken()
+        in.rollbackToken()
+        t.toChar match {
+          case '{'       => decodePlainObject(in, depth)
+          case '['       => decodePlainArray(in, depth)
+          case '"'       => StringV(in.readString(null))
+          case 't' | 'f' => BoolV(in.readBoolean())
+          case _         =>
+            val bd = in.readBigDecimal(null)
+            if (bd.scale <= 0 && bd.isValidLong) LongV(bd.toLong) else DecimalV(bd)
+        }
+      }
+    }
+
+    private def decodePlainArray(in: JsonReader, depth: Int): JValue = {
+      if (!in.isNextToken('[')) in.decodeError("expected '['")
+      val buf = new mutable.ArrayBuffer[JValue]()
+      if (!in.isNextToken(']')) {
+        in.rollbackToken()
+        buf += decodePlain(in, depth - 1)
+        while (in.isNextToken(',')) buf += decodePlain(in, depth - 1)
+        in.rollbackToken()
+        if (!in.isNextToken(']')) in.decodeError("expected ']' or ','")
+      }
+      ListV(buf.toSeq)
+    }
+
+    private def decodePlainObject(in: JsonReader, depth: Int): JValue = {
+      if (!in.isNextToken('{')) in.decodeError("expected '{'")
+      val builder = ListMap.newBuilder[String, JValue]
+      if (!in.isNextToken('}')) {
+        in.rollbackToken()
+        builder += in.readKeyAsString() -> decodePlain(in, depth - 1)
+        while (in.isNextToken(',')) builder += in.readKeyAsString() -> decodePlain(in, depth - 1)
+        in.rollbackToken()
+        if (!in.isNextToken('}')) in.decodeError("expected '}' or ','")
+      }
+      MapV(builder.result())
+    }
+
+    override def encodeValue(x: JValue, out: JsonWriter): Unit = encodePlain(x, out, MaxDepth)
+
+    private def encodePlain(x: JValue, out: JsonWriter, depth: Int): Unit = {
+      if (depth <= 0) throw new IllegalStateException("plain JValue encode depth limit exceeded")
+      x match {
+        case StringV(v)     => out.writeVal(v)
+        case LongV(v)       => out.writeVal(v)
+        case DoubleV(v)     => out.writeVal(v)
+        case DecimalV(v)    => out.writeVal(v)
+        case BoolV(v)       => out.writeVal(v)
+        case InstantV(v)    => out.writeVal(v)
+        case IdentifierV(v) => out.writeVal(v)
+        case ListV(items)   =>
+          out.writeArrayStart()
+          val it = items.iterator
+          while (it.hasNext) encodePlain(it.next(), out, depth - 1)
+          out.writeArrayEnd()
+        case MapV(entries)  =>
+          out.writeObjectStart()
+          val it = entries.iterator
+          while (it.hasNext) { val (k, v) = it.next(); out.writeKey(k); encodePlain(v, out, depth - 1) }
+          out.writeObjectEnd()
+        case NullV          => out.writeNull()
+      }
+    }
+  }
+
+  /** Parse plain JSON bytes (as written by a value codec) into a generic [[JValue]] tree. Integral
+    * numbers become `LongV`, fractional numbers `DecimalV` (precision-preserving). Used by the L2C
+    * SQL engine to read stored values without their static type.
+    */
+  def fromPlainJson(bytes: Array[Byte]): Either[String, JValue] =
+    try Right(readFromArray(bytes)(PlainJValueCodec))
+    catch { case e: Throwable => Left(e.getMessage) }
+
+  /** Serialize a [[JValue]] as plain JSON bytes (used by the SQL engine to write values back). */
+  def toPlainJson(value: JValue): Array[Byte] = writeToArray(value)(PlainJValueCodec)
 
   // ── MACRO-FUTURE-CHECK ───────────────────────────────────────────────────────────────────────
   //

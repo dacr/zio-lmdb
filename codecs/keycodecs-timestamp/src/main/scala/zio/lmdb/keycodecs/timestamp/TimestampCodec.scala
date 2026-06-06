@@ -15,7 +15,7 @@
  */
 package zio.lmdb.keycodecs.timestamp
 
-import zio.lmdb.keycodecs.{KeyCodec, KeyCodecError}
+import zio.lmdb.keycodecs.{KeyCodec, KeyCodecError, KeyTypeId}
 import zio.lmdb.keycodecs.KeyCodecError.*
 
 import java.nio.ByteBuffer
@@ -28,6 +28,8 @@ object TimestampCodec {
     *   - 4 bytes for nanoseconds
     */
   given timestampKeyCodec: KeyCodec[Instant] = new KeyCodec[Instant] {
+    override val keyId: KeyTypeId = KeyTypeId("lmdb-ts:instant/v1")
+
     override def encode(key: Instant): Array[Byte] = {
       val buffer = ByteBuffer.allocate(12)
       // Flip sign bit to make signed long lexicographically sortable as unsigned bytes

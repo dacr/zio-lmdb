@@ -47,6 +47,14 @@ object SchemaArtifact {
     */
   case class OpaqueSchema(hint: String) extends SchemaArtifact
 
+  /** Identity of the `KeyCodec` that encodes a collection's key, recorded as the codec's stable
+    * `keyId` (e.g. `lmdb:int64`, `lmdb-geo:location/v1`). Keys are order-encoded bytes whose meaning
+    * cannot be inferred from the bytes alone, so this names exactly which codec produced them — which
+    * is what lets drift detection tell an `Int` key from a `Long` one, and what a reader (the future
+    * L2C REPL) needs to decode a key without guessing.
+    */
+  case class KeySchema(keyId: String) extends SchemaArtifact
+
   // ── Hand-rolled sum-type codec ───────────────────────────────────────────────────────────────
   //
   // `JsonCodecMaker.make[SchemaArtifact]` cannot be used: jsoniter-scala inlines nested codecs
@@ -71,6 +79,8 @@ object SchemaArtifact {
           out.writeVal("ProtobufSchema"); out.writeKey("value"); out.writeVal(proto)
         case OpaqueSchema(hint) =>
           out.writeVal("OpaqueSchema"); out.writeKey("value"); out.writeVal(hint)
+        case KeySchema(keyId) =>
+          out.writeVal("KeySchema"); out.writeKey("value"); out.writeVal(keyId)
       }
       out.writeObjectEnd()
     }
@@ -87,6 +97,7 @@ object SchemaArtifact {
         case "JsonSchema"     => JsonSchema(jValueCodec.decodeValue(in, JValue.NullV))
         case "ProtobufSchema" => ProtobufSchema(in.readString(null))
         case "OpaqueSchema"   => OpaqueSchema(in.readString(null))
+        case "KeySchema"      => KeySchema(in.readString(null))
         case other            => in.decodeError(s"unknown SchemaArtifact discriminator '$other'"); null
       }
       if (!in.isNextToken('}')) in.decodeError("expected '}'")

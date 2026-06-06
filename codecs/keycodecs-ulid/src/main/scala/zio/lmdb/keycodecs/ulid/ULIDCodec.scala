@@ -16,13 +16,15 @@
 package zio.lmdb.keycodecs.ulid
 
 import wvlet.airframe.ulid.ULID
-import zio.lmdb.keycodecs.{KeyCodec, KeyCodecError}
+import zio.lmdb.keycodecs.{KeyCodec, KeyCodecError, KeyTypeId}
 import zio.lmdb.keycodecs.KeyCodecError.*
 
 import java.nio.ByteBuffer
 
 object ULIDCodec {
   given KeyCodec[ULID] = new KeyCodec[ULID] {
+    override val keyId: KeyTypeId = KeyTypeId("lmdb-ulid:v1")
+
     override def encode(key: ULID): Array[Byte] = key.toBytes
 
     override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, ULID] = {

@@ -13,6 +13,7 @@ project/target
 .scala-build/
 project/metals.sbt
 .opencode/
+.antigravitycli/
 
 # application related
 lmdb-test-data/

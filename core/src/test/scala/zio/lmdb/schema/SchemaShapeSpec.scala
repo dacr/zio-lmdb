@@ -68,11 +68,34 @@ object SchemaShapeSpec extends ZIOSpecDefault {
         required.contains(StringV("age"))
       )
     },
-    test("Map[String, V] becomes an object schema with additionalProperties") {
+    test("Map[K, V] becomes an object schema with additionalProperties, for any key type") {
       assertTrue(
         SchemaShape[Map[String, Int]].shape ==
-          MapV(Map("type" -> StringV("object"), "additionalProperties" -> str("integer")))
+          MapV(Map("type" -> StringV("object"), "additionalProperties" -> str("integer"))),
+        SchemaShape[Map[Int, String]].shape ==
+          MapV(Map("type" -> StringV("object"), "additionalProperties" -> str("string")))
       )
+    },
+    test("OffsetDateTime is a date-time string, like Instant") {
+      assertTrue(
+        SchemaShape[java.time.OffsetDateTime].shape ==
+          MapV(Map("type" -> StringV("string"), "format" -> StringV("date-time")))
+      )
+    },
+    test("Array[T] becomes an array schema, like the other collections") {
+      assertTrue(
+        SchemaShape[Array[Float]].shape == MapV(Map("type" -> StringV("array"), "items" -> str("number")))
+      )
+    },
+    test("a tuple-valued field is described positionally as an array with prefixItems") {
+      SchemaShape[(String, Int)].shape match {
+        case MapV(root) =>
+          assertTrue(
+            root.get("type").contains(StringV("array")),
+            root.get("prefixItems").contains(ListV(List(str("string"), str("integer"))))
+          )
+        case other      => assertNever(s"expected an array schema, got $other")
+      }
     },
     test("sealed/enum derives a oneOf schema") {
       val s = SchemaShape[Color].shape

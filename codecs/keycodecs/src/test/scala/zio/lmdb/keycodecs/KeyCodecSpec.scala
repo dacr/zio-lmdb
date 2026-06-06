@@ -141,6 +141,27 @@ object KeyCodecSpec extends ZIOSpecDefault {
         assert(decoded)(isLeft(equalTo(KeyCodecError.InsufficientBytes(16, 15))))
       }
     ),
+    suite("Bytes codec")(
+      test("roundtrip encoding/decoding") {
+        check(Gen.listOf(Gen.byte).map(_.toArray)) { bytes =>
+          val codec   = summon[KeyCodec[Array[Byte]]]
+          val encoded = codec.encode(bytes)
+          val buffer  = ByteBuffer.allocateDirect(encoded.length).put(encoded).flip()
+          val decoded = codec.decode(buffer)
+          assertTrue(decoded.exists(d => Arrays.equals(d, bytes)))
+        }
+      },
+      test("identity encoding preserves bytes and unsigned byte order") {
+        val codec = summon[KeyCodec[Array[Byte]]]
+        val a     = Array[Byte](1, 2, 3)
+        val b     = Array[Byte](1, 2, 4)
+        assertTrue(
+          codec.keyId == KeyTypeId("lmdb:bytes"),
+          Arrays.equals(codec.encode(a), a),
+          Arrays.compareUnsigned(codec.encode(a), codec.encode(b)) < 0
+        )
+      }
+    ),
     suite("Tuple2 codec")(
       test("Fixed-Fixed (UUID, UUID)") {
         check(Gen.uuid, Gen.uuid) { (u1, u2) =>

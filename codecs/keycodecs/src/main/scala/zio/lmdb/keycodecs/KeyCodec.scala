@@ -22,6 +22,16 @@ import java.nio.charset.StandardCharsets
 import java.util.UUID
 import scala.annotation.tailrec
 
+/** A stable, globally-unique identifier for a key encoding, persisted in the collection schema.
+  *
+  * Keys are order-encoded bytes whose meaning cannot be inferred from the bytes alone — a `Long` and
+  * a geo key are both 8 bytes; a `UUID`, a `UUIDv7` and a `ULID` are all 16 — so the id is the only
+  * thing that distinguishes them. It is a versioned URN (e.g. `lmdb:int64`, `lmdb-geo:location/v1`):
+  * because it lands on disk it is a wire contract, so a change to the byte layout must bump the
+  * version part.
+  */
+final case class KeyTypeId(value: String)
+
 /** A codec abstraction for encoding and decoding keys of type `K` into a byte array representation for use with an LMDB database. The trait provides methods for serialization and deserialization, allowing a bidirectional mapping between `K` and its
   * byte representation.
   *
@@ -51,11 +61,19 @@ trait KeyCodec[K] {
     *   Some(width) if fixed width, None otherwise.
     */
   def width: Option[Int] = None
+
+  /** A stable, unique identifier for this encoding (see [[KeyTypeId]]). Abstract on purpose: every
+    * implementation — built-in, extension, or user-supplied — must name itself, so a key can always
+    * be identified rather than guessed at from its bytes.
+    */
+  def keyId: KeyTypeId
 }
 
 object KeyCodec {
 
   given stringKeyCodec: KeyCodec[String] = new KeyCodec[String] {
+    override val keyId: KeyTypeId = KeyTypeId("lmdb:str")
+
     private val charset = StandardCharsets.UTF_8 // TODO enhance charset support
 
     override def encode(key: String): Array[Byte] = key.getBytes(charset)
@@ -71,6 +89,8 @@ object KeyCodec {
   }
 
   given longKeyCodec: KeyCodec[Long] = new KeyCodec[Long] {
+    override val keyId: KeyTypeId = KeyTypeId("lmdb:int64")
+
     // Big-endian with sign-bit flip so the lexicographic order of the encoded
     // bytes matches the natural numeric order on Long (including negatives).
     private val signBias: Long = Long.MinValue
@@ -98,6 +118,8 @@ object KeyCodec {
   }
 
   given intKeyCodec: KeyCodec[Int] = new KeyCodec[Int] {
+    override val keyId: KeyTypeId = KeyTypeId("lmdb:int32")
+
     // Big-endian with sign-bit flip so the lexicographic order of the encoded
     // bytes matches the natural numeric order on Int (including negatives).
     private val signBias: Int = Int.MinValue
@@ -121,6 +143,8 @@ object KeyCodec {
   }
 
   given shortKeyCodec: KeyCodec[Short] = new KeyCodec[Short] {
+    override val keyId: KeyTypeId = KeyTypeId("lmdb:int16")
+
     // Big-endian with sign-bit flip so the lexicographic order of the encoded
     // bytes matches the natural numeric order on Short (including negatives).
     private val signBias: Int = 0x8000
@@ -142,6 +166,8 @@ object KeyCodec {
   }
 
   given uuidKeyCodec: KeyCodec[UUID] = new KeyCodec[UUID] {
+    override val keyId: KeyTypeId = KeyTypeId("lmdb:uuid")
+
     override def encode(key: UUID): Array[Byte] = UUIDTools.uuidToBytes(key)
 
     override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, UUID] = {
@@ -156,7 +182,27 @@ object KeyCodec {
     override def width: Option[Int] = Some(16)
   }
 
+  /** Raw bytes used verbatim as the key. Identity encoding, so LMDB's unsigned byte-wise comparison
+    * orders these keys lexicographically. Variable width, so as a tuple component it is escaped like
+    * any other variable-width key.
+    */
+  given byteArrayKeyCodec: KeyCodec[Array[Byte]] = new KeyCodec[Array[Byte]] {
+    override val keyId: KeyTypeId = KeyTypeId("lmdb:bytes")
+
+    override def encode(key: Array[Byte]): Array[Byte] = key
+
+    override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, Array[Byte]] = {
+      val bytes = new Array[Byte](keyBytes.remaining())
+      keyBytes.get(bytes)
+      Right(bytes)
+    }
+
+    override def width: Option[Int] = None
+  }
+
   given tuple2KeyCodec[A, B](using codecA: KeyCodec[A], codecB: KeyCodec[B]): KeyCodec[(A, B)] = new KeyCodec[(A, B)] {
+    override val keyId: KeyTypeId = KeyTypeId(s"lmdb:tuple(${codecA.keyId.value},${codecB.keyId.value})")
+
     override def width: Option[Int] =
       for {
         wa <- codecA.width
@@ -278,9 +324,11 @@ object KeyCodec {
   // prefix scan over encode((a, b)) followed by its terminating separator.
   // Same property extends to tuple4 via ((a, b, c), d).
 
-  given tuple3KeyCodec[A, B, C](using KeyCodec[A], KeyCodec[B], KeyCodec[C]): KeyCodec[(A, B, C)] = {
+  given tuple3KeyCodec[A, B, C](using ca: KeyCodec[A], cb: KeyCodec[B], cc: KeyCodec[C]): KeyCodec[(A, B, C)] = {
     val inner = summon[KeyCodec[((A, B), C)]]
     new KeyCodec[(A, B, C)] {
+      override val keyId: KeyTypeId = KeyTypeId(s"lmdb:tuple(${ca.keyId.value},${cb.keyId.value},${cc.keyId.value})")
+
       override def width: Option[Int] = inner.width
 
       override def encode(key: (A, B, C)): Array[Byte] =
@@ -291,9 +339,11 @@ object KeyCodec {
     }
   }
 
-  given tuple4KeyCodec[A, B, C, D](using KeyCodec[A], KeyCodec[B], KeyCodec[C], KeyCodec[D]): KeyCodec[(A, B, C, D)] = {
+  given tuple4KeyCodec[A, B, C, D](using ca: KeyCodec[A], cb: KeyCodec[B], cc: KeyCodec[C], cd: KeyCodec[D]): KeyCodec[(A, B, C, D)] = {
     val inner = summon[KeyCodec[((A, B, C), D)]]
     new KeyCodec[(A, B, C, D)] {
+      override val keyId: KeyTypeId = KeyTypeId(s"lmdb:tuple(${ca.keyId.value},${cb.keyId.value},${cc.keyId.value},${cd.keyId.value})")
+
       override def width: Option[Int] = inner.width
 
       override def encode(key: (A, B, C, D)): Array[Byte] =

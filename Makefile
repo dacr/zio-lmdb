@@ -9,8 +9,8 @@ unit-tests:
 readme-test:
 	scala-cli README.md
 
-console-assembly:
-	sbt console/assembly
+sql-assembly:
+	sbt sql/assembly
 
 performance-test:
 	sbt "testOnly zio.lmdb.LMDBPerformanceProtoBufSpec zio.lmdb.LMDBPerformanceJsonSpec"

@@ -49,6 +49,14 @@ object SchemaArtifactSpec extends ZIOSpecDefault {
       val decoded                  = encoded.fromJson[SchemaArtifact]
       assertTrue(decoded == Right(original)) &&
       assert(decoded.map(_.fingerprint))(isRight(equalTo(original.fingerprint)))
+    },
+    test("KeySchema round-trips and its fingerprint tracks the keyId") {
+      val a: SchemaArtifact = SchemaArtifact.KeySchema("lmdb:int64")
+      val b: SchemaArtifact = SchemaArtifact.KeySchema("lmdb:int32")
+      assertTrue(
+        a.toJson.fromJson[SchemaArtifact] == Right(a),
+        a.fingerprint != b.fingerprint
+      )
     }
   )
 }

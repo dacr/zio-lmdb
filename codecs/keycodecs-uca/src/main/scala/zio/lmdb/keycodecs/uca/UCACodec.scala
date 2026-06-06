@@ -17,7 +17,7 @@ package zio.lmdb.keycodecs.uca
 
 import com.ibm.icu.text.Collator
 import com.ibm.icu.util.ULocale
-import zio.lmdb.keycodecs.{KeyCodec, KeyCodecError}
+import zio.lmdb.keycodecs.{KeyCodec, KeyCodecError, KeyTypeId}
 
 import java.nio.ByteBuffer
 
@@ -46,6 +46,10 @@ extension (key: UCAKey) {
 
 object UCAKeyCodec {
   given ucaKeyCodec: KeyCodec[UCAKey] = new KeyCodec[UCAKey] {
+    // One-way collation sort key: the original text cannot be recovered from these bytes, so a
+    // reader can compare/encode-to-query but not render the stored key back to text.
+    override val keyId: KeyTypeId = KeyTypeId("lmdb-uca:sortkey/v1")
+
     override def encode(key: UCAKey): Array[Byte] = key.bytes
 
     override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, UCAKey] = {
