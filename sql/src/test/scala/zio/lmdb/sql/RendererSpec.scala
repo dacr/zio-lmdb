@@ -35,12 +35,12 @@ object RendererSpec extends ZIOSpecDefault {
         assertTrue(ls == List("name,age", "Alice,30", "\"Bob,Jr\",25"))
       }
     },
-    test("table renders aligned columns with a row count footer") {
+    test("table renders aligned columns (row count is added by the REPL, not the renderer)") {
       lines(Format.Table).map { ls =>
         assertTrue(
           ls.head == "name   | age",
           ls.contains("Alice  | 30"),
-          ls.last == "(2 rows)"
+          !ls.exists(_.startsWith("(")) // no footer
         )
       }
     }

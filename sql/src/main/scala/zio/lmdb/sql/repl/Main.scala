@@ -114,11 +114,28 @@ object Main extends ZIOAppDefault {
       case None       => ctx.err("no database selected — use \\c <name>")
       case Some(lmdb) =>
         (for {
-          fmt    <- ctx.format.get
-          result <- SqlEngine.run(sql).provide(ZLayer.succeed(lmdb))
-          _      <- Renderer.render(fmt, result).runForeach(ctx.out)
+          fmt     <- ctx.format.get
+          counter <- Ref.make(0L)
+          timed   <- (for {
+                        result <- SqlEngine.run(sql).provide(ZLayer.succeed(lmdb))
+                        tapped  = result.copy(rows = result.rows.tap(_ => counter.update(_ + 1)))
+                        _      <- Renderer.render(fmt, tapped).runForeach(ctx.out)
+                      } yield ()).timed
+          n       <- counter.get
+          _       <- ctx.out(s"($n row${if (n == 1) "" else "s"} in ${formatDuration(timed._1.toMillis)})")
         } yield ()).catchAll(e => ctx.err(e.message))
     }
+
+  /** Compact elapsed-time rendering: `42ms`, `10s200ms`, `1m42s5ms`. */
+  private def formatDuration(totalMs: Long): String = {
+    val ms        = totalMs % 1000
+    val totalSecs = totalMs / 1000
+    val secs      = totalSecs % 60
+    val mins      = totalSecs / 60
+    if (mins > 0) s"${mins}m${secs}s${ms}ms"
+    else if (secs > 0) s"${secs}s${ms}ms"
+    else s"${ms}ms"
+  }
 
   private def meta(ctx: Ctx, line: String): Task[Unit] = {
     val parts = line.split("\\s+").toList

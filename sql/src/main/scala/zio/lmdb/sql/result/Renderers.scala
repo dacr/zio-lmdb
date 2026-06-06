@@ -67,8 +67,8 @@ object Renderer {
 
       val sep    = widths.map("-" * _).mkString("-+-")
       val body   = matrix.map(line)
-      val footer = s"(${rows.size} row${if (rows.size == 1) "" else "s"})"
-      ZStream.fromIterable(line(headers) :: sep :: body ::: List(footer))
+      // The row count is reported by the caller (the REPL prints `(N rows in <time>)`).
+      ZStream.fromIterable(line(headers) :: sep :: body)
     })
 
   // ── cell formatting ──────────────────────────────────────────────────────────────────────────
