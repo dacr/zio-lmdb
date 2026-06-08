@@ -102,6 +102,23 @@ object SqlParserSpec extends ZIOSpecDefault {
           )
       )
     },
+    test("nested value paths: dotted column paths beyond alias.column") {
+      assertTrue(
+        ok("select o.location.altitude as alt from originals o")
+          == Statement.Select(
+            Projection.Items(List(SelectItem.Col("o.location.altitude", Some("alt")))),
+            false, "originals", None, Nil, None, None, None, Some("o")
+          ),
+        ok("select location.altitude from originals")
+          == Statement.Select(Projection.Items(List(SelectItem.Col("location.altitude"))), false, "originals", None, Nil, None, None, None),
+        ok("select * from originals o where o.dimension.width > 1920 order by o.location.altitude desc")
+          == Statement.Select(
+            Projection.Star, false, "originals",
+            Some(Expr.Cmp(CmpOp.Gt, Expr.Col("o.dimension.width"), Expr.Lit(Literal.IntLit(1920)))),
+            Nil, None, Some(OrderBy("o.location.altitude", descending = true)), None, Some("o")
+          )
+      )
+    },
     test("projection columns and AND/OR/comparison precedence") {
       val s = ok("SELECT _key, amount FROM t WHERE a > 1 AND b < 2 OR c >= 3")
       val expectedWhere =

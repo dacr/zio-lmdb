@@ -20,6 +20,7 @@ import zio.stream.ZStream
 import zio.lmdb.*
 import zio.lmdb.json.JValue
 import zio.lmdb.json.JValue.*
+import zio.lmdb.schema.SchemaArtifact
 import zio.lmdb.sql.SqlError
 import zio.lmdb.sql.parser.*
 import zio.lmdb.sql.result.{Column, QueryResult}
@@ -166,17 +167,19 @@ object SqlEngine {
     } else
       ZStream.fromIterableZIO(executeJoins(lmdb, sources, sel.joins)).map(parts => combinedLookup(parts))
 
-  /** Resolve a (possibly `alias.`-qualified) column against a combined row. An unqualified name is
-    * taken from the first source that has a non-null value for it; a `None` part (an unmatched LEFT
-    * join side) yields NULL for all of its columns. */
+  /** Resolve a (possibly `alias.`-qualified, possibly nested) column against a combined row. A
+    * leading segment that names a known source is the table alias; the remaining segments form a
+    * path that may descend into nested object fields (e.g. `o.location.altitude`). An unqualified
+    * path is taken from the first source that has a non-null value for it; a `None` part (an
+    * unmatched LEFT join side) yields NULL for all of its columns. */
   private def combinedLookup(parts: List[(String, Option[RawRow])])(name: String): JValue = {
-    val dot = name.indexOf('.')
-    if (dot >= 0) {
-      val alias = name.substring(0, dot)
-      val col   = name.substring(dot + 1)
-      parts.collectFirst { case (a, ro) if a == alias => ro.fold(NullV: JValue)(r => lookup(r)(col)) }.getOrElse(NullV)
-    } else
-      parts.iterator.map { case (_, ro) => ro.fold(NullV: JValue)(r => lookup(r)(name)) }.find(_ != NullV).getOrElse(NullV)
+    val segments = splitPath(name)
+    segments match {
+      case alias :: rest if rest.nonEmpty && parts.exists(_._1 == alias) =>
+        parts.collectFirst { case (a, ro) if a == alias => ro.fold(NullV: JValue)(r => lookupPath(r, rest)) }.getOrElse(NullV)
+      case _ =>
+        parts.iterator.map { case (_, ro) => ro.fold(NullV: JValue)(r => lookupPath(r, segments)) }.find(_ != NullV).getOrElse(NullV)
+    }
   }
 
   /** Execute the JOINs left-to-right, one hash join per step (buffers both sides). Each result is a
@@ -465,16 +468,48 @@ object SqlEngine {
   private def valueColumns(info: CollectionInfo): List[Column] =
     if (info.columns.nonEmpty) info.columns.map(c => Column(c.name, c.typeHint)) else List(Column("_value", "any"))
 
-  /** Type hint for a (possibly `alias.`-qualified) column across the query's sources. */
+  /** Type hint for a (possibly `alias.`-qualified, possibly nested) column across the query's
+    * sources. Nested paths are resolved against the value `JsonSchema`; top-level columns use the
+    * catalog's flat column list. */
   private def hintFor(sources: List[Source], name: String): String = {
-    val dot   = name.indexOf('.')
-    val infos = if (dot >= 0) sources.collect { case (a, info) if a == name.substring(0, dot) => info } else sources.map(_._2)
-    unqualify(name) match {
-      case "_key"   => infos.headOption.flatMap(_.keyId).getOrElse("key")
-      case "_value" => "any"
-      case other    => infos.flatMap(_.columns).find(_.name == other).map(_.typeHint).getOrElse("any")
+    val segments = splitPath(name)
+    segments match {
+      case alias :: rest if rest.nonEmpty && sources.exists(_._1 == alias) =>
+        hintForPath(sources.collect { case (a, info) if a == alias => info }, rest)
+      case _ =>
+        hintForPath(sources.map(_._2), segments)
     }
   }
+
+  private def hintForPath(infos: List[CollectionInfo], path: List[String]): String =
+    path match {
+      case "_key" :: _   => infos.headOption.flatMap(_.keyId).getOrElse("key")
+      case "_value" :: _ => "any"
+      case List(single)  => infos.flatMap(_.columns).find(_.name == single).map(_.typeHint).getOrElse("any")
+      case nested        => infos.iterator.map(info => nestedTypeHint(info, nested)).find(_ != "any").getOrElse("any")
+    }
+
+  /** Walk the value `JsonSchema` to find the declared type at a path of nested fields; "any" when
+    * the schema is absent or the path is not described. */
+  private def nestedTypeHint(info: CollectionInfo, path: List[String]): String =
+    info.valueSchema match {
+      case Some(SchemaArtifact.JsonSchema(root)) => schemaTypeAt(root, path)
+      case _                                     => "any"
+    }
+
+  private def schemaTypeAt(schema: JValue, path: List[String]): String =
+    path match {
+      case Nil         => schema match { case MapV(m) => m.get("type").collect { case StringV(t) => t }.getOrElse("any"); case _ => "any" }
+      case seg :: rest =>
+        schema match {
+          case MapV(m) =>
+            m.get("properties") match {
+              case Some(MapV(props)) => props.get(seg).map(schemaTypeAt(_, rest)).getOrElse("any")
+              case _                 => "any"
+            }
+          case _ => "any"
+        }
+    }
 
   // ── writes ───────────────────────────────────────────────────────────────────────────────────
 
@@ -567,11 +602,27 @@ object SqlEngine {
   private def decodeValueBytes(vb: Array[Byte]): JValue =
     JValue.fromPlainJson(vb).fold(_ => StringV(new String(vb, UTF_8)), identity)
 
-  private def lookup(r: RawRow)(name: String): JValue =
-    name match {
-      case "_key"   => r.key.toJValue
-      case "_value" => r.value
-      case other    => r.value match { case MapV(m) => m.getOrElse(other, NullV); case _ => NullV }
+  private def lookup(r: RawRow)(name: String): JValue = lookupPath(r, splitPath(name))
+
+  /** Split a column reference into its dotted segments. */
+  private def splitPath(name: String): List[String] = name.split('.').toList
+
+  /** Resolve a path against a raw row: a leading `_key`/`_value` selects the key or the whole value,
+    * then any remaining segments descend into nested object fields; an ordinary path descends into
+    * the value tree from the top. */
+  private def lookupPath(r: RawRow, segments: List[String]): JValue =
+    segments match {
+      case "_key" :: rest   => walk(r.key.toJValue, rest)
+      case "_value" :: rest => walk(r.value, rest)
+      case all              => walk(r.value, all)
+    }
+
+  /** Descend into nested `MapV` objects following `segments`; a non-object or a missing field on the
+    * way yields NULL. An empty path returns the value unchanged. */
+  private def walk(root: JValue, segments: List[String]): JValue =
+    segments.foldLeft(root) {
+      case (MapV(m), seg) => m.getOrElse(seg, NullV)
+      case _              => NullV
     }
 
   /** Read a named field from an already-projected `MapV` row (NULL if absent). */

@@ -45,11 +45,39 @@ object Main extends ZIOAppDefault {
     def err(s: String): UIO[Unit]  = out(s"! $s")
   }
 
+  /** Parsed command-line arguments. `home` overrides the databases home (otherwise it comes from the
+    * built LMDB config); `connect` is an optional database name to open automatically on startup.
+    */
+  private final case class CliArgs(home: Option[String], connect: Option[String])
+
+  private def parseArgs(args: List[String]): CliArgs = {
+    @annotation.tailrec
+    def loop(rem: List[String], home: Option[String], db: Option[String]): CliArgs =
+      rem match {
+        case ("--home" | "-H") :: h :: t                => loop(t, Some(h), db)
+        case a :: t if !a.startsWith("-") && db.isEmpty => loop(t, home, Some(a))
+        case _ :: t                                     => loop(t, home, db)
+        case Nil                                        => CliArgs(home, db)
+      }
+    loop(args, None, None)
+  }
+
+  /** Resolve the databases home the same way `LMDBLive.setup` does: explicit override, else the value
+    * from the built config (`lmdb.home` / `LMDB_HOME`), else `$HOME/.lmdb`. */
+  private def resolveHome(homeOpt: Option[String], config: LMDBConfig): Path =
+    homeOpt.orElse(config.databasesHome) match {
+      case Some(h) => Paths.get(h).toAbsolutePath
+      case None    => Paths.get(sys.env.getOrElse("HOME", "."), ".lmdb").toAbsolutePath
+    }
+
   override def run =
     (for {
       args      <- getArgs
-      dbHomeArg  = args.headOption.getOrElse(java.lang.System.getProperty("user.home") + "/.lmdb")
-      dbHome     = Paths.get(dbHomeArg).toAbsolutePath
+      cli        = parseArgs(args.toList)
+      // The databases home comes from the built LMDB config (honouring `lmdb.home` / `LMDB_HOME`),
+      // not from a positional argument — the positional argument names a database to auto-connect to.
+      config    <- ZIO.config(LMDB.config).orElseSucceed(LMDBConfig.default)
+      dbHome     = resolveHome(cli.home, config)
       _         <- ZIO.attemptBlocking(if (!Files.exists(dbHome)) Files.createDirectories(dbHome))
       active    <- Ref.make[Option[LMDB]](None)
       scope     <- Ref.make[Option[Scope.Closeable]](None)
@@ -86,6 +114,7 @@ object Main extends ZIOAppDefault {
       _         <- ctx.out(s"zio-lmdb-sql  —  databases home: $dbHome")
       _         <- ctx.out("Type SQL, or \\h for help. \\q to quit.")
       _         <- refreshDatabases(ctx) // populate \c completion before any connection
+      _         <- ZIO.foreachDiscard(cli.connect)(name => connect(ctx, name).catchAll(e => ctx.err(e.getMessage)))
       _         <- loop(ctx)
     } yield ()).catchAll(e => Console.printLineError(s"Fatal: $e").orDie)
 

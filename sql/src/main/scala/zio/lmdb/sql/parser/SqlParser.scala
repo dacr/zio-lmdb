@@ -30,8 +30,12 @@ object SqlParser {
         "insert", "into", "values", "update", "set", "delete", "describe", "show", "collections", "indexes", "and", "or", "not",
         "like", "is", "null", "true", "false")
 
-  /** A column reference, optionally qualified by a table alias: `col` or `alias.col`. */
-  private def colName[$: P]: P[String] = P(ident ~~ ("." ~~ ident).?).map { case (a, b) => b.fold(a)(c => s"$a.$c") }
+  /** A column reference as a dotted path: a bare column (`col`), a table-qualified column
+    * (`alias.col`), or a nested value path of any depth (`alias.field.sub`, `field.sub.leaf`). The
+    * first segment may be a table alias or a pseudo-column (`_key`/`_value`); any further segments
+    * index into nested object fields. */
+  private def colName[$: P]: P[String] =
+    P(ident ~~ ("." ~~ ident).repX).map { case (head, tail) => (head +: tail).mkString(".") }
 
   private def kw[$: P](s: String): P[Unit] = P(IgnoreCase(s) ~~ !CharPred(c => c.isLetterOrDigit || c == '_'))
 

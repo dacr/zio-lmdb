@@ -25,6 +25,11 @@ object SqlEngineSpec extends ZIOSpecDefault {
   final case class Ref(itemCode: String) derives LMDBCodecJson, LMDBSchema
   final case class Market(country: String, tier: String) derives LMDBCodecJson, LMDBSchema
 
+  // Nested model (à la sotohp `originals`): exercises dotted paths into sub-objects.
+  final case class Dim(width: Long, height: Long) derives LMDBCodecJson, LMDBSchema
+  final case class GPoint(latitude: Double, longitude: Double, altitude: Double) derives LMDBCodecJson, LMDBSchema
+  final case class Original(mediaPath: String, dimension: Dim, location: Option[GPoint]) derives LMDBCodecJson, LMDBSchema
+
   private def deleteRecursively(f: java.io.File): Unit = {
     if (f.isDirectory) Option(f.listFiles()).foreach(_.foreach(deleteRecursively))
     f.delete(): Unit
@@ -94,7 +99,29 @@ object SqlEngineSpec extends ZIOSpecDefault {
       _         <- markets.upsertOverwrite("m2", Market("US", "B"))
     } yield ()
 
+  private val seedOriginals =
+    for {
+      originals <- LMDB.collectionCreate[String, Original]("originals")
+      _         <- originals.upsertOverwrite("o1", Original("/a.jpg", Dim(1920, 1080), Some(GPoint(48.85, 2.35, 35.0))))
+      _         <- originals.upsertOverwrite("o2", Original("/b.jpg", Dim(800, 600), Some(GPoint(40.71, -74.0, 10.0))))
+      _         <- originals.upsertOverwrite("o3", Original("/c.jpg", Dim(640, 480), None))
+    } yield ()
+
   override def spec = suite("SqlEngine")(
+    test("nested value paths: SELECT, WHERE and ORDER BY descend into sub-objects") {
+      for {
+        _    <- seedOriginals
+        rows <- query("select _key, o.location.altitude as alt, o.dimension.width as w from originals o where o.dimension.width >= 800 order by o.location.altitude desc")
+        deep <- query("select location.altitude from originals where _key = 'o1'")
+        miss <- query("select o.location.altitude as alt from originals o where _key = 'o3'")
+      } yield assertTrue(
+        rows.map(r => field(r, "_key")) == List(StringV("o1"), StringV("o2")),       // o3 (width 640) excluded
+        rows.map(r => field(r, "alt"))  == List(DecimalV(BigDecimal("35.0")), DecimalV(BigDecimal("10.0"))),
+        rows.map(r => field(r, "w"))    == List(LongV(1920), LongV(800)),
+        field(deep.head, "altitude")    == DecimalV(BigDecimal("35.0")),
+        field(miss.head, "alt")         == NullV                                     // o3 has no location → nested path is NULL
+      )
+    },
     test("SELECT with WHERE, ORDER BY and projection over real stored data") {
       for {
         _    <- seed
