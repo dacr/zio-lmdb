@@ -53,6 +53,23 @@ object GEOTools {
     buffer.array()
   }
 
+  /** Mean Earth radius in metres (IUGG), as used by PostGIS `ST_DistanceSphere`. */
+  val EarthRadiusMeters: Double = 6371008.8
+
+  /** Great-circle distance, in metres, between two latitude/longitude points using the haversine
+    * formula on a sphere of [[EarthRadiusMeters]]. Accurate to a few tenths of a percent — ample for
+    * "within a radius" filtering. Inputs are decimal degrees.
+    */
+  def haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double = {
+    val dLat = math.toRadians(lat2 - lat1)
+    val dLon = math.toRadians(lon2 - lon1)
+    val sinLat = math.sin(dLat / 2)
+    val sinLon = math.sin(dLon / 2)
+    val a = sinLat * sinLat + math.cos(math.toRadians(lat1)) * math.cos(math.toRadians(lat2)) * sinLon * sinLon
+    val c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    EarthRadiusMeters * c
+  }
+
   /** Converts an 8-byte array (Morton code) back to a latitude/longitude pair.
     *
     * @param bytes

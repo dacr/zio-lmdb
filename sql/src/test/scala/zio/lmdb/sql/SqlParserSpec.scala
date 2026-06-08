@@ -28,7 +28,7 @@ object SqlParserSpec extends ZIOSpecDefault {
           Some(Expr.Cmp(CmpOp.Eq, Expr.Col("customer"), Expr.Lit(Literal.StrLit("Alice")))),
           Nil,
           None,
-          Some(OrderBy("_key", descending = true)),
+          Some(OrderBy(Expr.Col("_key"), descending = true)),
           Some(10L)
         )
       )
@@ -53,7 +53,7 @@ object SqlParserSpec extends ZIOSpecDefault {
         ok("select distinct customer from orders")
           == Statement.Select(Projection.Items(List(SelectItem.Col("customer"))), true, "orders", None, Nil, None, None, None),
         ok("select distinct city, country from people order by country limit 5")
-          == Statement.Select(Projection.Items(List(SelectItem.Col("city"), SelectItem.Col("country"))), true, "people", None, Nil, None, Some(OrderBy("country", descending = false)), Some(5L))
+          == Statement.Select(Projection.Items(List(SelectItem.Col("city"), SelectItem.Col("country"))), true, "people", None, Nil, None, Some(OrderBy(Expr.Col("country"), descending = false)), Some(5L))
       )
     },
     test("AS aliases and ORDER BY an alias (standard GROUP BY … ORDER BY order)") {
@@ -61,7 +61,7 @@ object SqlParserSpec extends ZIOSpecDefault {
         ok("select cameraName, count(*) as count from originals group by cameraName order by count")
           == Statement.Select(
             Projection.Items(List(SelectItem.Col("cameraName"), SelectItem.Agg(AggFunc.Count, None, Some("count")))),
-            false, "originals", None, List("cameraName"), None, Some(OrderBy("count", descending = false)), None
+            false, "originals", None, List("cameraName"), None, Some(OrderBy(Expr.Col("count"), descending = false)), None
           ),
         ok("select name as n from t") == Statement.Select(Projection.Items(List(SelectItem.Col("name", Some("n")))), false, "t", None, Nil, None, None, None)
       )
@@ -74,14 +74,21 @@ object SqlParserSpec extends ZIOSpecDefault {
             Some(Expr.Cmp(CmpOp.Gt, Expr.Func("length", List(Expr.Col("name"))), Expr.Lit(Literal.IntLit(0)))),
             Nil, None, None, None
           ),
-        ok("select cameraName, count(*) as count from originals where length(cameraName) > 0 group by cameraName having count(*) > 100 order by count")
+        ok(
+          """SELECT cameraName, count(*) AS count
+            |FROM originals
+            |WHERE length(cameraName) > 0
+            |GROUP BY cameraName
+            |HAVING count(*) > 100
+            |ORDER BY count""".stripMargin
+        )
           == Statement.Select(
             Projection.Items(List(SelectItem.Col("cameraName"), SelectItem.Agg(AggFunc.Count, None, Some("count")))),
             false, "originals",
             Some(Expr.Cmp(CmpOp.Gt, Expr.Func("length", List(Expr.Col("cameraName"))), Expr.Lit(Literal.IntLit(0)))),
             List("cameraName"),
             Some(Expr.Cmp(CmpOp.Gt, Expr.Aggregate(AggFunc.Count, None), Expr.Lit(Literal.IntLit(100)))),
-            Some(OrderBy("count", descending = false)),
+            Some(OrderBy(Expr.Col("count"), descending = false)),
             None
           )
       )
@@ -115,7 +122,47 @@ object SqlParserSpec extends ZIOSpecDefault {
           == Statement.Select(
             Projection.Star, false, "originals",
             Some(Expr.Cmp(CmpOp.Gt, Expr.Col("o.dimension.width"), Expr.Lit(Literal.IntLit(1920)))),
-            Nil, None, Some(OrderBy("o.location.altitude", descending = true)), None, Some("o")
+            Nil, None, Some(OrderBy(Expr.Col("o.location.altitude"), descending = true)), None, Some("o")
+          )
+      )
+    },
+    test("geo functions: GEO_DISTANCE in SELECT/WHERE/ORDER BY, GEO_WITHIN as a predicate") {
+      val dist =
+        Expr.Func("geo_distance", List(Expr.Col("o.location.latitude"), Expr.Col("o.location.longitude"), Expr.Lit(Literal.DecLit(BigDecimal("48.8566"))), Expr.Lit(Literal.DecLit(BigDecimal("2.3522")))))
+      assertTrue(
+        ok(
+          """SELECT _key, geo_distance(o.location.latitude, o.location.longitude, 48.8566, 2.3522) AS dist
+            |FROM originals o
+            |WHERE geo_distance(o.location.latitude, o.location.longitude, 48.8566, 2.3522) <= 5000
+            |ORDER BY dist""".stripMargin
+        )
+          == Statement.Select(
+            Projection.Items(List(SelectItem.Col("_key"), SelectItem.Expr(dist, Some("dist")))),
+            false, "originals",
+            Some(Expr.Cmp(CmpOp.Le, dist, Expr.Lit(Literal.IntLit(5000)))),
+            Nil, None, Some(OrderBy(Expr.Col("dist"), descending = false)), None, Some("o")
+          ),
+        ok("select * from originals o where geo_within(o.location, 48.8566, 2.3522, 5000)")
+          == Statement.Select(
+            Projection.Star, false, "originals",
+            Some(Expr.Func("geo_within", List(Expr.Col("o.location"), Expr.Lit(Literal.DecLit(BigDecimal("48.8566"))), Expr.Lit(Literal.DecLit(BigDecimal("2.3522"))), Expr.Lit(Literal.IntLit(5000))))),
+            Nil, None, None, None, Some("o")
+          )
+      )
+    },
+    test("arithmetic expressions: precedence, and reuse in SELECT / WHERE / ORDER BY") {
+      assertTrue(
+        ok("select a + b * c from t")
+          == Statement.Select(
+            Projection.Items(List(SelectItem.Expr(Expr.Arith(ArithOp.Add, Expr.Col("a"), Expr.Arith(ArithOp.Mul, Expr.Col("b"), Expr.Col("c")))))),
+            false, "t", None, Nil, None, None, None
+          ),
+        ok("select x / 1000 as km from t where x / 1000 <= 10 order by km")
+          == Statement.Select(
+            Projection.Items(List(SelectItem.Expr(Expr.Arith(ArithOp.Div, Expr.Col("x"), Expr.Lit(Literal.IntLit(1000))), Some("km")))),
+            false, "t",
+            Some(Expr.Cmp(CmpOp.Le, Expr.Arith(ArithOp.Div, Expr.Col("x"), Expr.Lit(Literal.IntLit(1000))), Expr.Lit(Literal.IntLit(10)))),
+            Nil, None, Some(OrderBy(Expr.Col("km"), descending = false)), None
           )
       )
     },

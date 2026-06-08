@@ -68,7 +68,7 @@ object SqlParser {
     )
 
   private def primary[$: P]: P[Expr] =
-    P(("(" ~ expr ~ ")") | aggExpr | scalarFuncExpr | literal.map(Expr.Lit(_)) | colName.map(Expr.Col(_)))
+    P(("(" ~ expr ~ ")") | aggExpr | funcExpr | literal.map(Expr.Lit(_)) | colName.map(Expr.Col(_)))
 
   /** An aggregate reference inside an expression (e.g. in HAVING): COUNT(*), SUM(col), … */
   private def aggExpr[$: P]: P[Expr] =
@@ -77,16 +77,32 @@ object SqlParser {
         (aggFunc ~ "(" ~ colName ~ ")").map { case (f, c) => Expr.Aggregate(f, Some(c)) }
     )
 
-  /** Scalar functions usable in WHERE/HAVING. Currently LENGTH(<expr>). */
-  private def scalarFuncExpr[$: P]: P[Expr] =
-    P(kw("length").map(_ => "length") ~ "(" ~ expr ~ ")").map { case (name, arg) => Expr.Func(name, List(arg)) }
+  /** A scalar function call `name(arg, …)` — e.g. `LENGTH(name)`,
+    * `GEO_DISTANCE(lat1, lon1, lat2, lon2)`, `GEO_WITHIN(point, lat, lon, radius)`. Function names are
+    * case-insensitive and not reserved, so an identifier not followed by `(` falls through to a column
+    * reference; aggregates are matched earlier in `primary`. */
+  private def funcExpr[$: P]: P[Expr] =
+    P(ident ~ "(" ~ expr.rep(1, sep = ",") ~ ")").map { case (name, args) => Expr.Func(name.toLowerCase, args.toList) }
+
+  // Arithmetic binds tighter than comparison: `*` `/` `%` over `+` `-`, both over `=`/`<`/… .
+  private def arithMulOp[$: P]: P[ArithOp] =
+    P(P("*").map(_ => ArithOp.Mul) | P("/").map(_ => ArithOp.Div) | P("%").map(_ => ArithOp.Mod))
+
+  private def arithAddOp[$: P]: P[ArithOp] =
+    P(P("+").map(_ => ArithOp.Add) | P("-").map(_ => ArithOp.Sub))
+
+  private def multiplicative[$: P]: P[Expr] =
+    P(primary ~ (arithMulOp ~ primary).rep).map { case (h, t) => t.foldLeft(h) { case (acc, (op, r)) => Expr.Arith(op, acc, r) } }
+
+  private def additive[$: P]: P[Expr] =
+    P(multiplicative ~ (arithAddOp ~ multiplicative).rep).map { case (h, t) => t.foldLeft(h) { case (acc, (op, r)) => Expr.Arith(op, acc, r) } }
 
   private def term[$: P]: P[Expr] =
     P(
-      primary ~ (
+      additive ~ (
         (kw("is") ~ kw("not").map(_ => true).? ~ kw("null")).map(neg => (e: Expr) => Expr.IsNull(e, neg.getOrElse(false))) |
           (kw("like") ~ sqlString).map(p => (e: Expr) => Expr.Like(e, p)) |
-          (cmpOp ~ primary).map { case (op, r) => (e: Expr) => Expr.Cmp(op, e, r) }
+          (cmpOp ~ additive).map { case (op, r) => (e: Expr) => Expr.Cmp(op, e, r) }
       ).?
     ).map { case (e, fOpt) => fOpt.map(_(e)).getOrElse(e) }
 
@@ -104,27 +120,24 @@ object SqlParser {
         kw("min").map(_ => AggFunc.Min) | kw("max").map(_ => AggFunc.Max)
     )
 
-  private def aggItem[$: P]: P[SelectItem.Agg] =
-    P(
-      (kw("count") ~ "(" ~ "*" ~ ")").map(_ => SelectItem.Agg(AggFunc.Count, None)) |
-        (aggFunc ~ "(" ~ colName ~ ")").map { case (f, c) => SelectItem.Agg(f, Some(c)) }
-    )
-
   /** Optional `AS <name>` column alias. */
   private def aliasOpt[$: P]: P[Option[String]] = P((kw("as") ~ ident).?)
 
+  /** A projected item: any scalar expression, classified into a plain column, an aggregate, or a
+    * general expression (the last covers `GEO_DISTANCE(...)`, `LENGTH(...)`, …). */
   private def selectItem[$: P]: P[SelectItem] =
-    P(
-      (aggItem ~ aliasOpt).map { case (agg, al) => agg.copy(alias = al) } |
-        (colName ~ aliasOpt).map { case (n, al) => SelectItem.Col(n, al) }
-    )
+    P(expr ~ aliasOpt).map {
+      case (Expr.Col(n), al)          => SelectItem.Col(n, al)
+      case (Expr.Aggregate(f, c), al) => SelectItem.Agg(f, c, al)
+      case (e, al)                    => SelectItem.Expr(e, al)
+    }
 
   private def projection[$: P]: P[Projection] =
     P(P("*").map(_ => Projection.Star) | selectItem.rep(1, sep = ",").map(items => Projection.Items(items.toList)))
 
   private def orderBy[$: P]: P[OrderBy] =
-    P(kw("order") ~ kw("by") ~ colName ~ (kw("asc").map(_ => false) | kw("desc").map(_ => true)).?.map(_.getOrElse(false)))
-      .map { case (c, d) => OrderBy(c, d) }
+    P(kw("order") ~ kw("by") ~ expr ~ (kw("asc").map(_ => false) | kw("desc").map(_ => true)).?.map(_.getOrElse(false)))
+      .map { case (e, d) => OrderBy(e, d) }
 
   private def distinctKw[$: P]: P[Boolean] =
     P((kw("distinct").map(_ => true)).?).map(_.getOrElse(false))

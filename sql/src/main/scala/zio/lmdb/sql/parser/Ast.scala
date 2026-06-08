@@ -61,6 +61,9 @@ sealed trait SelectItem { def alias: Option[String] }
 object SelectItem {
   final case class Col(name: String, alias: Option[String] = None)                          extends SelectItem
   final case class Agg(func: AggFunc, column: Option[String], alias: Option[String] = None) extends SelectItem
+  /** A scalar expression projection, e.g. `GEO_DISTANCE(...)` or `LENGTH(name)`. Evaluated per row;
+    * only valid in a non-aggregate `SELECT`. */
+  final case class Expr(expr: zio.lmdb.sql.parser.Expr, alias: Option[String] = None)       extends SelectItem
 }
 
 sealed trait Projection
@@ -70,15 +73,21 @@ object Projection {
   final case class Items(items: List[SelectItem]) extends Projection
 }
 
-final case class OrderBy(column: String, descending: Boolean)
+/** ORDER BY a scalar expression. A bare `Expr.Col` may name an output alias or a (qualified) column;
+  * a function expression (e.g. `GEO_DISTANCE(...)`) sorts by the computed value. */
+final case class OrderBy(expr: Expr, descending: Boolean)
 
 enum CmpOp { case Eq, Ne, Lt, Le, Gt, Ge }
+
+enum ArithOp { case Add, Sub, Mul, Div, Mod }
 
 sealed trait Expr
 object Expr {
   final case class Col(name: String)                       extends Expr
   final case class Lit(value: Literal)                     extends Expr
   final case class Cmp(op: CmpOp, left: Expr, right: Expr) extends Expr
+  /** A binary arithmetic expression, e.g. `geo_distance(...) / 1000`. */
+  final case class Arith(op: ArithOp, left: Expr, right: Expr) extends Expr
   final case class And(left: Expr, right: Expr)            extends Expr
   final case class Or(left: Expr, right: Expr)             extends Expr
   final case class Not(inner: Expr)                        extends Expr

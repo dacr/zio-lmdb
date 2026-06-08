@@ -12,9 +12,10 @@ A collection behaves like a single table: the key is the pseudo-column `_key`, a
 (discovered from the collection's [schema](schema.html)) are the other columns.
 
 {: .note }
-The SQL layer is new in 3.x and still evolving. It is a deliberately small, read-mostly dialect over
-a single collection — there are no joins, subqueries, or DDL. Use the [Query DSL](query-dsl.html) or
-the typed collection API when you need the full programmatic power.
+The SQL layer is new in 3.x and still evolving. It is a deliberately small, read-mostly dialect —
+`SELECT`/`INSERT`/`UPDATE`/`DELETE` with joins, aggregates, nested value-field access, and a handful
+of scalar/geo functions, but no subqueries, window functions, or DDL. Use the
+[Query DSL](query-dsl.html) or the typed collection API when you need the full programmatic power.
 
 ## Table of contents
 {: .no_toc .text-delta }
@@ -31,6 +32,7 @@ the typed collection API when you need the full programmatic power.
 | table | a collection |
 | `_key` pseudo-column | the collection key (decoded with its `KeyCodec`) |
 | regular columns | the value's JSON fields (from the value [schema](schema.html)) |
+| dotted column path | a nested value field of any depth (`location.altitude`) |
 | `_value` pseudo-column | the whole value, when it is a scalar rather than an object |
 
 Rows are read straight from the LMDB cursor and decoded generically (the key via its recorded
@@ -99,6 +101,33 @@ SELECT name AS fullName, age AS years FROM users;  -- column aliases
 `_key` is always available. For collections whose values are scalars (not objects), the whole value
 is exposed as `_value`.
 
+{: .note }
+**Aliases are reusable.** An `AS` alias defined in the `SELECT` list can be referenced by name in
+`WHERE`, `HAVING`, and `ORDER BY` — a convenience beyond standard SQL (which exposes aliases only to
+`ORDER BY`). This avoids repeating a computed expression. If an alias happens to share a name with a
+real column, the alias wins within that query. (An alias that names an aggregate is still rejected in
+`WHERE` — aggregates belong in `HAVING`.)
+
+### Nested fields
+
+A column reference is a **dotted path of any depth**, so you can reach into nested objects. The first
+segment is treated as a table alias when it names a table in the `FROM`/`JOIN` clauses; otherwise the
+whole path indexes into the value. Paths work everywhere a column does — `SELECT`, `WHERE`,
+`ORDER BY`, `GROUP BY`, and `JOIN … ON`.
+
+```sql
+-- value: { "location": { "latitude": …, "longitude": …, "altitude": … }, "dimension": { "width": …, "height": … } }
+SELECT _key, o.location.altitude AS alt FROM originals o;   -- alias-qualified nested path
+SELECT location.altitude FROM originals;                    -- unqualified nested path
+SELECT * FROM originals o
+  WHERE o.dimension.width >= 1920
+  ORDER BY o.location.altitude DESC;
+```
+
+A missing field, or a step through something that is not an object, yields `NULL` (so a row without
+`location` simply has a `NULL` `location.altitude`). Nested access is read-only: `INSERT`/`UPDATE`
+column lists are still top-level field names.
+
 ### WHERE
 
 Comparison operators: `=`, `!=` (or `<>`), `<`, `<=`, `>`, `>=`. Combine with `AND`, `OR`, `NOT`,
@@ -138,21 +167,86 @@ SELECT * FROM products WHERE discount = 9.99;
 
 ### Scalar functions
 
-`LENGTH(x)` returns the character length of `x` as text (`NULL` stays `NULL`). Functions can appear
-anywhere an expression is allowed (`WHERE`, `HAVING`).
+Function calls take the form `name(arg, …)` and may appear anywhere an expression is allowed — in the
+`SELECT` list, `WHERE`, `HAVING`, and `ORDER BY`. Names are case-insensitive. `NULL` arguments
+propagate to a `NULL` (or non-matching) result.
+
+`LENGTH(x)` returns the character length of `x` as text:
 
 ```sql
 SELECT * FROM users WHERE LENGTH(name) > 0;
-SELECT * FROM users WHERE LENGTH(country) = 2;
+SELECT name, LENGTH(name) AS len FROM users ORDER BY len DESC;
 ```
 
+#### Geo functions
+
+For values that carry geographic coordinates, two functions compute great-circle distance with the
+haversine formula (in **metres**, on a mean-radius sphere — the same convention as PostGIS
+`ST_DistanceSphere`):
+
+| Function | Result |
+|---|---|
+| `GEO_DISTANCE(lat1, lon1, lat2, lon2)` | distance in metres |
+| `GEO_DISTANCE(point, lat, lon)` | as above, reading `latitude`/`longitude` from the `point` object |
+| `GEO_WITHIN(lat1, lon1, lat2, lon2, radius)` | boolean `distance <= radius` |
+| `GEO_WITHIN(point, lat, lon, radius)` | as above, with an object `point` |
+
+The object forms pair naturally with [nested fields](#nested-fields): pass `o.location` (an object
+with `latitude`/`longitude`) instead of spelling out both coordinate paths.
+
+```sql
+-- originals within 5 km of central Paris, nearest first
+-- (the `AS dist` alias is reused in WHERE and ORDER BY — no need to repeat the expression)
+SELECT _key, GEO_DISTANCE(o.location.latitude, o.location.longitude, 48.8566, 2.3522) AS dist
+  FROM originals o
+  WHERE dist <= 5000
+  ORDER BY dist;
+
+-- the same query using the object-arg form and the boolean predicate
+SELECT _key
+  FROM originals o
+  WHERE GEO_WITHIN(o.location, 48.8566, 2.3522, 5000);
+```
+
+A row whose coordinates are missing or non-numeric (e.g. an original with no `location`) yields a
+`NULL` distance and is excluded by both the `<=` filter and `GEO_WITHIN`.
+
+{: .note }
+Geo filtering currently performs a full scan and computes the distance per row; there is no spatial
+(bounding-box) index pushdown yet.
+
+### Arithmetic
+
+Numeric expressions support `+`, `-`, `*`, `/`, and `%`, with the usual precedence (`*` `/` `%` bind
+tighter than `+` `-`) and parentheses to override it. They may appear anywhere an expression is
+allowed — `SELECT`, `WHERE`, `HAVING`, `ORDER BY` — and combine freely with functions and aliases:
+
+```sql
+SELECT _key, amount * 2 AS doubled FROM orders WHERE amount * 2 >= 20;
+
+-- distance in kilometres, reusing the alias in WHERE and ORDER BY
+SELECT b.name, GEO_DISTANCE(m.location, 48.8566, 2.3522) / 1000 AS distKm
+  FROM medias m
+  JOIN bags b ON m.bagId = b.id
+  WHERE distKm <= 10
+  ORDER BY distKm;
+```
+
+Integer operands keep an integer result for `+`/`-`/`*`/`%`; division always yields a decimal. A
+non-numeric operand, or division/modulo by zero, yields `NULL` (which then fails comparisons, so the
+row is excluded).
+
 ### ORDER BY and LIMIT
+
+`ORDER BY` accepts a column, an output alias, or an arbitrary expression (such as a geo distance).
 
 ```sql
 SELECT _key, age FROM users ORDER BY age;          -- ascending (default)
 SELECT _key, age FROM users ORDER BY age DESC;     -- descending
 SELECT * FROM users ORDER BY _key LIMIT 10;
 SELECT name AS n FROM users ORDER BY n;             -- order by an alias
+SELECT * FROM originals o
+  ORDER BY GEO_DISTANCE(o.location.latitude, o.location.longitude, 48.8566, 2.3522) LIMIT 10;  -- 10 nearest
 ```
 
 ### SELECT DISTINCT
@@ -306,7 +400,7 @@ SELECT [DISTINCT] <projection>
   [WHERE <condition>]
   [GROUP BY <columns>]
   [HAVING <condition>]
-  [ORDER BY <column> [ASC|DESC]]
+  [ORDER BY <expression> [ASC|DESC]]
   [LIMIT <n>]
 ```
 
@@ -403,13 +497,18 @@ small results can be materialised with `result.toList` and large ones consumed l
 
 ## What is supported (and what is not)
 
-**Supported:** `SELECT` (`*`, columns, aggregates, `AS` aliases), `DISTINCT`, `INNER`/`LEFT JOIN`
-(with table aliases, qualified columns, and value→key coercion), `WHERE` (`= != <> < <= > >=`,
-`AND`/`OR`/`NOT`, parentheses, `LIKE`, `IS [NOT] NULL`, `LENGTH`), `GROUP BY`, `HAVING`, `ORDER BY`
+**Supported:** `SELECT` (`*`, columns, dotted nested-field paths, scalar/geo function expressions,
+aggregates, `AS` aliases), `DISTINCT`, `INNER`/`LEFT JOIN` (with table aliases, qualified columns, and
+value→key coercion), `WHERE` (`= != <> < <= > >=`, `AND`/`OR`/`NOT`, parentheses, `LIKE`,
+`IS [NOT] NULL`), arithmetic (`+ - * / %` with precedence and parentheses), scalar functions
+(`LENGTH`, `GEO_DISTANCE`, `GEO_WITHIN`) usable in
+`SELECT`/`WHERE`/`HAVING`/`ORDER BY`, `GROUP BY`, `HAVING`, `ORDER BY` by column/alias/expression
 (`ASC`/`DESC`), `LIMIT`, `COUNT`/`SUM`/`AVG`/`MIN`/`MAX`, `INSERT`/`UPDATE`/`DELETE`, `DESCRIBE`,
-`SHOW COLLECTIONS`/`SHOW INDEXES`, and the `_key`/`_value` pseudo-columns.
+`SHOW COLLECTIONS`/`SHOW INDEXES`, the `_key`/`_value` pseudo-columns, and `AS` aliases referenceable
+in `WHERE`/`HAVING`/`ORDER BY`.
 
 **Not (yet) supported:** `RIGHT`/`FULL`/`CROSS` joins, non-equi join conditions as the *only*
-predicate, subqueries, `UNION`, window functions, `CASE`, arithmetic expressions, scalar functions
-beyond `LENGTH`, aggregate arguments that are expressions (e.g. `SUM(a + b)`), and DDL (`CREATE`/
-`DROP`). Identifiers are letters/digits/underscore; keywords are case-insensitive.
+predicate, subqueries, `UNION`, window functions, `CASE`, unary minus on a non-literal, user-defined
+scalar functions beyond the built-ins above, aggregate arguments that are expressions (e.g.
+`SUM(a + b)`), expression projections combined with `GROUP BY`/aggregates, writing into nested fields,
+and DDL (`CREATE`/`DROP`). Identifiers are letters/digits/underscore; keywords are case-insensitive.

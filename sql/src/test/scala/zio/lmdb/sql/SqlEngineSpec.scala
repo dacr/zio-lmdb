@@ -107,11 +107,119 @@ object SqlEngineSpec extends ZIOSpecDefault {
       _         <- originals.upsertOverwrite("o3", Original("/c.jpg", Dim(640, 480), None))
     } yield ()
 
+  /** Paris landmarks (near), London (far), and one with no location, for geo-distance queries. */
+  private val seedGeo =
+    for {
+      originals <- LMDB.collectionCreate[String, Original]("originals")
+      _         <- originals.upsertOverwrite("louvre", Original("/louvre.jpg", Dim(1, 1), Some(GPoint(48.8606, 2.3376, 34.0))))   // ~1.2 km from ref
+      _         <- originals.upsertOverwrite("eiffel", Original("/eiffel.jpg", Dim(1, 1), Some(GPoint(48.8584, 2.2945, 330.0))))  // ~4.2 km from ref
+      _         <- originals.upsertOverwrite("london", Original("/london.jpg", Dim(1, 1), Some(GPoint(51.5074, -0.1278, 11.0))))  // ~343 km from ref
+      _         <- originals.upsertOverwrite("nowhere", Original("/x.jpg", Dim(1, 1), None))                                       // excluded (null)
+    } yield ()
+
   override def spec = suite("SqlEngine")(
+    test("geo: filter within a radius, nearest-first, with projection and the object-arg form") {
+      // Reference point: central Paris (Notre-Dame ~48.8566, 2.3522).
+      for {
+        _    <- seedGeo
+        near <- query(
+                  """SELECT _key, geo_distance(o.location.latitude, o.location.longitude, 48.8566, 2.3522) AS dist
+                    |FROM originals o
+                    |WHERE geo_distance(o.location.latitude, o.location.longitude, 48.8566, 2.3522) <= 50000
+                    |ORDER BY dist""".stripMargin
+                )
+        obj  <- query(
+                  """SELECT _key
+                    |FROM originals o
+                    |WHERE geo_within(o.location, 48.8566, 2.3522, 50000)
+                    |ORDER BY _key""".stripMargin
+                )
+      } yield assertTrue(
+        near.map(r => field(r, "_key")) == List(StringV("louvre"), StringV("eiffel")),         // nearest-first; London + null excluded
+        near.map(r => field(r, "dist")).forall { case DoubleV(d) => d <= 50000.0; case _ => false },
+        field(near.head, "dist").asInstanceOf[DoubleV].value < field(near(1), "dist").asInstanceOf[DoubleV].value, // ascending by distance
+        obj.map(r => field(r, "_key")) == List(StringV("eiffel"), StringV("louvre"))           // object-arg GEO_WITHIN agrees (ordered by _key)
+      )
+    },
+    test("an AS alias is referenceable in WHERE (and ORDER BY)") {
+      for {
+        _    <- seedGeo
+        rows <- query(
+                  """SELECT _key, geo_distance(o.location.latitude, o.location.longitude, 48.8566, 2.3522) AS dist
+                    |FROM originals o
+                    |WHERE dist <= 50000
+                    |ORDER BY dist""".stripMargin
+                )
+      } yield assertTrue(
+        rows.map(r => field(r, "_key")) == List(StringV("louvre"), StringV("eiffel")),
+        rows.map(r => field(r, "dist")).forall { case DoubleV(d) => d <= 50000.0; case _ => false }
+      )
+    },
+    test("an AS alias is referenceable in HAVING") {
+      for {
+        _    <- seedOrders
+        rows <- query(
+                  """SELECT customer, count(*) AS n
+                    |FROM orders
+                    |GROUP BY customer
+                    |HAVING n > 1
+                    |ORDER BY customer""".stripMargin
+                )
+      } yield assertTrue(
+        rows.map(r => field(r, "customer")) == List(StringV("Alice")),
+        rows.map(r => field(r, "n"))        == List(LongV(2))
+      )
+    },
+    test("an aggregate alias used in WHERE is still rejected (it belongs in HAVING)") {
+      for {
+        _    <- seedOrders
+        exit <- query(
+                  """SELECT customer, count(*) AS n
+                    |FROM orders
+                    |WHERE n > 1
+                    |GROUP BY customer""".stripMargin
+                ).exit
+      } yield assert(exit)(Assertion.fails(Assertion.isSubtype[SqlError.Unsupported](Assertion.anything)))
+    },
+    test("arithmetic expressions in SELECT/WHERE/ORDER BY, reusing an AS alias (distance in km)") {
+      for {
+        _    <- seedGeo
+        rows <- query(
+                  """SELECT _key,
+                    |       geo_distance(o.location.latitude, o.location.longitude, 48.8566, 2.3522) / 1000 AS distKm
+                    |FROM originals o
+                    |WHERE distKm <= 10
+                    |ORDER BY distKm""".stripMargin
+                )
+      } yield assertTrue(
+        rows.map(r => field(r, "_key")) == List(StringV("louvre"), StringV("eiffel")),         // london (~343 km) excluded
+        rows.map(r => field(r, "distKm")).forall { case DecimalV(d) => d <= BigDecimal(10); case _ => false },
+        field(rows.head, "distKm").asInstanceOf[DecimalV].value < field(rows(1), "distKm").asInstanceOf[DecimalV].value
+      )
+    },
+    test("integer arithmetic stays integral and works in projection and WHERE") {
+      for {
+        _    <- seedOrders
+        rows <- query(
+                  """SELECT _key, amount * 2 AS doubled
+                    |FROM orders
+                    |WHERE amount * 2 >= 20
+                    |ORDER BY amount""".stripMargin
+                )
+      } yield assertTrue(
+        rows.map(r => field(r, "_key"))    == List(StringV("o1"), StringV("o2")),
+        rows.map(r => field(r, "doubled")) == List(LongV(20), LongV(60))
+      )
+    },
     test("nested value paths: SELECT, WHERE and ORDER BY descend into sub-objects") {
       for {
         _    <- seedOriginals
-        rows <- query("select _key, o.location.altitude as alt, o.dimension.width as w from originals o where o.dimension.width >= 800 order by o.location.altitude desc")
+        rows <- query(
+                  """SELECT _key, o.location.altitude AS alt, o.dimension.width AS w
+                    |FROM originals o
+                    |WHERE o.dimension.width >= 800
+                    |ORDER BY o.location.altitude DESC""".stripMargin
+                )
         deep <- query("select location.altitude from originals where _key = 'o1'")
         miss <- query("select o.location.altitude as alt from originals o where _key = 'o3'")
       } yield assertTrue(
@@ -191,7 +299,12 @@ object SqlEngineSpec extends ZIOSpecDefault {
     test("GROUP BY with COUNT and SUM, ordered by the group key") {
       for {
         _    <- seedOrders
-        rows <- query("select customer, count(*), sum(amount) from orders group by customer order by customer")
+        rows <- query(
+                  """SELECT customer, count(*), sum(amount)
+                    |FROM orders
+                    |GROUP BY customer
+                    |ORDER BY customer""".stripMargin
+                )
       } yield assertTrue(
         rows.map(r => field(r, "customer"))    == List(StringV("Alice"), StringV("Bob")),
         rows.map(r => field(r, "count(*)"))     == List(LongV(2), LongV(1)),
@@ -201,7 +314,12 @@ object SqlEngineSpec extends ZIOSpecDefault {
     test("alias (AS count) and ORDER BY the alias") {
       for {
         _    <- seedOrders
-        rows <- query("select customer, count(*) as count from orders group by customer order by count")
+        rows <- query(
+                  """SELECT customer, count(*) AS count
+                    |FROM orders
+                    |GROUP BY customer
+                    |ORDER BY count""".stripMargin
+                )
       } yield assertTrue(
         rows.map(r => field(r, "count"))    == List(LongV(1), LongV(2)), // Bob:1, Alice:2 — ascending by the alias
         rows.map(r => field(r, "customer")) == List(StringV("Bob"), StringV("Alice"))
@@ -210,13 +328,24 @@ object SqlEngineSpec extends ZIOSpecDefault {
     test("LENGTH() is usable in WHERE") {
       for {
         _    <- seedOrders
-        rows <- query("select distinct customer from orders where length(customer) > 3 order by customer")
+        rows <- query(
+                  """SELECT DISTINCT customer
+                    |FROM orders
+                    |WHERE length(customer) > 3
+                    |ORDER BY customer""".stripMargin
+                )
       } yield assertTrue(rows.map(r => field(r, "customer")) == List(StringV("Alice"))) // "Bob" has length 3
     },
     test("HAVING filters groups by an aggregate") {
       for {
         _    <- seedOrders
-        rows <- query("select customer, count(*) as count from orders group by customer having count(*) > 1 order by customer")
+        rows <- query(
+                  """SELECT customer, count(*) AS count
+                    |FROM orders
+                    |GROUP BY customer
+                    |HAVING count(*) > 1
+                    |ORDER BY customer""".stripMargin
+                )
       } yield assertTrue(
         rows.map(r => field(r, "customer")) == List(StringV("Alice")), // Bob has only 1 order
         rows.map(r => field(r, "count"))    == List(LongV(2))
@@ -225,7 +354,12 @@ object SqlEngineSpec extends ZIOSpecDefault {
     test("an aggregate in WHERE is rejected (belongs in HAVING)") {
       for {
         _    <- seedOrders
-        exit <- query("select customer from orders where count(*) > 1 group by customer").exit
+        exit <- query(
+                  """SELECT customer
+                    |FROM orders
+                    |WHERE count(*) > 1
+                    |GROUP BY customer""".stripMargin
+                ).exit
       } yield assert(exit)(Assertion.fails(Assertion.isSubtype[SqlError.Unsupported](Assertion.anything)))
     },
     test("SELECT DISTINCT removes duplicate projected rows") {
@@ -289,7 +423,12 @@ object SqlEngineSpec extends ZIOSpecDefault {
     test("INNER JOIN matches a value field to the other collection's _key") {
       for {
         _    <- seedSales
-        rows <- query("select s._key, c.name, s.amount from sales s join customers c on s.customerId = c._key order by s._key")
+        rows <- query(
+                  """SELECT s._key, c.name, s.amount
+                    |FROM sales s
+                    |JOIN customers c ON s.customerId = c._key
+                    |ORDER BY s._key""".stripMargin
+                )
       } yield assertTrue(
         rows.map(r => field(r, "_key"))   == List(StringV("s1"), StringV("s2"), StringV("s3")), // s4 (absent customer) excluded
         rows.map(r => field(r, "name"))   == List(StringV("Alice"), StringV("Alice"), StringV("Bob")),
@@ -299,7 +438,12 @@ object SqlEngineSpec extends ZIOSpecDefault {
     test("LEFT JOIN keeps unmatched left rows with NULLs") {
       for {
         _    <- seedSales
-        rows <- query("select s._key, c.name from sales s left join customers c on s.customerId = c._key order by s._key")
+        rows <- query(
+                  """SELECT s._key, c.name
+                    |FROM sales s
+                    |LEFT JOIN customers c ON s.customerId = c._key
+                    |ORDER BY s._key""".stripMargin
+                )
       } yield assertTrue(
         rows.map(r => field(r, "_key")) == List(StringV("s1"), StringV("s2"), StringV("s3"), StringV("s4")),
         rows.map(r => field(r, "name")) == List(StringV("Alice"), StringV("Alice"), StringV("Bob"), NullV)
@@ -308,7 +452,13 @@ object SqlEngineSpec extends ZIOSpecDefault {
     test("GROUP BY over a JOIN aggregates joined columns") {
       for {
         _    <- seedSales
-        rows <- query("select c.country, count(*) as n, sum(s.amount) as total from sales s join customers c on s.customerId = c._key group by c.country order by c.country")
+        rows <- query(
+                  """SELECT c.country, count(*) AS n, sum(s.amount) AS total
+                    |FROM sales s
+                    |JOIN customers c ON s.customerId = c._key
+                    |GROUP BY c.country
+                    |ORDER BY c.country""".stripMargin
+                )
       } yield assertTrue(
         rows.map(r => field(r, "country")) == List(StringV("FR"), StringV("US")),
         rows.map(r => field(r, "n"))       == List(LongV(2), LongV(1)),
@@ -318,7 +468,12 @@ object SqlEngineSpec extends ZIOSpecDefault {
     test("JOIN coerces a value field to the joined _key's datatype (string → Long key)") {
       for {
         _    <- seedItems
-        rows <- query("select r._key, i.label from refs r join items i on r.itemCode = i._key order by r._key")
+        rows <- query(
+                  """SELECT r._key, i.label
+                    |FROM refs r
+                    |JOIN items i ON r.itemCode = i._key
+                    |ORDER BY r._key""".stripMargin
+                )
       } yield assertTrue(
         rows.map(r => field(r, "_key"))  == List(StringV("r1"), StringV("r2")),
         rows.map(r => field(r, "label")) == List(StringV("Widget"), StringV("Gadget"))
@@ -327,7 +482,12 @@ object SqlEngineSpec extends ZIOSpecDefault {
     test("JOIN on two value fields of the same type") {
       for {
         _    <- seedMarkets
-        rows <- query("select c.name, m.tier from customers c join markets m on c.country = m.country order by c.name")
+        rows <- query(
+                  """SELECT c.name, m.tier
+                    |FROM customers c
+                    |JOIN markets m ON c.country = m.country
+                    |ORDER BY c.name""".stripMargin
+                )
       } yield assertTrue(
         rows.map(r => field(r, "name")) == List(StringV("Alice"), StringV("Bob")),
         rows.map(r => field(r, "tier")) == List(StringV("A"), StringV("B"))

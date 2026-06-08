@@ -60,6 +60,17 @@ object GEOToolsSpec extends ZIOSpecDefault {
         compare(b1, b2) < 0
       )
     },
+    test("haversine distance matches known great-circle distances") {
+      // Paris ↔ London is ~343.5 km; same point is 0; symmetric.
+      val paris  = (48.8566, 2.3522)
+      val london = (51.5074, -0.1278)
+      val d      = GEOTools.haversineMeters(paris._1, paris._2, london._1, london._2)
+      assertTrue(
+        math.abs(d - 343_500.0) < 2_000.0, // within 2 km of the reference value
+        GEOTools.haversineMeters(paris._1, paris._2, paris._1, paris._2) == 0.0,
+        math.abs(d - GEOTools.haversineMeters(london._1, london._2, paris._1, paris._2)) < 1.0e-6
+      )
+    },
     test("masking example") {
       // Just to verify the concept of masking for regions
       val loc   = GEOTools.Location(latitude = 48.8566, longitude = 2.3522) // Paris

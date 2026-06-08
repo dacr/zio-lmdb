@@ -20,6 +20,7 @@ import zio.stream.ZStream
 import zio.lmdb.*
 import zio.lmdb.json.JValue
 import zio.lmdb.json.JValue.*
+import zio.lmdb.keycodecs.geo.GEOTools
 import zio.lmdb.schema.SchemaArtifact
 import zio.lmdb.sql.SqlError
 import zio.lmdb.sql.parser.*
@@ -75,7 +76,8 @@ object SqlEngine {
     * (buffers to de-duplicate), or a plain streaming `SELECT` (the only one that never buffers; a
     * JOIN buffers regardless).
     */
-  private def selectResult(lmdb: LMDB, sel: Statement.Select): IO[SqlError, QueryResult] =
+  private def selectResult(lmdb: LMDB, sel0: Statement.Select): IO[SqlError, QueryResult] = {
+    val sel = resolveSelectAliases(sel0)
     for {
       _       <- ZIO.fromEither(validateNoAggregatesInWhere(sel.where))
       sources <- resolveSources(lmdb, sel)
@@ -84,6 +86,7 @@ object SqlEngine {
         else if (sel.distinct) ZIO.succeed(distinctResult(lmdb, sources, sel))
         else ZIO.succeed(streamingResult(lmdb, sources, sel))
     } yield result
+  }
 
   /** The row sources in order: FROM first, then each JOIN, paired with the alias used to qualify its
     * columns (the explicit alias, else the collection name). */
@@ -105,6 +108,46 @@ object SqlEngine {
     if (where.toList.flatMap(aggsInExpr).isEmpty) Right(())
     else Left(SqlError.Unsupported("aggregate functions are not allowed in WHERE (use HAVING)"))
 
+  /** Make `AS` aliases referenceable in `WHERE` and `HAVING` — a friendly extension to standard SQL,
+    * which only exposes them in `ORDER BY` (already handled via the projection plan). Each explicit
+    * alias is substituted by the expression it names, so `… geo_distance(...) AS dist … WHERE dist <= n`
+    * reuses the projected expression instead of re-typing it. An alias that resolves to an aggregate is
+    * then handled by the usual validation (e.g. an aggregate alias in `WHERE` is still rejected). */
+  private def resolveSelectAliases(sel: Statement.Select): Statement.Select = {
+    val aliases = aliasBindings(sel.projection)
+    if (aliases.isEmpty) sel
+    else sel.copy(where = sel.where.map(substituteAliases(_, aliases)), having = sel.having.map(substituteAliases(_, aliases)))
+  }
+
+  /** Explicit `AS` aliases of a projection, each mapped to the expression it names. */
+  private def aliasBindings(proj: Projection): Map[String, Expr] =
+    proj match {
+      case Projection.Star         => Map.empty
+      case Projection.Items(items) =>
+        items.collect {
+          case SelectItem.Col(n, Some(a))    => a -> (Expr.Col(n): Expr)
+          case SelectItem.Expr(e, Some(a))   => a -> e
+          case SelectItem.Agg(f, c, Some(a)) => a -> (Expr.Aggregate(f, c): Expr)
+        }.toMap
+    }
+
+  /** Replace each `Expr.Col(alias)` with the expression the alias names (one level only — the
+    * replacement is a SELECT expression and cannot itself reference an alias). */
+  private def substituteAliases(e: Expr, aliases: Map[String, Expr]): Expr =
+    e match {
+      case Expr.Col(n)          => aliases.getOrElse(n, e)
+      case Expr.Lit(_)          => e
+      case Expr.Aggregate(_, _) => e
+      case Expr.Arith(op, l, r) => Expr.Arith(op, substituteAliases(l, aliases), substituteAliases(r, aliases))
+      case Expr.Cmp(op, l, r)   => Expr.Cmp(op, substituteAliases(l, aliases), substituteAliases(r, aliases))
+      case Expr.And(l, r)       => Expr.And(substituteAliases(l, aliases), substituteAliases(r, aliases))
+      case Expr.Or(l, r)        => Expr.Or(substituteAliases(l, aliases), substituteAliases(r, aliases))
+      case Expr.Not(x)          => Expr.Not(substituteAliases(x, aliases))
+      case Expr.Like(t, p)      => Expr.Like(substituteAliases(t, aliases), p)
+      case Expr.IsNull(t, neg)  => Expr.IsNull(substituteAliases(t, aliases), neg)
+      case Expr.Func(n, as)     => Expr.Func(n, as.map(substituteAliases(_, aliases)))
+    }
+
   // ── plain streaming SELECT ─────────────────────────────────────────────────────────────────────
 
   private def streamingResult(lmdb: LMDB, sources: List[Source], sel: Statement.Select): QueryResult = {
@@ -113,7 +156,9 @@ object SqlEngine {
 
     val filtered = filterRows(rowSource(lmdb, sources, sel), sel.where)
     val ordered: ZStream[Any, SqlError, Row] = sel.orderBy match {
-      case Some(ob) => ZStream.fromIterableZIO(filtered.runCollect.map(c => sortRowsBy(c.toList, resolveOrderSource(plan, ob))))
+      case Some(ob) =>
+        val orderExpr = resolveOrderExpr(plan, ob.expr)
+        ZStream.fromIterableZIO(filtered.runCollect.map(c => sortRowsBy(c.toList, orderExpr, ob.descending)))
       case None     => filtered
     }
     val limited   = sel.limit.fold(ordered)(n => ordered.take(n))
@@ -121,25 +166,35 @@ object SqlEngine {
     QueryResult(cols, projected)
   }
 
-  /** Output-name → source-column pairs for a non-aggregate projection (resolves `AS` aliases and `*`). */
-  private def plainProjection(sources: List[Source], proj: Projection): List[(String, String)] =
+  /** Output-name → source-expression pairs for a non-aggregate projection (resolves `AS` aliases and
+    * `*`). A plain column is an `Expr.Col`; a function projection (e.g. `GEO_DISTANCE(...)`) keeps its
+    * expression so it is evaluated per row. */
+  private def plainProjection(sources: List[Source], proj: Projection): List[(String, Expr)] =
     proj match {
-      case Projection.Star         => projectionColumns(sources, proj).map(c => c.name -> c.name)
-      case Projection.Items(items) => items.collect { case SelectItem.Col(n, al) => al.getOrElse(unqualify(n)) -> n }
+      case Projection.Star         => projectionColumns(sources, proj).map(c => c.name -> (Expr.Col(c.name): Expr))
+      case Projection.Items(items) =>
+        items.collect {
+          case SelectItem.Col(n, al)  => al.getOrElse(unqualify(n)) -> (Expr.Col(n): Expr)
+          case SelectItem.Expr(e, al) => al.getOrElse(exprLabel(e)) -> e
+        }
     }
 
-  /** If ORDER BY names an output column (e.g. an `AS` alias), sort by its source column instead. */
-  private def resolveOrderSource(plan: List[(String, String)], ob: OrderBy): OrderBy =
-    plan.collectFirst { case (out, src) if out == ob.column => src }.fold(ob)(src => ob.copy(column = src))
+  /** If ORDER BY names a projected output (an `AS` alias or column), sort by that item's source
+    * expression; otherwise sort by the ORDER BY expression as written (e.g. a `GEO_DISTANCE(...)`). */
+  private def resolveOrderExpr(plan: List[(String, Expr)], e: Expr): Expr =
+    e match {
+      case Expr.Col(name) => plan.collectFirst { case (out, src) if out == name => src }.getOrElse(e)
+      case _              => e
+    }
 
   private def filterRows(rows: ZStream[Any, SqlError, Row], where: Option[Expr]): ZStream[Any, SqlError, Row] =
     where.fold(rows)(w => rows.filter(row => evalBool(w, row)))
 
-  private def sortRowsBy(rows: List[Row], ob: OrderBy): List[Row] =
-    rows.sortWith { (a, b) => val c = cmpTotal(a(ob.column), b(ob.column)); if (ob.descending) c > 0 else c < 0 }
+  private def sortRowsBy(rows: List[Row], orderExpr: Expr, descending: Boolean): List[Row] =
+    rows.sortWith { (a, b) => val c = cmpTotal(operand(orderExpr, a), operand(orderExpr, b)); if (descending) c > 0 else c < 0 }
 
-  private def projectRow(row: Row, plan: List[(String, String)]): JValue =
-    MapV(ListMap.from(plan.map { case (out, src) => out -> row(src) }))
+  private def projectRow(row: Row, plan: List[(String, Expr)]): JValue =
+    MapV(ListMap.from(plan.map { case (out, e) => out -> operand(e, row) }))
 
   // ── SELECT DISTINCT ────────────────────────────────────────────────────────────────────────────
 
@@ -152,11 +207,18 @@ object SqlEngine {
     val rows =
       filterRows(rowSource(lmdb, sources, sel), sel.where).map(row => projectRow(row, plan)).runCollect.map { chunk =>
         val distinct = chunk.toList.distinct
-        val ordered  = sel.orderBy.fold(distinct)(ob => sortJRows(distinct, ob))
+        val ordered  = sel.orderBy.fold(distinct)(ob => sortJRows(distinct, resolveOrderOutput(plan, ob.expr), ob.descending))
         sel.limit.fold(ordered)(n => ordered.take(n.toInt))
       }
     QueryResult(cols, ZStream.fromIterableZIO(rows))
   }
+
+  /** The projected output-column name an ORDER BY expression refers to (for DISTINCT/aggregate, which
+    * sort already-projected rows): a column matching an output alias/name, or a function expression
+    * equal to a projected item's source expression; falls back to the expression's own label. */
+  private def resolveOrderOutput(plan: List[(String, Expr)], e: Expr): String =
+    plan.collectFirst { case (out, src) if src == e || Expr.Col(out) == e => out }
+      .getOrElse(e match { case Expr.Col(n) => unqualify(n); case other => exprLabel(other) })
 
   // ── row sources & JOIN ─────────────────────────────────────────────────────────────────────────
 
@@ -313,7 +375,10 @@ object SqlEngine {
     */
   private def validateGrouping(items: List[SelectItem], groupBy: List[String]): Either[SqlError, Unit] =
     items
-      .collectFirst { case SelectItem.Col(n, _) if !groupBy.contains(n) => SqlError.Unsupported(s"column '$n' must appear in GROUP BY or be used in an aggregate function") }
+      .collectFirst {
+        case SelectItem.Col(n, _) if !groupBy.contains(n) => SqlError.Unsupported(s"column '$n' must appear in GROUP BY or be used in an aggregate function")
+        case SelectItem.Expr(e, _)                        => SqlError.Unsupported(s"expression '${exprLabel(e)}' is not supported in SELECT with GROUP BY or aggregates")
+      }
       .toLeft(())
 
   /** A bare column in HAVING (one not inside an aggregate) must be a grouping column. */
@@ -327,17 +392,24 @@ object SqlEngine {
     * output name (e.g. an `AS` alias) or by the column as written in the SELECT (e.g. `c.country`). */
   private def validateOrderBy(items: List[SelectItem], orderBy: Option[OrderBy]): Either[SqlError, Unit] =
     orderBy match {
-      case Some(ob) if !orderColumnOf(items, ob.column).isDefined =>
-        Left(SqlError.Unsupported(s"ORDER BY '${ob.column}' must be one of the selected columns: ${items.map(outputName).mkString(", ")}"))
+      case Some(ob) if orderColumnOf(items, ob.expr).isEmpty =>
+        Left(SqlError.Unsupported(s"ORDER BY '${exprLabel(ob.expr)}' must be one of the selected columns: ${items.map(outputName).mkString(", ")}"))
       case _ => Right(())
     }
 
-  /** Resolve an aggregate-query ORDER BY column to the output column it names (by output name or by
-    * the source column as written), or `None` if it names neither. */
-  private def orderColumnOf(items: List[SelectItem], column: String): Option[String] =
-    items.collectFirst {
-      case i @ SelectItem.Col(n, _) if n == column || outputName(i) == column => outputName(i)
-      case i: SelectItem.Agg if outputName(i) == column                       => outputName(i)
+  /** Resolve an aggregate-query ORDER BY expression to the output column it names: a column matching a
+    * selected column/alias, or an aggregate matching a selected aggregate; `None` if it names neither
+    * (an arbitrary expression cannot be ordered by in an aggregate query). */
+  private def orderColumnOf(items: List[SelectItem], e: Expr): Option[String] =
+    e match {
+      case Expr.Col(column) =>
+        items.collectFirst {
+          case i @ SelectItem.Col(n, _) if n == column || outputName(i) == column => outputName(i)
+          case i: SelectItem.Agg if outputName(i) == column                       => outputName(i)
+        }
+      case Expr.Aggregate(f, c) =>
+        items.collectFirst { case i @ SelectItem.Agg(g, col, _) if g == f && col == c => outputName(i) }
+      case _ => None
     }
 
   /** Output-name of each GROUP BY column (for the default, deterministic group ordering); a column
@@ -369,7 +441,7 @@ object SqlEngine {
         }
         val deduped = if (sel.distinct) kept.distinct else kept
         val ordered = sel.orderBy match {
-          case Some(ob)                    => sortJRows(deduped, ob.copy(column = orderColumnOf(items, ob.column).getOrElse(ob.column)))
+          case Some(ob)                    => sortJRows(deduped, orderColumnOf(items, ob.expr).getOrElse(exprLabel(ob.expr)), ob.descending)
           case None if sel.groupBy.isEmpty => deduped
           case None                        => deduped.sortWith((a, b) => compareByColumns(a, b, groupOutputNames(items, sel.groupBy)) < 0)
         }
@@ -379,8 +451,9 @@ object SqlEngine {
 
   private def groupRow(groupBy: List[String], items: List[SelectItem], key: List[JValue], results: Map[(AggFunc, Option[String]), JValue]): JValue = {
     val fields = items.map {
-      case c @ SelectItem.Col(n, _)   => outputName(c) -> key(groupBy.indexOf(n))
+      case c @ SelectItem.Col(n, _)    => outputName(c) -> key(groupBy.indexOf(n))
       case a @ SelectItem.Agg(f, c, _) => outputName(a) -> results.getOrElse((f, c), NullV)
+      case e: SelectItem.Expr          => outputName(e) -> NullV // rejected earlier by validateGrouping; unreachable
     }
     MapV(ListMap.from(fields))
   }
@@ -394,6 +467,7 @@ object SqlEngine {
         case SelectItem.Col(n, _)          => unqualify(n)
         case SelectItem.Agg(f, None, _)    => s"${aggLabel(f)}(*)"
         case SelectItem.Agg(f, Some(c), _) => s"${aggLabel(f)}(${unqualify(c)})"
+        case SelectItem.Expr(e, _)         => exprLabel(e)
       }
     }
 
@@ -405,6 +479,7 @@ object SqlEngine {
   private def outputColumn(sources: List[Source], item: SelectItem): Column =
     item match {
       case SelectItem.Col(n, _)        => Column(outputName(item), hintFor(sources, n))
+      case SelectItem.Expr(e, _)       => Column(outputName(item), exprTypeHint(e, sources))
       case SelectItem.Agg(f, col, _) =>
         val tpe = f match {
           case AggFunc.Count             => "integer"
@@ -629,11 +704,12 @@ object SqlEngine {
   private def fieldOf(row: JValue, name: String): JValue =
     row match { case MapV(m) => m.getOrElse(name, NullV); case _ => NullV }
 
-  /** Order projected (`MapV`) rows by one of their columns — used by DISTINCT and aggregate queries. */
-  private def sortJRows(rows: List[JValue], ob: OrderBy): List[JValue] =
+  /** Order projected (`MapV`) rows by one of their output columns — used by DISTINCT and aggregate
+    * queries (which sort already-projected rows). */
+  private def sortJRows(rows: List[JValue], column: String, descending: Boolean): List[JValue] =
     rows.sortWith { (a, b) =>
-      val c = cmpTotal(fieldOf(a, ob.column), fieldOf(b, ob.column))
-      if (ob.descending) c > 0 else c < 0
+      val c = cmpTotal(fieldOf(a, column), fieldOf(b, column))
+      if (descending) c > 0 else c < 0
     }
 
   /** Lexicographic comparison of projected rows over several columns (default GROUP BY ordering). */
@@ -657,6 +733,30 @@ object SqlEngine {
       case DoubleV(v)  => Some(BigDecimal(v))
       case DecimalV(v) => Some(v)
       case _           => None
+    }
+
+  /** Binary arithmetic over numeric values. A non-numeric operand, or division/modulo by zero, yields
+    * NULL (so it propagates harmlessly through comparisons). Two integral operands stay integral for
+    * `+`/`-`/`*`/`%`; division always yields a decimal (computed with `DECIMAL64` to avoid
+    * non-terminating expansions). */
+  private def evalArith(op: ArithOp, a: JValue, b: JValue): JValue =
+    (asBigDecimal(a), asBigDecimal(b)) match {
+      case (Some(x), Some(y)) =>
+        op match {
+          case ArithOp.Add => numResult(a, b, x + y)
+          case ArithOp.Sub => numResult(a, b, x - y)
+          case ArithOp.Mul => numResult(a, b, x * y)
+          case ArithOp.Mod => if (y.signum == 0) NullV else numResult(a, b, x.remainder(y))
+          case ArithOp.Div => if (y.signum == 0) NullV else DecimalV(BigDecimal(x.bigDecimal.divide(y.bigDecimal, java.math.MathContext.DECIMAL64)))
+        }
+      case _ => NullV
+    }
+
+  /** Keep integral arithmetic integral (`LongV` ⊕ `LongV` ⇒ `LongV`); otherwise a decimal. */
+  private def numResult(a: JValue, b: JValue, r: BigDecimal): JValue =
+    (a, b) match {
+      case (LongV(_), LongV(_)) => LongV(r.toLong)
+      case _                    => DecimalV(r)
     }
 
   private def compareJV(a: JValue, b: JValue): Option[Int] =
@@ -708,11 +808,12 @@ object SqlEngine {
   // `lk` resolves a column/group name; `agg` resolves an aggregate (only populated for HAVING).
   private def operand(e: Expr, lk: String => JValue, agg: AggKey => JValue = _ => NullV): JValue =
     e match {
-      case Expr.Col(n)          => lk(n)
-      case Expr.Lit(l)          => litToJV(l)
-      case Expr.Func(name, as)  => evalFunc(name, as.map(operand(_, lk, agg)))
-      case Expr.Aggregate(f, c) => agg((f, c))
-      case other                => BoolV(evalBool(other, lk, agg))
+      case Expr.Col(n)            => lk(n)
+      case Expr.Lit(l)            => litToJV(l)
+      case Expr.Func(name, as)    => evalFunc(name, as.map(operand(_, lk, agg)))
+      case Expr.Aggregate(f, c)   => agg((f, c))
+      case Expr.Arith(op, l, r)   => evalArith(op, operand(l, lk, agg), operand(r, lk, agg))
+      case other                  => BoolV(evalBool(other, lk, agg))
     }
 
   private def evalBool(e: Expr, lk: String => JValue, agg: AggKey => JValue = _ => NullV): Boolean =
@@ -726,13 +827,88 @@ object SqlEngine {
       case other               => operand(other, lk, agg) match { case BoolV(b) => b; case _ => false }
     }
 
-  /** Scalar functions. Currently LENGTH(x): the character length of x as text (NULL stays NULL). */
+  /** Scalar functions. NULL arguments propagate to a NULL (or non-matching) result.
+    *
+    *   - `LENGTH(x)` — character length of `x` as text.
+    *   - `GEO_DISTANCE(lat1, lon1, lat2, lon2)` / `GEO_DISTANCE(point, lat2, lon2)` — great-circle
+    *     distance in metres (haversine); the object form reads `latitude`/`longitude` from `point`.
+    *   - `GEO_WITHIN(lat1, lon1, lat2, lon2, radius)` / `GEO_WITHIN(point, lat2, lon2, radius)` —
+    *     boolean `distance <= radius` (metres).
+    */
   private def evalFunc(name: String, args: List[JValue]): JValue =
     (name, args) match {
       case ("length", List(NullV))      => NullV
       case ("length", List(StringV(s))) => LongV(s.length.toLong)
       case ("length", List(v))          => LongV(jvToString(v).length.toLong)
-      case _                            => NullV
+
+      case ("geo_distance", List(la1, lo1, la2, lo2)) => geoDistance(la1, lo1, la2, lo2)
+      case ("geo_distance", List(p, la2, lo2))        => pointLatLon(p).fold(NullV: JValue) { case (la1, lo1) => geoDistance(la1, lo1, la2, lo2) }
+
+      case ("geo_within", List(la1, lo1, la2, lo2, r)) => geoWithin(la1, lo1, la2, lo2, r)
+      case ("geo_within", List(p, la2, lo2, r))        => pointLatLon(p).fold(NullV: JValue) { case (la1, lo1) => geoWithin(la1, lo1, la2, lo2, r) }
+
+      case _ => NullV
+    }
+
+  /** Great-circle distance in metres, or NULL if any coordinate is missing/non-numeric. */
+  private def geoDistance(lat1: JValue, lon1: JValue, lat2: JValue, lon2: JValue): JValue =
+    (asDouble(lat1), asDouble(lon1), asDouble(lat2), asDouble(lon2)) match {
+      case (Some(a), Some(b), Some(c), Some(d)) => DoubleV(GEOTools.haversineMeters(a, b, c, d))
+      case _                                    => NullV
+    }
+
+  private def geoWithin(lat1: JValue, lon1: JValue, lat2: JValue, lon2: JValue, radius: JValue): JValue =
+    (geoDistance(lat1, lon1, lat2, lon2), asDouble(radius)) match {
+      case (DoubleV(dist), Some(r)) => BoolV(dist <= r)
+      case _                        => NullV
+    }
+
+  /** Read `latitude`/`longitude` from an object value (e.g. `o.location`), for the object-arg geo forms. */
+  private def pointLatLon(p: JValue): Option[(JValue, JValue)] =
+    p match {
+      case MapV(m) => for { la <- m.get("latitude"); lo <- m.get("longitude") } yield (la, lo)
+      case _       => None
+    }
+
+  private def asDouble(jv: JValue): Option[Double] =
+    jv match {
+      case LongV(v)    => Some(v.toDouble)
+      case DoubleV(v)  => Some(v)
+      case DecimalV(v) => Some(v.toDouble)
+      case StringV(s)  => s.toDoubleOption
+      case _           => None
+    }
+
+  /** A compact textual label for an expression — the default output-column name when no `AS` alias is
+    * given (e.g. `geo_distance(latitude, longitude, 48.8566, 2.3522)`). */
+  private def exprLabel(e: Expr): String =
+    e match {
+      case Expr.Col(n)          => unqualify(n)
+      case Expr.Lit(l)          => litToJV(l) match { case StringV(s) => s; case other => jvToString(other) }
+      case Expr.Func(name, as)  => s"$name(${as.map(exprLabel).mkString(", ")})"
+      case Expr.Aggregate(f, c) => c.fold(s"${aggLabel(f)}(*)")(col => s"${aggLabel(f)}(${unqualify(col)})")
+      case Expr.Arith(op, l, r) => s"${exprLabel(l)} ${arithSymbol(op)} ${exprLabel(r)}"
+      case _                    => "expr"
+    }
+
+  private def arithSymbol(op: ArithOp): String =
+    op match { case ArithOp.Add => "+"; case ArithOp.Sub => "-"; case ArithOp.Mul => "*"; case ArithOp.Div => "/"; case ArithOp.Mod => "%" }
+
+  /** The result type hint of a projected expression (for the result `Column`). */
+  private def exprTypeHint(e: Expr, sources: List[Source]): String =
+    e match {
+      case Expr.Col(n)                  => hintFor(sources, n)
+      case Expr.Func("geo_distance", _) => "number"
+      case Expr.Func("geo_within", _)   => "boolean"
+      case Expr.Func("length", _)       => "integer"
+      case Expr.Func(_, _)              => "any"
+      case Expr.Arith(_, _, _)          => "number"
+      case Expr.Lit(Literal.IntLit(_))  => "integer"
+      case Expr.Lit(Literal.DecLit(_))  => "number"
+      case Expr.Lit(Literal.StrLit(_))  => "string"
+      case Expr.Lit(Literal.BoolLit(_)) => "boolean"
+      case Expr.Lit(Literal.NullLit)    => "any"
+      case _                            => "boolean" // comparisons / logical operators
     }
 
   private def jvToString(jv: JValue): String =
@@ -754,6 +930,7 @@ object SqlEngine {
     e match {
       case Expr.Aggregate(f, c)      => List((f, c))
       case Expr.Func(_, args)        => args.flatMap(aggsInExpr)
+      case Expr.Arith(_, l, r)       => aggsInExpr(l) ++ aggsInExpr(r)
       case Expr.Cmp(_, l, r)         => aggsInExpr(l) ++ aggsInExpr(r)
       case Expr.And(l, r)            => aggsInExpr(l) ++ aggsInExpr(r)
       case Expr.Or(l, r)             => aggsInExpr(l) ++ aggsInExpr(r)
@@ -769,6 +946,7 @@ object SqlEngine {
       case Expr.Col(n)          => List(n)
       case Expr.Aggregate(_, _) => Nil
       case Expr.Func(_, args)   => args.flatMap(freeColsInExpr)
+      case Expr.Arith(_, l, r)  => freeColsInExpr(l) ++ freeColsInExpr(r)
       case Expr.Cmp(_, l, r)    => freeColsInExpr(l) ++ freeColsInExpr(r)
       case Expr.And(l, r)       => freeColsInExpr(l) ++ freeColsInExpr(r)
       case Expr.Or(l, r)        => freeColsInExpr(l) ++ freeColsInExpr(r)
