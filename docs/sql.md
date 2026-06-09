@@ -14,7 +14,7 @@ A collection behaves like a single table: the key is the pseudo-column `_key`, a
 {: .note }
 The SQL layer is new in 3.x and still evolving. It is a deliberately small, read-mostly dialect —
 `SELECT`/`INSERT`/`UPDATE`/`DELETE` with joins, aggregates, nested value-field access, and a handful
-of scalar/geo functions, but no subqueries, window functions, or DDL. Use the
+of scalar/geo/date-time functions, but no subqueries, window functions, or DDL. Use the
 [Query DSL](query-dsl.html) or the typed collection API when you need the full programmatic power.
 
 ## Table of contents
@@ -178,6 +178,27 @@ SELECT * FROM users WHERE LENGTH(name) > 0;
 SELECT name, LENGTH(name) AS len FROM users ORDER BY len DESC;
 ```
 
+#### String functions
+
+These transform or inspect text. A non-string argument is rendered to text first (so `CONCAT(name,
+age)` works); a `NULL` argument yields `NULL`.
+
+| Function | Result |
+|---|---|
+| `UPPER(s)` / `LOWER(s)` | case conversion |
+| `TRIM(s)` / `LTRIM(s)` / `RTRIM(s)` | strip surrounding / leading / trailing whitespace |
+| `SUBSTR(s, start [, len])` (alias `SUBSTRING`) | 1-based substring (`start` clamped; a missing/negative `len` runs to the end) |
+| `CONCAT(a, b, …)` | concatenate the arguments as text |
+| `REPLACE(s, from, to)` | replace every literal occurrence of `from` with `to` |
+| `INSTR(s, sub)` | 1-based index of the first `sub` in `s`, or `0` if absent |
+
+```sql
+SELECT UPPER(name) AS name, SUBSTR(country, 1, 2) AS cc FROM users;
+SELECT CONCAT(firstName, ' ', lastName) AS fullName FROM users ORDER BY fullName;
+SELECT _key FROM files WHERE INSTR(path, '/2026/') > 0;
+SELECT REPLACE(path, '\\', '/') AS path FROM files;
+```
+
 #### Geo functions
 
 For values that carry geographic coordinates, two functions compute great-circle distance with the
@@ -215,6 +236,66 @@ A row whose coordinates are missing or non-numeric (e.g. an original with no `lo
 Geo filtering currently performs a full scan and computes the distance per row; there is no spatial
 (bounding-box) index pushdown yet.
 
+#### Date and time functions
+
+Timestamps are stored as ISO-8601 text, so a `timestamp` column reads back as a string. These
+functions interpret a value as an instant — an ISO-8601 **date**, **date-time**, or **offset
+date-time** string (or an actual timestamp) — and extract or measure it. Calendar fields are read in
+**UTC**. A value that is not a valid timestamp yields `NULL`.
+
+| Function | Result |
+|---|---|
+| `YEAR(ts)` `MONTH(ts)` `DAY(ts)` | calendar year / month (1–12) / day-of-month (1–31), as an integer |
+| `HOUR(ts)` `MINUTE(ts)` `SECOND(ts)` | UTC time-of-day fields, as an integer |
+| `DATE_DIFF(unit, a, b)` | `a - b` as a whole number of `unit`s |
+| `NOW()` | the current instant |
+
+`DATE_DIFF`'s `unit` is a string: `second`, `minute`, `hour`, `day`, or `millisecond` (singular or
+plural; `sec`/`min`/`ms` also accepted). The result is truncated toward zero and is negative when
+`a` precedes `b`.
+
+```sql
+-- newest first, with the calendar fields broken out
+SELECT _key, YEAR(timestamp) AS y, MONTH(timestamp) AS m, DAY(timestamp) AS d
+  FROM medias
+  ORDER BY timestamp DESC;
+
+-- how many days ago each media was taken (drops anything in the future)
+SELECT _key, DATE_DIFF('day', NOW(), timestamp) AS daysAgo
+  FROM medias
+  WHERE daysAgo >= 0
+  ORDER BY daysAgo;
+```
+
+A timestamp string compares directly against an ISO-8601 literal (and against `NOW()` or a date
+function's result), so range filters read naturally:
+
+```sql
+SELECT _key FROM medias WHERE timestamp >= '2024-01-01T00:00:00Z' AND timestamp < '2025-01-01';
+SELECT _key FROM medias WHERE timestamp <= NOW();
+```
+
+Combined with [grouping by an expression](#grouped-aggregates), the extraction functions drive
+calendar roll-ups:
+
+```sql
+-- count medias per year
+SELECT YEAR(timestamp) AS year, COUNT(*) AS n
+  FROM medias
+  GROUP BY year
+  ORDER BY year;
+
+-- per year and month
+SELECT YEAR(m.timestamp) AS dy, MONTH(m.timestamp) AS dm, COUNT(*) AS n
+  FROM medias m
+  GROUP BY dy, dm
+  ORDER BY dy, dm;
+```
+
+{: .note }
+`NOW()` is the wall clock at evaluation time; treat it as "approximately now" rather than a single
+fixed instant pinned for the whole query.
+
 ### Arithmetic
 
 Numeric expressions support `+`, `-`, `*`, `/`, and `%`, with the usual precedence (`*` `/` `%` bind
@@ -238,11 +319,13 @@ row is excluded).
 
 ### ORDER BY and LIMIT
 
-`ORDER BY` accepts a column, an output alias, or an arbitrary expression (such as a geo distance).
+`ORDER BY` accepts a column, an output alias, or an arbitrary expression (such as a geo distance), and
+takes **several comma-separated keys** applied left-to-right, each with its own `ASC`/`DESC`.
 
 ```sql
 SELECT _key, age FROM users ORDER BY age;          -- ascending (default)
 SELECT _key, age FROM users ORDER BY age DESC;     -- descending
+SELECT * FROM users ORDER BY country, age DESC;    -- by country, then age within each
 SELECT * FROM users ORDER BY _key LIMIT 10;
 SELECT name AS n FROM users ORDER BY n;             -- order by an alias
 SELECT * FROM originals o
@@ -294,9 +377,28 @@ SELECT country, city, COUNT(*) AS people
   ORDER BY country;
 ```
 
-Every non-aggregated column in the projection must appear in `GROUP BY`. Groups are ordered by their
-key by default (so output is deterministic without an explicit `ORDER BY`). The fold keeps one
-accumulator set per group, so memory scales with the number of groups, not rows.
+A `GROUP BY` key may be **any expression**, not just a column — a function call, an arithmetic
+expression, a nested path — and it may be written out in full or referenced by the `SELECT` alias it
+defines (a convenience beyond standard SQL). This is what makes calendar roll-ups read cleanly:
+
+```sql
+-- group by a function, referenced through its alias
+SELECT YEAR(timestamp) AS year, COUNT(*) AS n
+  FROM medias
+  GROUP BY year
+  ORDER BY year;
+
+-- equivalently, spell the expression out in GROUP BY
+SELECT YEAR(timestamp) AS year, COUNT(*) AS n
+  FROM medias
+  GROUP BY YEAR(timestamp);
+```
+
+A projected expression may also combine aggregates, e.g. `SUM(amount) / COUNT(*) AS mean`. Every
+non-aggregated column in the projection (or in `HAVING`/`ORDER BY`) must be covered by `GROUP BY`.
+Groups are ordered by their key by default (so output is deterministic without an explicit
+`ORDER BY`). The fold keeps one accumulator set per group, so memory scales with the number of
+groups, not rows.
 
 ### HAVING
 
@@ -398,9 +500,9 @@ SELECT [DISTINCT] <projection>
   FROM <collection> [[AS] <alias>]
   [[INNER|LEFT [OUTER]] JOIN <collection> [[AS] <alias>] ON <equalities>]...
   [WHERE <condition>]
-  [GROUP BY <columns>]
+  [GROUP BY <expression> [, <expression>]...]
   [HAVING <condition>]
-  [ORDER BY <expression> [ASC|DESC]]
+  [ORDER BY <expression> [ASC|DESC] [, <expression> [ASC|DESC]]...]
   [LIMIT <n>]
 ```
 
@@ -497,18 +599,21 @@ small results can be materialised with `result.toList` and large ones consumed l
 
 ## What is supported (and what is not)
 
-**Supported:** `SELECT` (`*`, columns, dotted nested-field paths, scalar/geo function expressions,
-aggregates, `AS` aliases), `DISTINCT`, `INNER`/`LEFT JOIN` (with table aliases, qualified columns, and
-value→key coercion), `WHERE` (`= != <> < <= > >=`, `AND`/`OR`/`NOT`, parentheses, `LIKE`,
-`IS [NOT] NULL`), arithmetic (`+ - * / %` with precedence and parentheses), scalar functions
-(`LENGTH`, `GEO_DISTANCE`, `GEO_WITHIN`) usable in
-`SELECT`/`WHERE`/`HAVING`/`ORDER BY`, `GROUP BY`, `HAVING`, `ORDER BY` by column/alias/expression
-(`ASC`/`DESC`), `LIMIT`, `COUNT`/`SUM`/`AVG`/`MIN`/`MAX`, `INSERT`/`UPDATE`/`DELETE`, `DESCRIBE`,
-`SHOW COLLECTIONS`/`SHOW INDEXES`, the `_key`/`_value` pseudo-columns, and `AS` aliases referenceable
-in `WHERE`/`HAVING`/`ORDER BY`.
+**Supported:** `SELECT` (`*`, columns, dotted nested-field paths, scalar/geo/date-time function
+expressions, aggregates, expressions over aggregates, `AS` aliases), `DISTINCT`, `INNER`/`LEFT JOIN`
+(with table aliases, qualified columns, and value→key coercion), `WHERE` (`= != <> < <= > >=`,
+`AND`/`OR`/`NOT`, parentheses, `LIKE`, `IS [NOT] NULL`, timestamp comparison), arithmetic
+(`+ - * / %` with precedence and parentheses), scalar functions (`LENGTH`, `UPPER`/`LOWER`,
+`TRIM`/`LTRIM`/`RTRIM`, `SUBSTR`/`SUBSTRING`, `CONCAT`, `REPLACE`, `INSTR`, `GEO_DISTANCE`,
+`GEO_WITHIN`, `YEAR`/`MONTH`/`DAY`/`HOUR`/`MINUTE`/`SECOND`, `DATE_DIFF`, `NOW`) usable in
+`SELECT`/`WHERE`/`HAVING`/`ORDER BY`, `GROUP BY` by column/alias/expression, `HAVING`, multi-key
+`ORDER BY` by column/alias/expression (`ASC`/`DESC`), `LIMIT`, `COUNT`/`SUM`/`AVG`/`MIN`/`MAX`,
+`INSERT`/`UPDATE`/`DELETE`, `DESCRIBE`, `SHOW COLLECTIONS`/`SHOW INDEXES`, the `_key`/`_value`
+pseudo-columns, and `AS` aliases referenceable in `WHERE`/`HAVING`/`GROUP BY`/`ORDER BY`.
 
 **Not (yet) supported:** `RIGHT`/`FULL`/`CROSS` joins, non-equi join conditions as the *only*
 predicate, subqueries, `UNION`, window functions, `CASE`, unary minus on a non-literal, user-defined
 scalar functions beyond the built-ins above, aggregate arguments that are expressions (e.g.
-`SUM(a + b)`), expression projections combined with `GROUP BY`/aggregates, writing into nested fields,
-and DDL (`CREATE`/`DROP`). Identifiers are letters/digits/underscore; keywords are case-insensitive.
+`SUM(a + b)`), time-zone-aware date handling (calendar fields are read in UTC), writing into nested
+fields, and DDL (`CREATE`/`DROP`). Identifiers are letters/digits/underscore; keywords are
+case-insensitive.

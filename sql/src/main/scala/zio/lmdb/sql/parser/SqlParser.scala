@@ -77,12 +77,13 @@ object SqlParser {
         (aggFunc ~ "(" ~ colName ~ ")").map { case (f, c) => Expr.Aggregate(f, Some(c)) }
     )
 
-  /** A scalar function call `name(arg, …)` — e.g. `LENGTH(name)`,
+  /** A scalar function call `name(arg, …)` — e.g. `LENGTH(name)`, `YEAR(timestamp)`, `NOW()`,
     * `GEO_DISTANCE(lat1, lon1, lat2, lon2)`, `GEO_WITHIN(point, lat, lon, radius)`. Function names are
     * case-insensitive and not reserved, so an identifier not followed by `(` falls through to a column
-    * reference; aggregates are matched earlier in `primary`. */
+    * reference; aggregates are matched earlier in `primary`. Zero-argument calls (e.g. `NOW()`) are
+    * allowed. */
   private def funcExpr[$: P]: P[Expr] =
-    P(ident ~ "(" ~ expr.rep(1, sep = ",") ~ ")").map { case (name, args) => Expr.Func(name.toLowerCase, args.toList) }
+    P(ident ~ "(" ~ expr.rep(0, sep = ",") ~ ")").map { case (name, args) => Expr.Func(name.toLowerCase, args.toList) }
 
   // Arithmetic binds tighter than comparison: `*` `/` `%` over `+` `-`, both over `=`/`<`/… .
   private def arithMulOp[$: P]: P[ArithOp] =
@@ -135,15 +136,21 @@ object SqlParser {
   private def projection[$: P]: P[Projection] =
     P(P("*").map(_ => Projection.Star) | selectItem.rep(1, sep = ",").map(items => Projection.Items(items.toList)))
 
-  private def orderBy[$: P]: P[OrderBy] =
-    P(kw("order") ~ kw("by") ~ expr ~ (kw("asc").map(_ => false) | kw("desc").map(_ => true)).?.map(_.getOrElse(false)))
-      .map { case (e, d) => OrderBy(e, d) }
+  /** One ORDER BY key: an expression with an optional `ASC`/`DESC` (ascending by default). */
+  private def orderKey[$: P]: P[OrderBy] =
+    P(expr ~ (kw("asc").map(_ => false) | kw("desc").map(_ => true)).?.map(_.getOrElse(false))).map { case (e, d) => OrderBy(e, d) }
+
+  /** `ORDER BY <key> [, <key>]…` — several keys, applied left-to-right. */
+  private def orderByClause[$: P]: P[List[OrderBy]] =
+    P(kw("order") ~ kw("by") ~ orderKey.rep(1, sep = ",")).map(_.toList)
 
   private def distinctKw[$: P]: P[Boolean] =
     P((kw("distinct").map(_ => true)).?).map(_.getOrElse(false))
 
-  private def groupByClause[$: P]: P[List[String]] =
-    P(kw("group") ~ kw("by") ~ colName.rep(1, sep = ",")).map(_.toList)
+  /** `GROUP BY <expr> [, <expr>]…` — each key may be a column, a (qualified/nested) path, an output
+    * alias, or any scalar expression (e.g. `YEAR(timestamp)`). */
+  private def groupByClause[$: P]: P[List[Expr]] =
+    P(kw("group") ~ kw("by") ~ expr.rep(1, sep = ",")).map(_.toList)
 
   /** `<collection> [[AS] <alias>]`. The alias parser stops at keywords (reserved), so a missing alias
     * followed by JOIN/WHERE/… is handled naturally. */
@@ -158,9 +165,9 @@ object SqlParser {
 
   // Standard SQL clause order: SELECT … FROM … [JOIN …] WHERE … GROUP BY … HAVING … ORDER BY … LIMIT.
   private def selectStmt[$: P]: P[Statement.Select] =
-    P(kw("select") ~ distinctKw ~ projection ~ kw("from") ~ tableRef ~ joinClause.rep ~ (kw("where") ~ expr).? ~ groupByClause.? ~ (kw("having") ~ expr).? ~ orderBy.? ~ (kw("limit") ~ intNumber).?)
+    P(kw("select") ~ distinctKw ~ projection ~ kw("from") ~ tableRef ~ joinClause.rep ~ (kw("where") ~ expr).? ~ groupByClause.? ~ (kw("having") ~ expr).? ~ orderByClause.? ~ (kw("limit") ~ intNumber).?)
       .map { case (distinct, proj, fromRef, joins, w, gb, hv, ob, lim) =>
-        Statement.Select(proj, distinct, fromRef.collection, w, gb.getOrElse(Nil), hv, ob, lim, fromRef.alias, joins.toList)
+        Statement.Select(proj, distinct, fromRef.collection, w, gb.getOrElse(Nil), hv, ob.getOrElse(Nil), lim, fromRef.alias, joins.toList)
       }
 
   private def insertStmt[$: P]: P[Statement.Insert] =

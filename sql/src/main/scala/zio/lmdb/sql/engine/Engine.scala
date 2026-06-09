@@ -108,15 +108,22 @@ object SqlEngine {
     if (where.toList.flatMap(aggsInExpr).isEmpty) Right(())
     else Left(SqlError.Unsupported("aggregate functions are not allowed in WHERE (use HAVING)"))
 
-  /** Make `AS` aliases referenceable in `WHERE` and `HAVING` — a friendly extension to standard SQL,
-    * which only exposes them in `ORDER BY` (already handled via the projection plan). Each explicit
-    * alias is substituted by the expression it names, so `… geo_distance(...) AS dist … WHERE dist <= n`
-    * reuses the projected expression instead of re-typing it. An alias that resolves to an aggregate is
-    * then handled by the usual validation (e.g. an aggregate alias in `WHERE` is still rejected). */
+  /** Make `AS` aliases referenceable in `WHERE`, `HAVING`, `GROUP BY`, and `ORDER BY` — a friendly
+    * extension to standard SQL, which only exposes them in `ORDER BY`. Each explicit alias is
+    * substituted by the expression it names, so `… geo_distance(...) AS dist … WHERE dist <= n` reuses
+    * the projected expression, and `SELECT year(ts) AS y … GROUP BY y` groups by `year(ts)`. An alias
+    * that resolves to an aggregate is then handled by the usual validation (e.g. an aggregate alias in
+    * `WHERE` is still rejected). */
   private def resolveSelectAliases(sel: Statement.Select): Statement.Select = {
     val aliases = aliasBindings(sel.projection)
     if (aliases.isEmpty) sel
-    else sel.copy(where = sel.where.map(substituteAliases(_, aliases)), having = sel.having.map(substituteAliases(_, aliases)))
+    else
+      sel.copy(
+        where   = sel.where.map(substituteAliases(_, aliases)),
+        having  = sel.having.map(substituteAliases(_, aliases)),
+        groupBy = sel.groupBy.map(substituteAliases(_, aliases)),
+        orderBy = sel.orderBy.map(ob => ob.copy(expr = substituteAliases(ob.expr, aliases)))
+      )
   }
 
   /** Explicit `AS` aliases of a projection, each mapped to the expression it names. */
@@ -155,12 +162,12 @@ object SqlEngine {
     val plan = plainProjection(sources, sel.projection)
 
     val filtered = filterRows(rowSource(lmdb, sources, sel), sel.where)
-    val ordered: ZStream[Any, SqlError, Row] = sel.orderBy match {
-      case Some(ob) =>
-        val orderExpr = resolveOrderExpr(plan, ob.expr)
-        ZStream.fromIterableZIO(filtered.runCollect.map(c => sortRowsBy(c.toList, orderExpr, ob.descending)))
-      case None     => filtered
-    }
+    val ordered: ZStream[Any, SqlError, Row] =
+      if (sel.orderBy.isEmpty) filtered
+      else {
+        val keys = sel.orderBy.map(ob => (resolveOrderExpr(plan, ob.expr), ob.descending))
+        ZStream.fromIterableZIO(filtered.runCollect.map(c => sortRowsByKeys(c.toList, keys)))
+      }
     val limited   = sel.limit.fold(ordered)(n => ordered.take(n))
     val projected = limited.map(row => projectRow(row, plan))
     QueryResult(cols, projected)
@@ -190,8 +197,12 @@ object SqlEngine {
   private def filterRows(rows: ZStream[Any, SqlError, Row], where: Option[Expr]): ZStream[Any, SqlError, Row] =
     where.fold(rows)(w => rows.filter(row => evalBool(w, row)))
 
-  private def sortRowsBy(rows: List[Row], orderExpr: Expr, descending: Boolean): List[Row] =
-    rows.sortWith { (a, b) => val c = cmpTotal(operand(orderExpr, a), operand(orderExpr, b)); if (descending) c > 0 else c < 0 }
+  /** Multi-key sort of read rows: compare on each ORDER BY expression in turn, honouring its
+    * direction, until one breaks the tie. */
+  private def sortRowsByKeys(rows: List[Row], keys: List[(Expr, Boolean)]): List[Row] =
+    rows.sortWith { (a, b) =>
+      keys.iterator.map { case (e, desc) => val c = cmpTotal(operand(e, a), operand(e, b)); if (desc) -c else c }.find(_ != 0).getOrElse(0) < 0
+    }
 
   private def projectRow(row: Row, plan: List[(String, Expr)]): JValue =
     MapV(ListMap.from(plan.map { case (out, e) => out -> operand(e, row) }))
@@ -207,7 +218,9 @@ object SqlEngine {
     val rows =
       filterRows(rowSource(lmdb, sources, sel), sel.where).map(row => projectRow(row, plan)).runCollect.map { chunk =>
         val distinct = chunk.toList.distinct
-        val ordered  = sel.orderBy.fold(distinct)(ob => sortJRows(distinct, resolveOrderOutput(plan, ob.expr), ob.descending))
+        val ordered  =
+          if (sel.orderBy.isEmpty) distinct
+          else sortJRowsByKeys(distinct, sel.orderBy.map(ob => (resolveOrderOutput(plan, ob.expr), ob.descending)))
         sel.limit.fold(ordered)(n => ordered.take(n.toInt))
       }
     QueryResult(cols, ZStream.fromIterableZIO(rows))
@@ -357,12 +370,13 @@ object SqlEngine {
     */
   private def aggregateResult(lmdb: LMDB, sources: List[Source], sel: Statement.Select): IO[SqlError, QueryResult] =
     for {
-      items <- ZIO.fromEither(aggregateItems(sel.projection))
-      _     <- ZIO.fromEither(validateGrouping(items, sel.groupBy))
-      _     <- ZIO.fromEither(validateHaving(sel.having, sel.groupBy))
-      _     <- ZIO.fromEither(validateOrderBy(items, sel.orderBy))
-      cols   = items.map(outputColumn(sources, _))
-    } yield QueryResult(cols, ZStream.fromIterableZIO(computeGroups(lmdb, sources, sel, items)))
+      items   <- ZIO.fromEither(aggregateItems(sel.projection))
+      bindings = groupBindings(sel.groupBy)
+      _       <- ZIO.fromEither(validateGrouping(items, bindings))
+      _       <- ZIO.fromEither(validateHaving(sel.having, bindings))
+      _       <- ZIO.fromEither(validateOrderBy(sel.orderBy, bindings))
+      cols     = items.map(outputColumn(sources, _))
+    } yield QueryResult(cols, ZStream.fromIterableZIO(computeGroups(lmdb, sources, sel, items, bindings)))
 
   private def aggregateItems(proj: Projection): Either[SqlError, List[SelectItem]] =
     proj match {
@@ -370,93 +384,119 @@ object SqlEngine {
       case Projection.Star         => Left(SqlError.Unsupported("SELECT * cannot be combined with GROUP BY or aggregate functions"))
     }
 
-  /** Every non-aggregated column must be part of the GROUP BY (and, with no GROUP BY, no plain
-    * columns may sit next to aggregates).
-    */
-  private def validateGrouping(items: List[SelectItem], groupBy: List[String]): Either[SqlError, Unit] =
-    items
-      .collectFirst {
-        case SelectItem.Col(n, _) if !groupBy.contains(n) => SqlError.Unsupported(s"column '$n' must appear in GROUP BY or be used in an aggregate function")
-        case SelectItem.Expr(e, _)                        => SqlError.Unsupported(s"expression '${exprLabel(e)}' is not supported in SELECT with GROUP BY or aggregates")
-      }
-      .toLeft(())
+  /** A synthetic, un-typeable column name standing for the i-th GROUP BY expression's value (the leading
+    * space cannot appear in a parsed identifier, so it never collides with a real column). */
+  private val GroupBindPrefix = " g"
 
-  /** A bare column in HAVING (one not inside an aggregate) must be a grouping column. */
-  private def validateHaving(having: Option[Expr], groupBy: List[String]): Either[SqlError, Unit] =
-    having.toList.flatMap(freeColsInExpr).find(c => !groupBy.contains(c)) match {
+  /** Pair each GROUP BY expression with its synthetic binding name. */
+  private def groupBindings(groupBy: List[Expr]): List[(Expr, String)] =
+    groupBy.zipWithIndex.map { case (e, i) => (e, s"$GroupBindPrefix$i") }
+
+  /** Rewrite an expression for evaluation in the grouped context: every occurrence of a whole GROUP BY
+    * expression is replaced by a reference to its precomputed group value, so `year(ts)` in SELECT /
+    * HAVING / ORDER BY reads the group key instead of re-evaluating against a (now absent) row.
+    * Aggregates are left intact (resolved against the per-group accumulator results). */
+  private def bindGroups(e: Expr, bindings: List[(Expr, String)]): Expr =
+    bindings.collectFirst { case (g, name) if g == e => Expr.Col(name): Expr }.getOrElse {
+      e match {
+        case Expr.Arith(op, l, r) => Expr.Arith(op, bindGroups(l, bindings), bindGroups(r, bindings))
+        case Expr.Cmp(op, l, r)   => Expr.Cmp(op, bindGroups(l, bindings), bindGroups(r, bindings))
+        case Expr.And(l, r)       => Expr.And(bindGroups(l, bindings), bindGroups(r, bindings))
+        case Expr.Or(l, r)        => Expr.Or(bindGroups(l, bindings), bindGroups(r, bindings))
+        case Expr.Not(x)          => Expr.Not(bindGroups(x, bindings))
+        case Expr.Like(t, p)      => Expr.Like(bindGroups(t, bindings), p)
+        case Expr.IsNull(t, neg)  => Expr.IsNull(bindGroups(t, bindings), neg)
+        case Expr.Func(n, as)     => Expr.Func(n, as.map(bindGroups(_, bindings)))
+        case leaf                 => leaf // Col, Lit, Aggregate
+      }
+    }
+
+  /** The source expression of a select item (a plain column, a function/arithmetic expression, or an
+    * aggregate reference) — the common shape that grouping, projection, and ordering all evaluate. */
+  private def itemExpr(item: SelectItem): Expr =
+    item match {
+      case SelectItem.Col(n, _)    => Expr.Col(n)
+      case SelectItem.Expr(e, _)   => e
+      case SelectItem.Agg(f, c, _) => Expr.Aggregate(f, c)
+    }
+
+  /** Columns still referenced (outside any aggregate) after binding GROUP BY expressions — i.e.
+    * ungrouped, non-aggregated columns, which make a projection / HAVING / ORDER BY invalid. */
+  private def ungroupedCols(e: Expr, bindings: List[(Expr, String)]): List[String] =
+    freeColsInExpr(bindGroups(e, bindings)).filterNot(_.startsWith(GroupBindPrefix))
+
+  /** Every projected column or expression must be either an aggregate or fully covered by the GROUP BY
+    * (so no ungrouped, non-aggregated columns remain after binding). */
+  private def validateGrouping(items: List[SelectItem], bindings: List[(Expr, String)]): Either[SqlError, Unit] =
+    items.flatMap(it => ungroupedCols(itemExpr(it), bindings)).headOption match {
+      case Some(c) => Left(SqlError.Unsupported(s"column '$c' must appear in GROUP BY or be used in an aggregate function"))
+      case None    => Right(())
+    }
+
+  /** A bare column in HAVING (one not inside an aggregate) must be a grouping column / expression. */
+  private def validateHaving(having: Option[Expr], bindings: List[(Expr, String)]): Either[SqlError, Unit] =
+    having.toList.flatMap(ungroupedCols(_, bindings)).headOption match {
       case Some(c) => Left(SqlError.Unsupported(s"column '$c' in HAVING must appear in GROUP BY or be used in an aggregate function"))
       case None    => Right(())
     }
 
-  /** In an aggregate query ORDER BY can only target a projected column — referenced either by its
-    * output name (e.g. an `AS` alias) or by the column as written in the SELECT (e.g. `c.country`). */
-  private def validateOrderBy(items: List[SelectItem], orderBy: Option[OrderBy]): Either[SqlError, Unit] =
-    orderBy match {
-      case Some(ob) if orderColumnOf(items, ob.expr).isEmpty =>
-        Left(SqlError.Unsupported(s"ORDER BY '${exprLabel(ob.expr)}' must be one of the selected columns: ${items.map(outputName).mkString(", ")}"))
-      case _ => Right(())
+  /** In an aggregate query, every ORDER BY key must be evaluable per group — a grouping expression or
+    * an aggregate — so no ungrouped column may remain after binding. */
+  private def validateOrderBy(orderBy: List[OrderBy], bindings: List[(Expr, String)]): Either[SqlError, Unit] =
+    orderBy.flatMap(ob => ungroupedCols(ob.expr, bindings)).headOption match {
+      case Some(c) => Left(SqlError.Unsupported(s"ORDER BY column '$c' must appear in GROUP BY or be used in an aggregate function"))
+      case None    => Right(())
     }
 
-  /** Resolve an aggregate-query ORDER BY expression to the output column it names: a column matching a
-    * selected column/alias, or an aggregate matching a selected aggregate; `None` if it names neither
-    * (an arbitrary expression cannot be ordered by in an aggregate query). */
-  private def orderColumnOf(items: List[SelectItem], e: Expr): Option[String] =
-    e match {
-      case Expr.Col(column) =>
-        items.collectFirst {
-          case i @ SelectItem.Col(n, _) if n == column || outputName(i) == column => outputName(i)
-          case i: SelectItem.Agg if outputName(i) == column                       => outputName(i)
-        }
-      case Expr.Aggregate(f, c) =>
-        items.collectFirst { case i @ SelectItem.Agg(g, col, _) if g == f && col == c => outputName(i) }
-      case _ => None
-    }
-
-  /** Output-name of each GROUP BY column (for the default, deterministic group ordering); a column
-    * that is grouped but not selected keeps its unqualified name (and simply won't reorder). */
-  private def groupOutputNames(items: List[SelectItem], groupBy: List[String]): List[String] =
-    groupBy.map(g => items.collectFirst { case i @ SelectItem.Col(n, _) if n == g => outputName(i) }.getOrElse(unqualify(g)))
-
-  private def computeGroups(lmdb: LMDB, sources: List[Source], sel: Statement.Select, items: List[SelectItem]): IO[SqlError, List[JValue]] = {
-    // Every aggregate to compute per group: those projected, plus those referenced only by HAVING.
-    val projAggs   = items.collect { case SelectItem.Agg(f, c, _) => (f, c) }
-    val havingAggs = sel.having.toList.flatMap(aggsInExpr)
-    val aggKeys    = (projAggs ++ havingAggs).distinct
-    val freshAccs  = aggKeys.map { case (f, _) => initAcc(f) }.toVector
+  private def computeGroups(lmdb: LMDB, sources: List[Source], sel: Statement.Select, items: List[SelectItem], bindings: List[(Expr, String)]): IO[SqlError, List[JValue]] = {
+    // Every aggregate to compute per group: those in the projection, HAVING, and ORDER BY.
+    val aggKeys   =
+      (items.flatMap(it => aggsInExpr(itemExpr(it))) ++ sel.having.toList.flatMap(aggsInExpr) ++ sel.orderBy.flatMap(ob => aggsInExpr(ob.expr))).distinct
+    val freshAccs = aggKeys.map { case (f, _) => initAcc(f) }.toVector
+    val bindNames = bindings.map(_._2)
     val seed: Map[List[JValue], Vector[Acc]] =
       if (sel.groupBy.isEmpty) Map(Nil -> freshAccs) else Map.empty
     filterRows(rowSource(lmdb, sources, sel), sel.where)
       .runFold(seed) { (groups, row) =>
-        val key     = sel.groupBy.map(c => row(c))
+        val key     = sel.groupBy.map(g => operand(g, row))
         val current = groups.getOrElse(key, freshAccs)
         val updated = current.zip(aggKeys).map { case (acc, (_, c)) => acc.add(aggInput(c, row)) }
         groups.updated(key, updated)
       }
       .map { groups =>
+        // Per-group evaluation context: synthetic group cols → key values; aggregates → results.
+        def groupLk(key: List[JValue]): String => JValue = { val m = bindNames.zip(key).toMap; name => m.getOrElse(name, NullV) }
+        def aggLk(results: Map[AggKey, JValue]): AggKey => JValue = k => results.getOrElse(k, NullV)
+        def evalIn(e: Expr, key: List[JValue], results: Map[AggKey, JValue]): JValue = operand(bindGroups(e, bindings), groupLk(key), aggLk(results))
+
         val kept = groups.toList.flatMap { case (key, accs) =>
-          val results: Map[(AggFunc, Option[String]), JValue] = aggKeys.zip(accs).map { case (k, acc) => k -> acc.result }.toMap
-          val groupLk: String => JValue = name => { val i = sel.groupBy.indexOf(name); if (i >= 0) key(i) else NullV }
-          val passes = sel.having.forall(h => evalBool(h, groupLk, k => results.getOrElse(k, NullV)))
-          if (passes) Some(groupRow(sel.groupBy, items, key, results)) else None
+          val results = aggKeys.zip(accs).map { case (k, acc) => k -> acc.result }.toMap
+          val passes  = sel.having.forall(h => evalBool(bindGroups(h, bindings), groupLk(key), aggLk(results)))
+          if (passes) Some((key, results)) else None
         }
-        val deduped = if (sel.distinct) kept.distinct else kept
-        val ordered = sel.orderBy match {
-          case Some(ob)                    => sortJRows(deduped, orderColumnOf(items, ob.expr).getOrElse(exprLabel(ob.expr)), ob.descending)
-          case None if sel.groupBy.isEmpty => deduped
-          case None                        => deduped.sortWith((a, b) => compareByColumns(a, b, groupOutputNames(items, sel.groupBy)) < 0)
-        }
-        sel.limit.fold(ordered)(n => ordered.take(n.toInt))
+        val ordered =
+          if (sel.orderBy.nonEmpty)
+            kept.sortWith { (a, b) =>
+              sel.orderBy.iterator.map { ob =>
+                val c = cmpTotal(evalIn(ob.expr, a._1, a._2), evalIn(ob.expr, b._1, b._2)); if (ob.descending) -c else c
+              }.find(_ != 0).getOrElse(0) < 0
+            }
+          else if (sel.groupBy.isEmpty) kept
+          else kept.sortWith { (a, b) => compareKeys(a._1, b._1) < 0 }
+        val rows    = ordered.map { case (key, results) => groupRow(items, bindings, groupLk(key), aggLk(results)) }
+        val deduped = if (sel.distinct) rows.distinct else rows
+        sel.limit.fold(deduped)(n => deduped.take(n.toInt))
       }
   }
 
-  private def groupRow(groupBy: List[String], items: List[SelectItem], key: List[JValue], results: Map[(AggFunc, Option[String]), JValue]): JValue = {
-    val fields = items.map {
-      case c @ SelectItem.Col(n, _)    => outputName(c) -> key(groupBy.indexOf(n))
-      case a @ SelectItem.Agg(f, c, _) => outputName(a) -> results.getOrElse((f, c), NullV)
-      case e: SelectItem.Expr          => outputName(e) -> NullV // rejected earlier by validateGrouping; unreachable
-    }
-    MapV(ListMap.from(fields))
-  }
+  /** Build one grouped output row: each item's value is its (group-bound) source expression evaluated
+    * against the group key and aggregate results. */
+  private def groupRow(items: List[SelectItem], bindings: List[(Expr, String)], lk: String => JValue, agg: AggKey => JValue): JValue =
+    MapV(ListMap.from(items.map(it => outputName(it) -> operand(bindGroups(itemExpr(it), bindings), lk, agg))))
+
+  /** Lexicographic comparison of two group-key vectors (the default, deterministic group ordering). */
+  private def compareKeys(a: List[JValue], b: List[JValue]): Int =
+    a.iterator.zip(b.iterator).map { case (x, y) => cmpTotal(x, y) }.find(_ != 0).getOrElse(0)
 
   /** The output column name: the `AS` alias when given, otherwise the (unqualified) column name or
     * `func(arg)`. A qualifying table alias is dropped, so `o.amount` → `amount`, `SUM(o.amount)` →
@@ -704,17 +744,12 @@ object SqlEngine {
   private def fieldOf(row: JValue, name: String): JValue =
     row match { case MapV(m) => m.getOrElse(name, NullV); case _ => NullV }
 
-  /** Order projected (`MapV`) rows by one of their output columns — used by DISTINCT and aggregate
-    * queries (which sort already-projected rows). */
-  private def sortJRows(rows: List[JValue], column: String, descending: Boolean): List[JValue] =
+  /** Order projected (`MapV`) rows by several output columns in turn, each with its own direction —
+    * used by DISTINCT (which sorts already-projected rows). */
+  private def sortJRowsByKeys(rows: List[JValue], keys: List[(String, Boolean)]): List[JValue] =
     rows.sortWith { (a, b) =>
-      val c = cmpTotal(fieldOf(a, column), fieldOf(b, column))
-      if (descending) c > 0 else c < 0
+      keys.iterator.map { case (col, desc) => val c = cmpTotal(fieldOf(a, col), fieldOf(b, col)); if (desc) -c else c }.find(_ != 0).getOrElse(0) < 0
     }
-
-  /** Lexicographic comparison of projected rows over several columns (default GROUP BY ordering). */
-  private def compareByColumns(a: JValue, b: JValue, cols: List[String]): Int =
-    cols.iterator.map(c => cmpTotal(fieldOf(a, c), fieldOf(b, c))).find(_ != 0).getOrElse(0)
 
   // ── value semantics ──────────────────────────────────────────────────────────────────────────
 
@@ -765,6 +800,10 @@ object SqlEngine {
       case (BoolV(x), BoolV(y))             => Some(x.compareTo(y))
       case (InstantV(x), InstantV(y))       => Some(x.compareTo(y))
       case (IdentifierV(x), IdentifierV(y)) => Some(x.compareTo(y))
+      // A genuine instant compared against a string: parse the string as a timestamp (so `created`,
+      // stored as text, compares correctly against `NOW()` or a date function's result).
+      case (InstantV(x), StringV(y))        => parseInstant(y).map(x.compareTo)
+      case (StringV(x), InstantV(y))        => parseInstant(x).map(_.compareTo(y))
       case _                                =>
         (asBigDecimal(a), asBigDecimal(b)) match {
           case (Some(x), Some(y)) => Some(x.compare(y))
@@ -830,10 +869,21 @@ object SqlEngine {
   /** Scalar functions. NULL arguments propagate to a NULL (or non-matching) result.
     *
     *   - `LENGTH(x)` — character length of `x` as text.
+    *   - `UPPER(s)` / `LOWER(s)` — case conversion.
+    *   - `TRIM(s)` / `LTRIM(s)` / `RTRIM(s)` — strip surrounding / leading / trailing whitespace.
+    *   - `SUBSTR(s, start [, len])` (alias `SUBSTRING`) — 1-based substring.
+    *   - `CONCAT(a, b, …)` — concatenate the arguments as text.
+    *   - `REPLACE(s, from, to)` — replace every literal occurrence of `from` with `to`.
+    *   - `INSTR(s, sub)` — 1-based index of the first occurrence of `sub` in `s` (`0` if absent).
     *   - `GEO_DISTANCE(lat1, lon1, lat2, lon2)` / `GEO_DISTANCE(point, lat2, lon2)` — great-circle
     *     distance in metres (haversine); the object form reads `latitude`/`longitude` from `point`.
     *   - `GEO_WITHIN(lat1, lon1, lat2, lon2, radius)` / `GEO_WITHIN(point, lat2, lon2, radius)` —
     *     boolean `distance <= radius` (metres).
+    *   - `NOW()` — the current instant.
+    *   - `YEAR/MONTH/DAY/HOUR/MINUTE/SECOND(ts)` — extract a UTC calendar field as an integer; `ts`
+    *     may be an instant or an ISO-8601 string (date, date-time, or offset date-time).
+    *   - `DATE_DIFF(unit, a, b)` — `a - b` as a whole number of `unit`s (`second`/`minute`/`hour`/
+    *     `day`/`millisecond`, singular or plural).
     */
   private def evalFunc(name: String, args: List[JValue]): JValue =
     (name, args) match {
@@ -841,12 +891,114 @@ object SqlEngine {
       case ("length", List(StringV(s))) => LongV(s.length.toLong)
       case ("length", List(v))          => LongV(jvToString(v).length.toLong)
 
+      case ("upper", List(v)) => textFn(v)(_.toUpperCase)
+      case ("lower", List(v)) => textFn(v)(_.toLowerCase)
+      case ("trim", List(v))  => textFn(v)(_.trim)
+      case ("ltrim", List(v)) => textFn(v)(_.stripLeading)
+      case ("rtrim", List(v)) => textFn(v)(_.stripTrailing)
+
+      case ("substr" | "substring", List(s, start))      => substr(s, start, None)
+      case ("substr" | "substring", List(s, start, len)) => substr(s, start, Some(len))
+
+      case ("concat", parts) if parts.nonEmpty =>
+        val texts = parts.map(asText)
+        if (texts.contains(None)) NullV else StringV(texts.flatten.mkString)
+
+      case ("replace", List(s, from, to)) =>
+        (asText(s), asText(from), asText(to)) match {
+          case (Some(a), Some(b), Some(c)) => StringV(a.replace(b, c))
+          case _                           => NullV
+        }
+
+      case ("instr", List(s, sub)) =>
+        (asText(s), asText(sub)) match {
+          case (Some(a), Some(b)) => LongV((a.indexOf(b) + 1).toLong)
+          case _                  => NullV
+        }
+
       case ("geo_distance", List(la1, lo1, la2, lo2)) => geoDistance(la1, lo1, la2, lo2)
       case ("geo_distance", List(p, la2, lo2))        => pointLatLon(p).fold(NullV: JValue) { case (la1, lo1) => geoDistance(la1, lo1, la2, lo2) }
 
       case ("geo_within", List(la1, lo1, la2, lo2, r)) => geoWithin(la1, lo1, la2, lo2, r)
       case ("geo_within", List(p, la2, lo2, r))        => pointLatLon(p).fold(NullV: JValue) { case (la1, lo1) => geoWithin(la1, lo1, la2, lo2, r) }
 
+      case ("now", Nil)         => InstantV(java.time.Instant.now())
+      case ("year", List(v))    => instantField(v)(_.getYear.toLong)
+      case ("month", List(v))   => instantField(v)(_.getMonthValue.toLong)
+      case ("day", List(v))     => instantField(v)(_.getDayOfMonth.toLong)
+      case ("hour", List(v))    => instantField(v)(_.getHour.toLong)
+      case ("minute", List(v))  => instantField(v)(_.getMinute.toLong)
+      case ("second", List(v))  => instantField(v)(_.getSecond.toLong)
+      case ("date_diff", List(unit, a, b)) => dateDiff(unit, a, b)
+
+      case _ => NullV
+    }
+
+  /** Field set whose `DATE_DIFF`/extraction results are integer-typed (for the result `Column` hint). */
+  private val dateIntFuncs: Set[String] = Set("year", "month", "day", "hour", "minute", "second")
+
+  /** Interpret a value as an instant: an `InstantV`, or an ISO-8601 string (date / date-time / offset
+    * date-time). Stored timestamps decode as plain strings, so both shapes must be accepted. */
+  private def asInstant(jv: JValue): Option[java.time.Instant] =
+    jv match {
+      case InstantV(i) => Some(i)
+      case StringV(s)  => parseInstant(s)
+      case _           => None
+    }
+
+  private def parseInstant(s: String): Option[java.time.Instant] = {
+    import java.time.*
+    def attempt[A](f: => A): Option[A] = scala.util.Try(f).toOption
+    attempt(Instant.parse(s))
+      .orElse(attempt(OffsetDateTime.parse(s).toInstant))
+      .orElse(attempt(LocalDateTime.parse(s).toInstant(ZoneOffset.UTC)))
+      .orElse(attempt(LocalDate.parse(s).atStartOfDay(ZoneOffset.UTC).toInstant))
+  }
+
+  /** Extract a UTC calendar field from a value interpreted as an instant (NULL if it is not one). */
+  private def instantField(v: JValue)(f: java.time.ZonedDateTime => Long): JValue =
+    asInstant(v).fold(NullV: JValue)(i => LongV(f(i.atZone(java.time.ZoneOffset.UTC))))
+
+  /** `a - b` as a whole number of the named unit; NULL if either side is not an instant or the unit is
+    * unknown. */
+  private def dateDiff(unit: JValue, a: JValue, b: JValue): JValue =
+    (asInstant(a), asInstant(b), unit) match {
+      case (Some(ia), Some(ib), StringV(u)) =>
+        val d = java.time.Duration.between(ib, ia)
+        u.toLowerCase match {
+          case "second" | "seconds" | "sec"           => LongV(d.getSeconds)
+          case "minute" | "minutes" | "min"           => LongV(d.toMinutes)
+          case "hour" | "hours"                        => LongV(d.toHours)
+          case "day" | "days"                          => LongV(d.toDays)
+          case "millisecond" | "milliseconds" | "ms"  => LongV(d.toMillis)
+          case _                                       => NullV
+        }
+      case _ => NullV
+    }
+
+  /** String functions whose result is text (for the result `Column` hint). */
+  private val strTextFuncs: Set[String] = Set("upper", "lower", "trim", "ltrim", "rtrim", "substr", "substring", "concat", "replace")
+
+  /** A value as text, or NULL (so a string function propagates NULL); a non-string is rendered. */
+  private def asText(jv: JValue): Option[String] = jv match { case NullV => None; case v => Some(jvToString(v)) }
+
+  private def asInt(jv: JValue): Option[Int] = asBigDecimal(jv).map(_.toInt)
+
+  /** Apply a text transform NULL-safely. */
+  private def textFn(v: JValue)(f: String => String): JValue = asText(v).fold(NullV: JValue)(s => StringV(f(s)))
+
+  /** 1-based substring; `start` is clamped to the string and a missing/negative `len` runs to the end.
+    * NULL (or a non-numeric `start`/`len`) yields NULL. */
+  private def substr(s: JValue, start: JValue, length: Option[JValue]): JValue =
+    (asText(s), asInt(start)) match {
+      case (Some(str), Some(st)) =>
+        val lenInt = length.map(asInt) // None = no len arg; Some(None) = non-numeric len; Some(Some(n)) = ok
+        if (lenInt.contains(None)) NullV
+        else {
+          val from = math.max(0, st - 1)
+          if (from >= str.length) StringV("")
+          else StringV(str.substring(from, lenInt.flatten.fold(str.length)(l => math.min(str.length, from + math.max(0, l)))))
+        }
       case _ => NullV
     }
 
@@ -901,6 +1053,11 @@ object SqlEngine {
       case Expr.Func("geo_distance", _) => "number"
       case Expr.Func("geo_within", _)   => "boolean"
       case Expr.Func("length", _)       => "integer"
+      case Expr.Func("instr", _)        => "integer"
+      case Expr.Func("date_diff", _)    => "integer"
+      case Expr.Func("now", _)          => "timestamp"
+      case Expr.Func(n, _) if dateIntFuncs(n) => "integer"
+      case Expr.Func(n, _) if strTextFuncs(n) => "string"
       case Expr.Func(_, _)              => "any"
       case Expr.Arith(_, _, _)          => "number"
       case Expr.Lit(Literal.IntLit(_))  => "integer"

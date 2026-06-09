@@ -26,9 +26,9 @@ object Statement {
     distinct: Boolean,
     from: String,
     where: Option[Expr],
-    groupBy: List[String],
+    groupBy: List[Expr],
     having: Option[Expr],
-    orderBy: Option[OrderBy],
+    orderBy: List[OrderBy],
     limit: Option[Long],
     fromAlias: Option[String] = None,
     joins: List[Join] = Nil
@@ -73,8 +73,9 @@ object Projection {
   final case class Items(items: List[SelectItem]) extends Projection
 }
 
-/** ORDER BY a scalar expression. A bare `Expr.Col` may name an output alias or a (qualified) column;
-  * a function expression (e.g. `GEO_DISTANCE(...)`) sorts by the computed value. */
+/** One ORDER BY key: a scalar expression and its direction. A bare `Expr.Col` may name an output
+  * alias or a (qualified) column; a function expression (e.g. `GEO_DISTANCE(...)`) sorts by the
+  * computed value. A query may carry several keys (`ORDER BY a, b DESC`), applied left-to-right. */
 final case class OrderBy(expr: Expr, descending: Boolean)
 
 enum CmpOp { case Eq, Ne, Lt, Le, Gt, Ge }

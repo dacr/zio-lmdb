@@ -15,6 +15,8 @@ import zio.lmdb.schema.LMDBSchema
 import zio.lmdb.sql.engine.SqlEngine
 import zio.lmdb.sql.result.QueryResult
 
+import java.time.Instant
+
 object SqlEngineSpec extends ZIOSpecDefault {
 
   final case class Person(name: String, age: Long) derives LMDBCodecJson, LMDBSchema
@@ -29,6 +31,9 @@ object SqlEngineSpec extends ZIOSpecDefault {
   final case class Dim(width: Long, height: Long) derives LMDBCodecJson, LMDBSchema
   final case class GPoint(latitude: Double, longitude: Double, altitude: Double) derives LMDBCodecJson, LMDBSchema
   final case class Original(mediaPath: String, dimension: Dim, location: Option[GPoint]) derives LMDBCodecJson, LMDBSchema
+
+  // Timestamped model: exercises date/time functions, comparisons and grouping by calendar fields.
+  final case class Media(mediaPath: String, timestamp: Instant) derives LMDBCodecJson, LMDBSchema
 
   private def deleteRecursively(f: java.io.File): Unit = {
     if (f.isDirectory) Option(f.listFiles()).foreach(_.foreach(deleteRecursively))
@@ -117,6 +122,17 @@ object SqlEngineSpec extends ZIOSpecDefault {
       _         <- originals.upsertOverwrite("nowhere", Original("/x.jpg", Dim(1, 1), None))                                       // excluded (null)
     } yield ()
 
+  /** Timestamps spanning two years / three months, for date/time function and grouping queries. */
+  private val seedMedias =
+    for {
+      medias <- LMDB.collectionCreate[String, Media]("medias")
+      _      <- medias.upsertOverwrite("m1", Media("/m1.jpg", Instant.parse("2023-05-10T08:00:00Z")))
+      _      <- medias.upsertOverwrite("m2", Media("/m2.jpg", Instant.parse("2024-01-15T10:30:00Z")))
+      _      <- medias.upsertOverwrite("m3", Media("/m3.jpg", Instant.parse("2024-01-20T12:00:00Z")))
+      _      <- medias.upsertOverwrite("m4", Media("/m4.jpg", Instant.parse("2024-03-05T09:15:00Z")))
+      _      <- medias.upsertOverwrite("m5", Media("/m5.jpg", Instant.parse("2024-03-25T18:45:00Z")))
+    } yield ()
+
   override def spec = suite("SqlEngine")(
     test("geo: filter within a radius, nearest-first, with projection and the object-arg form") {
       // Reference point: central Paris (Notre-Dame ~48.8566, 2.3522).
@@ -139,6 +155,78 @@ object SqlEngineSpec extends ZIOSpecDefault {
         near.map(r => field(r, "dist")).forall { case DoubleV(d) => d <= 50000.0; case _ => false },
         field(near.head, "dist").asInstanceOf[DoubleV].value < field(near(1), "dist").asInstanceOf[DoubleV].value, // ascending by distance
         obj.map(r => field(r, "_key")) == List(StringV("eiffel"), StringV("louvre"))           // object-arg GEO_WITHIN agrees (ordered by _key)
+      )
+    },
+    test("date/time GROUP BY: aggregate by YEAR(timestamp) using the SELECT alias") {
+      for {
+        _    <- seedMedias
+        rows <- query(
+                  """SELECT year(timestamp) AS year, count(*)
+                    |FROM medias m
+                    |GROUP BY year
+                    |ORDER BY year""".stripMargin
+                )
+      } yield assertTrue(
+        rows.map(r => field(r, "year"))     == List(LongV(2023), LongV(2024)),
+        rows.map(r => field(r, "count(*)")) == List(LongV(1), LongV(4))
+      )
+    },
+    test("date/time GROUP BY: group by YEAR and MONTH, with a multi-key ORDER BY") {
+      for {
+        _    <- seedMedias
+        rows <- query(
+                  """SELECT year(m.timestamp) AS dy, month(m.timestamp) AS dm, count(*) AS n
+                    |FROM medias m
+                    |GROUP BY dy, dm
+                    |ORDER BY dy, dm""".stripMargin
+                )
+      } yield assertTrue(
+        rows.map(r => field(r, "dy")) == List(LongV(2023), LongV(2024), LongV(2024)),
+        rows.map(r => field(r, "dm")) == List(LongV(5), LongV(1), LongV(3)),
+        rows.map(r => field(r, "n"))  == List(LongV(1), LongV(2), LongV(2))
+      )
+    },
+    test("date/time extraction functions (YEAR/MONTH/DAY) in a projection") {
+      for {
+        _    <- seedMedias
+        rows <- query(
+                  """SELECT _key, year(timestamp) AS y, month(timestamp) AS mo, day(timestamp) AS d
+                    |FROM medias
+                    |WHERE _key = 'm4'""".stripMargin
+                )
+      } yield assertTrue(
+        field(rows.head, "y")  == LongV(2024),
+        field(rows.head, "mo") == LongV(3),
+        field(rows.head, "d")  == LongV(5)
+      )
+    },
+    test("date/time comparison: filter by a timestamp bound and by NOW()") {
+      for {
+        _   <- seedMedias
+        cut <- query(
+                 """SELECT _key
+                   |FROM medias
+                   |WHERE timestamp >= '2024-01-01T00:00:00Z'
+                   |ORDER BY timestamp""".stripMargin
+               )
+        pst <- query("select _key from medias where timestamp <= now() order by _key")
+      } yield assertTrue(
+        cut.map(r => field(r, "_key")) == List(StringV("m2"), StringV("m3"), StringV("m4"), StringV("m5")), // m1 (2023) excluded
+        pst.map(r => field(r, "_key")) == List(StringV("m1"), StringV("m2"), StringV("m3"), StringV("m4"), StringV("m5"))
+      )
+    },
+    test("date/time distance: DATE_DIFF in days, reusing the alias in WHERE and ORDER BY") {
+      for {
+        _    <- seedMedias
+        rows <- query(
+                  """SELECT _key, date_diff('day', timestamp, '2024-01-01T00:00:00Z') AS days
+                    |FROM medias
+                    |WHERE days >= 0
+                    |ORDER BY days""".stripMargin
+                )
+      } yield assertTrue(
+        rows.map(r => field(r, "_key")) == List(StringV("m2"), StringV("m3"), StringV("m4"), StringV("m5")), // m1 (before the ref) is negative → excluded
+        rows.map(r => field(r, "days")) == List(LongV(14), LongV(19), LongV(64), LongV(84))
       )
     },
     test("an AS alias is referenceable in WHERE (and ORDER BY)") {
@@ -335,6 +423,44 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |ORDER BY customer""".stripMargin
                 )
       } yield assertTrue(rows.map(r => field(r, "customer")) == List(StringV("Alice"))) // "Bob" has length 3
+    },
+    test("string functions: UPPER/LOWER, TRIM/LTRIM/RTRIM, and NULL propagation") {
+      for {
+        _    <- seed
+        rows <- query(
+                  """SELECT upper(name) AS u, lower(name) AS l,
+                    |       trim('  x  ') AS t, ltrim('  x  ') AS lt, rtrim('  x  ') AS rt,
+                    |       upper(nickname) AS missing
+                    |FROM people
+                    |WHERE _key = 'p1'""".stripMargin
+                )
+      } yield assertTrue(
+        field(rows.head, "u")       == StringV("ALICE"),
+        field(rows.head, "l")       == StringV("alice"),
+        field(rows.head, "t")       == StringV("x"),
+        field(rows.head, "lt")      == StringV("x  "),
+        field(rows.head, "rt")      == StringV("  x"),
+        field(rows.head, "missing") == NullV // no such field → NULL propagates
+      )
+    },
+    test("string functions: SUBSTR, CONCAT, REPLACE, INSTR (and SUBSTR usable in WHERE)") {
+      for {
+        _    <- seed
+        rows <- query(
+                  """SELECT _key,
+                    |       substr(name, 1, 3) AS s, concat(name, '-', age) AS c,
+                    |       replace(name, 'a', 'X') AS r, instr(name, 'o') AS i
+                    |FROM people
+                    |WHERE _key = 'p3'""".stripMargin
+                )
+        whr  <- query("select _key from people where substr(name, 1, 1) = 'A'")
+      } yield assertTrue(
+        field(rows.head, "s") == StringV("Car"),       // substr("Carol", 1, 3)
+        field(rows.head, "c") == StringV("Carol-40"),  // concat coerces the age to text
+        field(rows.head, "r") == StringV("CXrol"),     // replace 'a' → 'X'
+        field(rows.head, "i") == LongV(4),             // 'o' is the 4th character of "Carol"
+        whr.map(r => field(r, "_key")) == List(StringV("p1")) // only "Alice" starts with 'A'
+      )
     },
     test("HAVING filters groups by an aggregate") {
       for {
