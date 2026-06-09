@@ -1,6 +1,6 @@
 # ZIO-LMDB RELEASE NOTES
 
-## 3.0 - 2026-06-09
+## 3.0 - 2026-06-09 release candidate cyles
 
 - Add `tuple3KeyCodec` and `tuple4KeyCodec` derived by nesting `tuple2KeyCodec` on the left, preserving the prefix-scan property for all-fixed-width components
 - Add `LMDBMulti.contains(key, document)` (and the matching `LMDBReadOps.multiContains`) for fast (key, value) existence checks against DUPSORT multi-collections
