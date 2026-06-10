@@ -76,8 +76,11 @@ object SqlCompleter {
     "select", "distinct", "as", "from", "where", "group", "by", "order", "limit", "asc", "desc",
     "insert", "into", "values", "update", "set", "delete", "describe", "show", "collections", "indexes",
     "join", "inner", "left", "outer", "on",
-    "and", "or", "not", "like", "is", "null", "count(", "sum(", "avg(", "min(", "max(",
+    "and", "or", "not", "like", "in", "between", "is", "null", "case", "when", "then", "else", "end",
+    "count(", "sum(", "avg(", "min(", "max(",
     "length(", "upper(", "lower(", "trim(", "ltrim(", "rtrim(", "substr(", "substring(", "concat(", "replace(", "instr(",
+    "coalesce(", "nullif(", "cast(",
+    "abs(", "floor(", "ceil(", "ceiling(", "round(", "sign(", "mod(", "power(", "pow(", "sqrt(",
     "year(", "month(", "day(", "hour(", "minute(", "second(", "now(", "date_diff(",
     "geo_distance(", "geo_within("
   )

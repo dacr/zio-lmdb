@@ -37,7 +37,7 @@ object SqlParserSpec extends ZIOSpecDefault {
       assertTrue(
         ok("select count(*) from t")            == Statement.Select(Projection.Items(List(SelectItem.Agg(AggFunc.Count, None))), false, "t", None, Nil, None, Nil, None),
         ok("SELECT COUNT(*) FROM t WHERE a > 1") == Statement.Select(Projection.Items(List(SelectItem.Agg(AggFunc.Count, None))), false, "t", Some(Expr.Cmp(CmpOp.Gt, Expr.Col("a"), Expr.Lit(Literal.IntLit(1)))), Nil, None, Nil, None),
-        ok("select count(amount) from t")        == Statement.Select(Projection.Items(List(SelectItem.Agg(AggFunc.Count, Some("amount")))), false, "t", None, Nil, None, Nil, None),
+        ok("select count(amount) from t")        == Statement.Select(Projection.Items(List(SelectItem.Agg(AggFunc.Count, Some(Expr.Col("amount"))))), false, "t", None, Nil, None, Nil, None),
         ok("select count from t")                == Statement.Select(Projection.Items(List(SelectItem.Col("count"))), false, "t", None, Nil, None, Nil, None)
       )
     },
@@ -45,11 +45,11 @@ object SqlParserSpec extends ZIOSpecDefault {
       assertTrue(
         ok("select customer, sum(amount), avg(amount) from orders group by customer")
           == Statement.Select(
-            Projection.Items(List(SelectItem.Col("customer"), SelectItem.Agg(AggFunc.Sum, Some("amount")), SelectItem.Agg(AggFunc.Avg, Some("amount")))),
+            Projection.Items(List(SelectItem.Col("customer"), SelectItem.Agg(AggFunc.Sum, Some(Expr.Col("amount"))), SelectItem.Agg(AggFunc.Avg, Some(Expr.Col("amount"))))),
             false, "orders", None, List(Expr.Col("customer")), None, Nil, None
           ),
         ok("select min(age), max(age) from people")
-          == Statement.Select(Projection.Items(List(SelectItem.Agg(AggFunc.Min, Some("age")), SelectItem.Agg(AggFunc.Max, Some("age")))), false, "people", None, Nil, None, Nil, None),
+          == Statement.Select(Projection.Items(List(SelectItem.Agg(AggFunc.Min, Some(Expr.Col("age"))), SelectItem.Agg(AggFunc.Max, Some(Expr.Col("age"))))), false, "people", None, Nil, None, Nil, None),
         ok("select distinct customer from orders")
           == Statement.Select(Projection.Items(List(SelectItem.Col("customer"))), true, "orders", None, Nil, None, Nil, None),
         ok("select distinct city, country from people order by country limit 5")
@@ -60,7 +60,7 @@ object SqlParserSpec extends ZIOSpecDefault {
       assertTrue(
         ok("select cameraName, count(*) as count from originals group by cameraName order by count")
           == Statement.Select(
-            Projection.Items(List(SelectItem.Col("cameraName"), SelectItem.Agg(AggFunc.Count, None, Some("count")))),
+            Projection.Items(List(SelectItem.Col("cameraName"), SelectItem.Agg(AggFunc.Count, None, alias = Some("count")))),
             false, "originals", None, List(Expr.Col("cameraName")), None, List(OrderBy(Expr.Col("count"), descending = false)), None
           ),
         ok("select name as n from t") == Statement.Select(Projection.Items(List(SelectItem.Col("name", Some("n")))), false, "t", None, Nil, None, Nil, None)
@@ -83,11 +83,11 @@ object SqlParserSpec extends ZIOSpecDefault {
             |ORDER BY count""".stripMargin
         )
           == Statement.Select(
-            Projection.Items(List(SelectItem.Col("cameraName"), SelectItem.Agg(AggFunc.Count, None, Some("count")))),
+            Projection.Items(List(SelectItem.Col("cameraName"), SelectItem.Agg(AggFunc.Count, None, alias = Some("count")))),
             false, "originals",
             Some(Expr.Cmp(CmpOp.Gt, Expr.Func("length", List(Expr.Col("cameraName"))), Expr.Lit(Literal.IntLit(0)))),
             List(Expr.Col("cameraName")),
-            Some(Expr.Cmp(CmpOp.Gt, Expr.Aggregate(AggFunc.Count, None), Expr.Lit(Literal.IntLit(100)))),
+            Some(Expr.Cmp(CmpOp.Gt, Expr.Aggregate(AggFunc.Count, None, false), Expr.Lit(Literal.IntLit(100)))),
             List(OrderBy(Expr.Col("count"), descending = false)),
             None
           )
@@ -225,6 +225,78 @@ object SqlParserSpec extends ZIOSpecDefault {
         ok("select * from t where note is null")  == Statement.Select(Projection.Star, false, "t", Some(Expr.IsNull(Expr.Col("note"), negated = false)), Nil, None, Nil, None),
         ok("select * from t where note is not null") == Statement.Select(Projection.Star, false, "t", Some(Expr.IsNull(Expr.Col("note"), negated = true)), Nil, None, Nil, None),
         ok("select * from t where name like 'A%'") == Statement.Select(Projection.Star, false, "t", Some(Expr.Like(Expr.Col("name"), "A%")), Nil, None, Nil, None)
+      )
+    },
+    test("IN / NOT IN, BETWEEN / NOT BETWEEN, and NOT LIKE predicates") {
+      assertTrue(
+        ok("select * from t where age in (25, 40)")
+          == Statement.Select(Projection.Star, false, "t", Some(Expr.In(Expr.Col("age"), List(Expr.Lit(Literal.IntLit(25)), Expr.Lit(Literal.IntLit(40))), negated = false)), Nil, None, Nil, None),
+        ok("select * from t where age not in (25, 40)")
+          == Statement.Select(Projection.Star, false, "t", Some(Expr.In(Expr.Col("age"), List(Expr.Lit(Literal.IntLit(25)), Expr.Lit(Literal.IntLit(40))), negated = true)), Nil, None, Nil, None),
+        ok("select * from t where age between 18 and 65")
+          == Statement.Select(Projection.Star, false, "t", Some(Expr.Between(Expr.Col("age"), Expr.Lit(Literal.IntLit(18)), Expr.Lit(Literal.IntLit(65)), negated = false)), Nil, None, Nil, None),
+        ok("select * from t where age not between 18 and 65")
+          == Statement.Select(Projection.Star, false, "t", Some(Expr.Between(Expr.Col("age"), Expr.Lit(Literal.IntLit(18)), Expr.Lit(Literal.IntLit(65)), negated = true)), Nil, None, Nil, None),
+        ok("select * from t where name not like 'A%'")
+          == Statement.Select(Projection.Star, false, "t", Some(Expr.Not(Expr.Like(Expr.Col("name"), "A%"))), Nil, None, Nil, None),
+        // BETWEEN's AND binds tighter than a surrounding boolean AND
+        ok("select * from t where age between 18 and 65 and active = true")
+          == Statement.Select(
+            Projection.Star, false, "t",
+            Some(Expr.And(
+              Expr.Between(Expr.Col("age"), Expr.Lit(Literal.IntLit(18)), Expr.Lit(Literal.IntLit(65)), negated = false),
+              Expr.Cmp(CmpOp.Eq, Expr.Col("active"), Expr.Lit(Literal.BoolLit(true)))
+            )),
+            Nil, None, Nil, None
+          )
+      )
+    },
+    test("CASE expressions: searched and simple forms") {
+      assertTrue(
+        ok("select case when age >= 18 then 'adult' else 'minor' end from t")
+          == Statement.Select(
+            Projection.Items(List(SelectItem.Expr(Expr.Case(
+              None,
+              List((Expr.Cmp(CmpOp.Ge, Expr.Col("age"), Expr.Lit(Literal.IntLit(18))), Expr.Lit(Literal.StrLit("adult")))),
+              Some(Expr.Lit(Literal.StrLit("minor")))
+            )))),
+            false, "t", None, Nil, None, Nil, None
+          ),
+        ok("select case status when 1 then 'a' when 2 then 'b' end from t")
+          == Statement.Select(
+            Projection.Items(List(SelectItem.Expr(Expr.Case(
+              Some(Expr.Col("status")),
+              List((Expr.Lit(Literal.IntLit(1)), Expr.Lit(Literal.StrLit("a"))), (Expr.Lit(Literal.IntLit(2)), Expr.Lit(Literal.StrLit("b")))),
+              None
+            )))),
+            false, "t", None, Nil, None, Nil, None
+          )
+      )
+    },
+    test("aggregate arguments may be expressions, and COUNT(DISTINCT col)") {
+      assertTrue(
+        ok("select sum(a + b), count(distinct customer) from t")
+          == Statement.Select(
+            Projection.Items(List(
+              SelectItem.Agg(AggFunc.Sum, Some(Expr.Arith(ArithOp.Add, Expr.Col("a"), Expr.Col("b"))), false),
+              SelectItem.Agg(AggFunc.Count, Some(Expr.Col("customer")), true)
+            )),
+            false, "t", None, Nil, None, Nil, None
+          )
+      )
+    },
+    test("CAST desugars to the cast function with the target type as a string argument") {
+      assertTrue(
+        ok("select cast(age as integer) from t")
+          == Statement.Select(
+            Projection.Items(List(SelectItem.Expr(Expr.Func("cast", List(Expr.Col("age"), Expr.Lit(Literal.StrLit("integer"))))))),
+            false, "t", None, Nil, None, Nil, None
+          ),
+        ok("select cast(amount as string) as s from t")
+          == Statement.Select(
+            Projection.Items(List(SelectItem.Expr(Expr.Func("cast", List(Expr.Col("amount"), Expr.Lit(Literal.StrLit("string")))), Some("s")))),
+            false, "t", None, Nil, None, Nil, None
+          )
       )
     },
     test("INSERT / UPDATE / DELETE") {

@@ -32,6 +32,14 @@ import java.util.concurrent.atomic.AtomicReference
   */
 object Main extends ZIOAppDefault {
 
+  // Route ZIO/LMDB logs to stderr and drop anything below WARNING, so batch (`--execute`) output on
+  // stdout stays clean (data only) and the interactive banner/results are not interleaved with the
+  // LMDB INFO setup line.
+  override val bootstrap: ZLayer[Any, Any, Any] =
+    Runtime.removeDefaultLoggers ++ Runtime.addLogger(
+      ZLogger.default.map(line => java.lang.System.err.println(line)).filterLogLevel(_ >= LogLevel.Warning)
+    )
+
   private final case class Ctx(
     terminal: Terminal,
     reader: LineReader,
@@ -46,21 +54,34 @@ object Main extends ZIOAppDefault {
   }
 
   /** Parsed command-line arguments. `home` overrides the databases home (otherwise it comes from the
-    * built LMDB config); `connect` is an optional database name to open automatically on startup.
+    * built LMDB config); `connect` is an optional database name to open automatically on startup (and
+    * the database to run against in batch mode); `execute` are SQL statements to run non-interactively
+    * (`--execute`/`-e`, repeatable) — when present the REPL runs them and exits instead of prompting;
+    * `format` is the output format (`--format`/`-f`, default `table`).
     */
-  private final case class CliArgs(home: Option[String], connect: Option[String])
+  private final case class CliArgs(home: Option[String], connect: Option[String], execute: List[String], format: Format)
 
   private def parseArgs(args: List[String]): CliArgs = {
     @annotation.tailrec
-    def loop(rem: List[String], home: Option[String], db: Option[String]): CliArgs =
+    def loop(rem: List[String], home: Option[String], db: Option[String], exec: List[String], fmt: Format): CliArgs =
       rem match {
-        case ("--home" | "-H") :: h :: t                => loop(t, Some(h), db)
-        case a :: t if !a.startsWith("-") && db.isEmpty => loop(t, home, Some(a))
-        case _ :: t                                     => loop(t, home, db)
-        case Nil                                        => CliArgs(home, db)
+        case ("--home" | "-H") :: h :: t                => loop(t, Some(h), db, exec, fmt)
+        case ("--execute" | "-e") :: sql :: t           => loop(t, home, db, exec :+ sql, fmt)
+        case ("--format" | "-f") :: f :: t              => loop(t, home, db, exec, parseFormat(f).getOrElse(fmt))
+        case a :: t if !a.startsWith("-") && db.isEmpty => loop(t, home, Some(a), exec, fmt)
+        case _ :: t                                     => loop(t, home, db, exec, fmt)
+        case Nil                                        => CliArgs(home, db, exec, fmt)
       }
-    loop(args, None, None)
+    loop(args, None, None, Nil, Format.Table)
   }
+
+  private def parseFormat(f: String): Option[Format] =
+    f.toLowerCase match {
+      case "table" => Some(Format.Table)
+      case "json"  => Some(Format.Json)
+      case "csv"   => Some(Format.Csv)
+      case _       => None
+    }
 
   /** Resolve the databases home the same way `LMDBLive.setup` does: explicit override, else the value
     * from the built config (`lmdb.home` / `LMDB_HOME`), else `$HOME/.lmdb`. */
@@ -79,6 +100,41 @@ object Main extends ZIOAppDefault {
       config    <- ZIO.config(LMDB.config).orElseSucceed(LMDBConfig.default)
       dbHome     = resolveHome(cli.home, config)
       _         <- ZIO.attemptBlocking(if (!Files.exists(dbHome)) Files.createDirectories(dbHome))
+      // `--execute` switches to non-interactive batch mode: run the statements against the named
+      // database and exit, with no banner or jline terminal (so output is clean for scripting).
+      _         <- if (cli.execute.nonEmpty) batch(cli, dbHome) else interactive(cli, dbHome)
+    } yield ()).catchAll(e => Console.printLineError(s"Fatal: $e").orDie)
+
+  /** Non-interactive `--execute` mode: open the named database, render each statement's result to
+    * stdout in the chosen format, and exit non-zero if any statement failed. */
+  private def batch(cli: CliArgs, dbHome: Path): Task[Unit] =
+    cli.connect match {
+      case None       =>
+        Console.printLineError("error: no database specified — pass the database name as the first argument").orDie *> exit(ExitCode.failure)
+      case Some(name) =>
+        val dbPath = dbHome.resolve(name)
+        ZIO.attemptBlocking(Files.exists(dbPath.resolve("data.mdb")) || !Files.exists(dbPath)).flatMap { ok =>
+          if (!ok) Console.printLineError(s"error: '$name' is not an LMDB database directory in $dbHome").orDie *> exit(ExitCode.failure)
+          else
+            ZIO.scoped {
+              LMDBLive
+                .setup(LMDBConfig.default.copy(databasesHome = Some(dbHome.toString), databaseName = name))
+                .flatMap(lmdb => ZIO.foreach(cli.execute)(sql => runBatchStmt(lmdb, cli.format, sql)))
+            }.flatMap(oks => ZIO.when(oks.contains(false))(exit(ExitCode.failure)).unit)
+        }
+    }
+
+  /** Run one statement in batch mode: render its rows to stdout, or print a clean `error: …` line to
+    * stderr. Returns whether it succeeded (used to set the process exit code). */
+  private def runBatchStmt(lmdb: LMDB, fmt: Format, sql: String): UIO[Boolean] =
+    (for {
+      result <- SqlEngine.run(sql).provide(ZLayer.succeed(lmdb))
+      _      <- Renderer.render(fmt, result).runForeach(line => ZIO.succeed(println(line)))
+    } yield true).catchAll(e => Console.printLineError(s"error: ${e.message}").orDie.as(false))
+
+  /** The interactive jline shell (the default when no `--execute` is given). */
+  private def interactive(cli: CliArgs, dbHome: Path): Task[Unit] =
+    for {
       active    <- Ref.make[Option[LMDB]](None)
       scope     <- Ref.make[Option[Scope.Closeable]](None)
       format    <- Ref.make[Format](Format.Table)
@@ -116,7 +172,7 @@ object Main extends ZIOAppDefault {
       _         <- refreshDatabases(ctx) // populate \c completion before any connection
       _         <- ZIO.foreachDiscard(cli.connect)(name => connect(ctx, name).catchAll(e => ctx.err(e.getMessage)))
       _         <- loop(ctx)
-    } yield ()).catchAll(e => Console.printLineError(s"Fatal: $e").orDie)
+    } yield ()
 
   private def loop(ctx: Ctx): Task[Unit] =
     prompt(ctx).flatMap { p =>
@@ -181,11 +237,9 @@ object Main extends ZIOAppDefault {
   }
 
   private def setFormat(ctx: Ctx, f: String): UIO[Unit] =
-    f.toLowerCase match {
-      case "table" => ctx.format.set(Format.Table) *> ctx.out("format: table")
-      case "json"  => ctx.format.set(Format.Json) *> ctx.out("format: json")
-      case "csv"   => ctx.format.set(Format.Csv) *> ctx.out("format: csv")
-      case other   => ctx.err(s"unknown format '$other' (table|json|csv)")
+    parseFormat(f) match {
+      case Some(fmt) => ctx.format.set(fmt) *> ctx.out(s"format: ${f.toLowerCase}")
+      case None      => ctx.err(s"unknown format '$f' (table|json|csv)")
     }
 
   /** The LMDB database directories (those containing a `data.mdb`) under the databases home. */

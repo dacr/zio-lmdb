@@ -97,12 +97,16 @@ object SqlEngine {
         .map(joinSources => (sel.fromAlias.getOrElse(sel.from), fromInfo) :: joinSources)
     }
 
-  /** HAVING and aggregate projections both put the query on the grouping path. */
+  /** HAVING and aggregate projections both put the query on the grouping path. An aggregate counts
+    * even when nested inside an expression projection (`ROUND(AVG(x), 2)`, `SUM(a) / COUNT(*)`) or an
+    * ORDER BY key — otherwise a whole-table aggregate written that way is wrongly streamed per row. */
   private def isAggregate(sel: Statement.Select): Boolean =
-    sel.groupBy.nonEmpty || sel.having.isDefined || (sel.projection match {
-      case Projection.Items(items) => items.exists { case _: SelectItem.Agg => true; case _ => false }
-      case Projection.Star         => false
-    })
+    sel.groupBy.nonEmpty || sel.having.isDefined ||
+      (sel.projection match {
+        case Projection.Items(items) => items.exists(it => aggsInExpr(itemExpr(it)).nonEmpty)
+        case Projection.Star         => false
+      }) ||
+      sel.orderBy.exists(ob => aggsInExpr(ob.expr).nonEmpty)
 
   private def validateNoAggregatesInWhere(where: Option[Expr]): Either[SqlError, Unit] =
     if (where.toList.flatMap(aggsInExpr).isEmpty) Right(())
@@ -134,7 +138,7 @@ object SqlEngine {
         items.collect {
           case SelectItem.Col(n, Some(a))    => a -> (Expr.Col(n): Expr)
           case SelectItem.Expr(e, Some(a))   => a -> e
-          case SelectItem.Agg(f, c, Some(a)) => a -> (Expr.Aggregate(f, c): Expr)
+          case SelectItem.Agg(f, c, d, Some(a)) => a -> (Expr.Aggregate(f, c, d): Expr)
         }.toMap
     }
 
@@ -144,7 +148,7 @@ object SqlEngine {
     e match {
       case Expr.Col(n)          => aliases.getOrElse(n, e)
       case Expr.Lit(_)          => e
-      case Expr.Aggregate(_, _) => e
+      case Expr.Aggregate(_, _, _) => e
       case Expr.Arith(op, l, r) => Expr.Arith(op, substituteAliases(l, aliases), substituteAliases(r, aliases))
       case Expr.Cmp(op, l, r)   => Expr.Cmp(op, substituteAliases(l, aliases), substituteAliases(r, aliases))
       case Expr.And(l, r)       => Expr.And(substituteAliases(l, aliases), substituteAliases(r, aliases))
@@ -152,7 +156,11 @@ object SqlEngine {
       case Expr.Not(x)          => Expr.Not(substituteAliases(x, aliases))
       case Expr.Like(t, p)      => Expr.Like(substituteAliases(t, aliases), p)
       case Expr.IsNull(t, neg)  => Expr.IsNull(substituteAliases(t, aliases), neg)
+      case Expr.In(t, its, neg)         => Expr.In(substituteAliases(t, aliases), its.map(substituteAliases(_, aliases)), neg)
+      case Expr.Between(t, lo, hi, neg) => Expr.Between(substituteAliases(t, aliases), substituteAliases(lo, aliases), substituteAliases(hi, aliases), neg)
       case Expr.Func(n, as)     => Expr.Func(n, as.map(substituteAliases(_, aliases)))
+      case Expr.Case(s, br, d)  =>
+        Expr.Case(s.map(substituteAliases(_, aliases)), br.map { case (c, r) => (substituteAliases(c, aliases), substituteAliases(r, aliases)) }, d.map(substituteAliases(_, aliases)))
     }
 
   // ── plain streaming SELECT ─────────────────────────────────────────────────────────────────────
@@ -406,7 +414,11 @@ object SqlEngine {
         case Expr.Not(x)          => Expr.Not(bindGroups(x, bindings))
         case Expr.Like(t, p)      => Expr.Like(bindGroups(t, bindings), p)
         case Expr.IsNull(t, neg)  => Expr.IsNull(bindGroups(t, bindings), neg)
+        case Expr.In(t, its, neg)         => Expr.In(bindGroups(t, bindings), its.map(bindGroups(_, bindings)), neg)
+        case Expr.Between(t, lo, hi, neg) => Expr.Between(bindGroups(t, bindings), bindGroups(lo, bindings), bindGroups(hi, bindings), neg)
         case Expr.Func(n, as)     => Expr.Func(n, as.map(bindGroups(_, bindings)))
+        case Expr.Case(s, br, d)  =>
+          Expr.Case(s.map(bindGroups(_, bindings)), br.map { case (c, r) => (bindGroups(c, bindings), bindGroups(r, bindings)) }, d.map(bindGroups(_, bindings)))
         case leaf                 => leaf // Col, Lit, Aggregate
       }
     }
@@ -417,7 +429,7 @@ object SqlEngine {
     item match {
       case SelectItem.Col(n, _)    => Expr.Col(n)
       case SelectItem.Expr(e, _)   => e
-      case SelectItem.Agg(f, c, _) => Expr.Aggregate(f, c)
+      case SelectItem.Agg(f, c, d, _) => Expr.Aggregate(f, c, d)
     }
 
   /** Columns still referenced (outside any aggregate) after binding GROUP BY expressions — i.e.
@@ -452,7 +464,7 @@ object SqlEngine {
     // Every aggregate to compute per group: those in the projection, HAVING, and ORDER BY.
     val aggKeys   =
       (items.flatMap(it => aggsInExpr(itemExpr(it))) ++ sel.having.toList.flatMap(aggsInExpr) ++ sel.orderBy.flatMap(ob => aggsInExpr(ob.expr))).distinct
-    val freshAccs = aggKeys.map { case (f, _) => initAcc(f) }.toVector
+    val freshAccs = aggKeys.map { case (f, _, dis) => initAcc(f, dis) }.toVector
     val bindNames = bindings.map(_._2)
     val seed: Map[List[JValue], Vector[Acc]] =
       if (sel.groupBy.isEmpty) Map(Nil -> freshAccs) else Map.empty
@@ -460,7 +472,7 @@ object SqlEngine {
       .runFold(seed) { (groups, row) =>
         val key     = sel.groupBy.map(g => operand(g, row))
         val current = groups.getOrElse(key, freshAccs)
-        val updated = current.zip(aggKeys).map { case (acc, (_, c)) => acc.add(aggInput(c, row)) }
+        val updated = current.zip(aggKeys).map { case (acc, (_, arg, _)) => acc.add(aggInput(arg, row)) }
         groups.updated(key, updated)
       }
       .map { groups =>
@@ -505,8 +517,8 @@ object SqlEngine {
     item.alias.getOrElse {
       item match {
         case SelectItem.Col(n, _)          => unqualify(n)
-        case SelectItem.Agg(f, None, _)    => s"${aggLabel(f)}(*)"
-        case SelectItem.Agg(f, Some(c), _) => s"${aggLabel(f)}(${unqualify(c)})"
+        case SelectItem.Agg(f, None, _, _)        => s"${aggLabel(f)}(*)"
+        case SelectItem.Agg(f, Some(e), dis, _)   => s"${aggLabel(f)}(${if (dis) "distinct " else ""}${exprLabel(e)})"
         case SelectItem.Expr(e, _)         => exprLabel(e)
       }
     }
@@ -520,20 +532,21 @@ object SqlEngine {
     item match {
       case SelectItem.Col(n, _)        => Column(outputName(item), hintFor(sources, n))
       case SelectItem.Expr(e, _)       => Column(outputName(item), exprTypeHint(e, sources))
-      case SelectItem.Agg(f, col, _) =>
+      case SelectItem.Agg(f, arg, _, _) =>
         val tpe = f match {
           case AggFunc.Count             => "integer"
           case AggFunc.Sum | AggFunc.Avg => "number"
-          case AggFunc.Min | AggFunc.Max => col.map(hintFor(sources, _)).getOrElse("any")
+          case AggFunc.Min | AggFunc.Max => arg.map(exprTypeHint(_, sources)).getOrElse("any")
         }
         Column(outputName(item), tpe)
     }
 
-  /** The value fed to an aggregate from a row: the column, or a non-null tally for `COUNT(*)`. */
-  private def aggInput(column: Option[String], row: Row): JValue =
-    column match {
+  /** The value fed to an aggregate from a row: the argument expression evaluated against the row, or a
+    * non-null tally for `COUNT(*)`. */
+  private def aggInput(arg: Option[Expr], row: Row): JValue =
+    arg match {
       case None    => BoolV(true) // COUNT(*) — always a non-null tally
-      case Some(c) => row(c)
+      case Some(e) => operand(e, row)
     }
 
   // ── aggregate accumulators (immutable; folded over the stream) ──────────────────────────────────
@@ -559,15 +572,23 @@ object SqlEngine {
     def add(v: JValue): Acc = if (v == NullV) this else MaxAcc(Some(cur.fold(v)(c => if (cmpTotal(v, c) > 0) v else c)))
     def result: JValue      = cur.getOrElse(NullV)
   }
+  /** `DISTINCT` wrapper: forwards each non-null argument value to `inner` only the first time it is
+    * seen, so `COUNT(DISTINCT x)` counts distinct values, `SUM(DISTINCT x)` sums distinct values, etc. */
+  private final case class DistinctAcc(seen: Set[JValue], inner: Acc) extends Acc {
+    def add(v: JValue): Acc = if (v == NullV || seen.contains(v)) this else DistinctAcc(seen + v, inner.add(v))
+    def result: JValue      = inner.result
+  }
 
-  private def initAcc(func: AggFunc): Acc =
-    func match {
+  private def initAcc(func: AggFunc, distinct: Boolean): Acc = {
+    val base = func match {
       case AggFunc.Count => CountAcc(0)
       case AggFunc.Sum   => SumAcc(BigDecimal(0), false)
       case AggFunc.Avg   => AvgAcc(BigDecimal(0), 0)
       case AggFunc.Min   => MinAcc(None)
       case AggFunc.Max   => MaxAcc(None)
     }
+    if (distinct) DistinctAcc(Set.empty, base) else base
+  }
 
   private def projectionColumns(sources: List[Source], proj: Projection): List[Column] =
     proj match {
@@ -841,8 +862,9 @@ object SqlEngine {
       case CmpOp.Ge => compareJV(a, b).exists(_ >= 0)
     }
 
-  /** Identifies an aggregate: its function and optional column (`None` = `COUNT(*)`). */
-  private type AggKey = (AggFunc, Option[String])
+  /** Identifies an aggregate: its function, optional argument expression (`None` = `COUNT(*)`), and the
+    * `DISTINCT` flag. Two aggregates with the same key share one accumulator. */
+  private type AggKey = (AggFunc, Option[Expr], Boolean)
 
   // `lk` resolves a column/group name; `agg` resolves an aggregate (only populated for HAVING).
   private def operand(e: Expr, lk: String => JValue, agg: AggKey => JValue = _ => NullV): JValue =
@@ -850,10 +872,22 @@ object SqlEngine {
       case Expr.Col(n)            => lk(n)
       case Expr.Lit(l)            => litToJV(l)
       case Expr.Func(name, as)    => evalFunc(name, as.map(operand(_, lk, agg)))
-      case Expr.Aggregate(f, c)   => agg((f, c))
+      case Expr.Aggregate(f, c, d) => agg((f, c, d))
       case Expr.Arith(op, l, r)   => evalArith(op, operand(l, lk, agg), operand(r, lk, agg))
+      case Expr.Case(subj, branches, default) => evalCase(subj, branches, default, lk, agg)
       case other                  => BoolV(evalBool(other, lk, agg))
     }
+
+  /** Evaluate a `CASE`: the searched form returns the first branch whose condition is true; the simple
+    * form returns the first branch whose value equals the subject. With no match, the `ELSE` value, or
+    * `NULL`. */
+  private def evalCase(subject: Option[Expr], branches: List[(Expr, Expr)], default: Option[Expr], lk: String => JValue, agg: AggKey => JValue): JValue = {
+    val hit = subject match {
+      case None    => branches.collectFirst { case (cond, res) if evalBool(cond, lk, agg) => res }
+      case Some(s) => val sv = operand(s, lk, agg); branches.collectFirst { case (v, res) if eqJV(sv, operand(v, lk, agg)) => res }
+    }
+    hit.orElse(default).fold(NullV: JValue)(operand(_, lk, agg))
+  }
 
   private def evalBool(e: Expr, lk: String => JValue, agg: AggKey => JValue = _ => NullV): Boolean =
     e match {
@@ -863,6 +897,18 @@ object SqlEngine {
       case Expr.Cmp(op, l, r)  => compareOp(op, operand(l, lk, agg), operand(r, lk, agg))
       case Expr.IsNull(t, neg) => val isN = operand(t, lk, agg) == NullV; if (neg) !isN else isN
       case Expr.Like(t, pat)   => operand(t, lk, agg) match { case StringV(s) => likeMatch(s, pat); case _ => false }
+      case Expr.In(t, items, neg) =>
+        operand(t, lk, agg) match {
+          case NullV => false // a NULL target matches nothing (and NOT IN of NULL is likewise no match)
+          case v     => val m = items.exists(it => eqJV(operand(it, lk, agg), v)); if (neg) !m else m
+        }
+      case Expr.Between(t, lo, hi, neg) =>
+        operand(t, lk, agg) match {
+          case NullV => false
+          case v     =>
+            val in = compareJV(v, operand(lo, lk, agg)).exists(_ >= 0) && compareJV(v, operand(hi, lk, agg)).exists(_ <= 0)
+            if (neg) !in else in
+        }
       case other               => operand(other, lk, agg) match { case BoolV(b) => b; case _ => false }
     }
 
@@ -915,6 +961,21 @@ object SqlEngine {
           case (Some(a), Some(b)) => LongV((a.indexOf(b) + 1).toLong)
           case _                  => NullV
         }
+
+      case ("coalesce", parts) if parts.nonEmpty => parts.find(_ != NullV).getOrElse(NullV)
+      case ("nullif", List(a, b))                => if (a != NullV && eqJV(a, b)) NullV else a
+      case ("cast", List(v, StringV(tpe)))       => castValue(v, tpe)
+
+      case ("abs", List(v))               => numUnary(v)(_.abs)
+      case ("floor", List(v))             => intUnary(v)(_.setScale(0, BigDecimal.RoundingMode.FLOOR))
+      case ("ceil" | "ceiling", List(v))  => intUnary(v)(_.setScale(0, BigDecimal.RoundingMode.CEILING))
+      case ("sign", List(v))              => asBigDecimal(v).fold(NullV: JValue)(d => LongV(d.signum.toLong))
+      case ("round", List(v))             => asBigDecimal(v).fold(NullV: JValue)(d => LongV(d.setScale(0, BigDecimal.RoundingMode.HALF_UP).toLong))
+      case ("round", List(v, n))          =>
+        (asBigDecimal(v), asInt(n)) match { case (Some(d), Some(p)) => DecimalV(d.setScale(p, BigDecimal.RoundingMode.HALF_UP)); case _ => NullV }
+      case ("mod", List(a, b))            => evalArith(ArithOp.Mod, a, b)
+      case ("power" | "pow", List(a, b))  => (asDouble(a), asDouble(b)) match { case (Some(x), Some(y)) => DoubleV(math.pow(x, y)); case _ => NullV }
+      case ("sqrt", List(v))              => asDouble(v).filter(_ >= 0).fold(NullV: JValue)(d => DoubleV(math.sqrt(d)))
 
       case ("geo_distance", List(la1, lo1, la2, lo2)) => geoDistance(la1, lo1, la2, lo2)
       case ("geo_distance", List(p, la2, lo2))        => pointLatLon(p).fold(NullV: JValue) { case (la1, lo1) => geoDistance(la1, lo1, la2, lo2) }
@@ -1031,6 +1092,68 @@ object SqlEngine {
       case _           => None
     }
 
+  /** A unary numeric transform that preserves the operand's numeric kind (`LongV`/`DoubleV`/`DecimalV`);
+    * NULL for a non-numeric operand. Used by `ABS`. */
+  private def numUnary(v: JValue)(f: BigDecimal => BigDecimal): JValue =
+    asBigDecimal(v).fold(NullV: JValue) { d =>
+      v match { case LongV(_) => LongV(f(d).toLong); case DoubleV(_) => DoubleV(f(d).toDouble); case _ => DecimalV(f(d)) }
+    }
+
+  /** A unary numeric transform that yields a whole number (`LongV`); NULL for a non-numeric operand.
+    * Used by `FLOOR`/`CEIL`. */
+  private def intUnary(v: JValue)(f: BigDecimal => BigDecimal): JValue =
+    asBigDecimal(v).fold(NullV: JValue)(d => LongV(f(d).toLong))
+
+  /** Math functions whose result is integer-typed / number-typed (for the result `Column` hint). */
+  private val mathIntFuncs: Set[String] = Set("floor", "ceil", "ceiling", "sign")
+  private val mathNumFuncs: Set[String] = Set("abs", "round", "mod", "power", "pow", "sqrt")
+
+  /** Type names accepted by `CAST(x AS <type>)`, grouped to a canonical target. */
+  private val castIntTypes     = Set("int", "integer", "bigint", "long", "smallint", "tinyint")
+  private val castDoubleTypes  = Set("double", "float", "real")
+  private val castDecimalTypes = Set("decimal", "numeric", "number")
+  private val castStringTypes  = Set("string", "text", "varchar", "char")
+  private val castBoolTypes    = Set("boolean", "bool")
+  private val castTsTypes      = Set("timestamp", "datetime", "instant", "date")
+
+  /** `CAST(value AS type)`: convert `value` to the named SQL type. `NULL` stays `NULL`; a value that
+    * cannot be converted (or an unknown target type) yields `NULL`. Numeric parsing is lenient (a
+    * numeric string converts), and a decimal/double truncates toward zero when cast to an integer. */
+  private def castValue(v: JValue, tpe: String): JValue =
+    if (v == NullV) NullV
+    else if (castIntTypes(tpe))
+      v match {
+        case LongV(_) => v
+        case BoolV(b) => LongV(if (b) 1 else 0)
+        case _        => asDouble(v).fold(NullV: JValue)(d => LongV(d.toLong))
+      }
+    else if (castDoubleTypes(tpe)) asDouble(v).fold(NullV: JValue)(DoubleV(_))
+    else if (castDecimalTypes(tpe))
+      v match {
+        case DecimalV(_) => v
+        case StringV(s)  => scala.util.Try(BigDecimal(s)).toOption.fold(NullV: JValue)(DecimalV(_))
+        case _           => asBigDecimal(v).fold(NullV: JValue)(DecimalV(_))
+      }
+    else if (castStringTypes(tpe)) StringV(jvToString(v))
+    else if (castBoolTypes(tpe))
+      v match {
+        case BoolV(_)   => v
+        case LongV(n)   => BoolV(n != 0)
+        case StringV(s) => s.trim.toLowerCase match { case "true" | "t" | "1" => BoolV(true); case "false" | "f" | "0" => BoolV(false); case _ => NullV }
+        case _          => NullV
+      }
+    else if (castTsTypes(tpe)) asInstant(v).fold(NullV: JValue)(InstantV(_))
+    else NullV
+
+  /** The result type hint of a `CAST(x AS <type>)` for the projected `Column`. */
+  private def castTypeHint(tpe: String): String =
+    if (castIntTypes(tpe)) "integer"
+    else if (castDoubleTypes(tpe) || castDecimalTypes(tpe)) "number"
+    else if (castStringTypes(tpe)) "string"
+    else if (castBoolTypes(tpe)) "boolean"
+    else if (castTsTypes(tpe)) "timestamp"
+    else "any"
+
   /** A compact textual label for an expression — the default output-column name when no `AS` alias is
     * given (e.g. `geo_distance(latitude, longitude, 48.8566, 2.3522)`). */
   private def exprLabel(e: Expr): String =
@@ -1038,8 +1161,11 @@ object SqlEngine {
       case Expr.Col(n)          => unqualify(n)
       case Expr.Lit(l)          => litToJV(l) match { case StringV(s) => s; case other => jvToString(other) }
       case Expr.Func(name, as)  => s"$name(${as.map(exprLabel).mkString(", ")})"
-      case Expr.Aggregate(f, c) => c.fold(s"${aggLabel(f)}(*)")(col => s"${aggLabel(f)}(${unqualify(col)})")
+      case Expr.Aggregate(f, c, d) => c.fold(s"${aggLabel(f)}(*)")(e => s"${aggLabel(f)}(${if (d) "distinct " else ""}${exprLabel(e)})")
       case Expr.Arith(op, l, r) => s"${exprLabel(l)} ${arithSymbol(op)} ${exprLabel(r)}"
+      case Expr.In(t, its, neg)         => s"${exprLabel(t)}${if (neg) " not" else ""} in (${its.map(exprLabel).mkString(", ")})"
+      case Expr.Between(t, lo, hi, neg) => s"${exprLabel(t)}${if (neg) " not" else ""} between ${exprLabel(lo)} and ${exprLabel(hi)}"
+      case Expr.Case(_, _, _)   => "case"
       case _                    => "expr"
     }
 
@@ -1058,7 +1184,15 @@ object SqlEngine {
       case Expr.Func("now", _)          => "timestamp"
       case Expr.Func(n, _) if dateIntFuncs(n) => "integer"
       case Expr.Func(n, _) if strTextFuncs(n) => "string"
+      case Expr.Func(n, _) if mathIntFuncs(n) => "integer"
+      case Expr.Func(n, _) if mathNumFuncs(n) => "number"
+      case Expr.Func("cast", List(_, Expr.Lit(Literal.StrLit(tpe)))) => castTypeHint(tpe)
+      case Expr.Func("coalesce", args) => args.map(exprTypeHint(_, sources)).distinct match { case List(single) => single; case _ => "any" }
+      case Expr.Func("nullif", a :: _) => exprTypeHint(a, sources)
       case Expr.Func(_, _)              => "any"
+      case Expr.Case(_, branches, default) =>
+        // The result type is the common hint of all branch results (and the ELSE), else "any".
+        (branches.map(_._2) ++ default.toList).map(exprTypeHint(_, sources)).distinct match { case List(single) => single; case _ => "any" }
       case Expr.Arith(_, _, _)          => "number"
       case Expr.Lit(Literal.IntLit(_))  => "integer"
       case Expr.Lit(Literal.DecLit(_))  => "number"
@@ -1085,7 +1219,7 @@ object SqlEngine {
     * aggregates in WHERE). */
   private def aggsInExpr(e: Expr): List[AggKey] =
     e match {
-      case Expr.Aggregate(f, c)      => List((f, c))
+      case Expr.Aggregate(f, c, d)   => List((f, c, d))
       case Expr.Func(_, args)        => args.flatMap(aggsInExpr)
       case Expr.Arith(_, l, r)       => aggsInExpr(l) ++ aggsInExpr(r)
       case Expr.Cmp(_, l, r)         => aggsInExpr(l) ++ aggsInExpr(r)
@@ -1094,6 +1228,9 @@ object SqlEngine {
       case Expr.Not(x)               => aggsInExpr(x)
       case Expr.Like(t, _)           => aggsInExpr(t)
       case Expr.IsNull(t, _)         => aggsInExpr(t)
+      case Expr.In(t, its, _)        => aggsInExpr(t) ++ its.flatMap(aggsInExpr)
+      case Expr.Between(t, lo, hi, _) => aggsInExpr(t) ++ aggsInExpr(lo) ++ aggsInExpr(hi)
+      case Expr.Case(s, br, d)       => s.toList.flatMap(aggsInExpr) ++ br.flatMap { case (c, r) => aggsInExpr(c) ++ aggsInExpr(r) } ++ d.toList.flatMap(aggsInExpr)
       case Expr.Col(_) | Expr.Lit(_) => Nil
     }
 
@@ -1101,7 +1238,7 @@ object SqlEngine {
   private def freeColsInExpr(e: Expr): List[String] =
     e match {
       case Expr.Col(n)          => List(n)
-      case Expr.Aggregate(_, _) => Nil
+      case Expr.Aggregate(_, _, _) => Nil
       case Expr.Func(_, args)   => args.flatMap(freeColsInExpr)
       case Expr.Arith(_, l, r)  => freeColsInExpr(l) ++ freeColsInExpr(r)
       case Expr.Cmp(_, l, r)    => freeColsInExpr(l) ++ freeColsInExpr(r)
@@ -1110,6 +1247,9 @@ object SqlEngine {
       case Expr.Not(x)          => freeColsInExpr(x)
       case Expr.Like(t, _)      => freeColsInExpr(t)
       case Expr.IsNull(t, _)    => freeColsInExpr(t)
+      case Expr.In(t, its, _)        => freeColsInExpr(t) ++ its.flatMap(freeColsInExpr)
+      case Expr.Between(t, lo, hi, _) => freeColsInExpr(t) ++ freeColsInExpr(lo) ++ freeColsInExpr(hi)
+      case Expr.Case(s, br, d)       => s.toList.flatMap(freeColsInExpr) ++ br.flatMap { case (c, r) => freeColsInExpr(c) ++ freeColsInExpr(r) } ++ d.toList.flatMap(freeColsInExpr)
       case Expr.Lit(_)          => Nil
     }
 

@@ -68,13 +68,29 @@ object SqlParser {
     )
 
   private def primary[$: P]: P[Expr] =
-    P(("(" ~ expr ~ ")") | aggExpr | funcExpr | literal.map(Expr.Lit(_)) | colName.map(Expr.Col(_)))
+    P(("(" ~ expr ~ ")") | caseExpr | castExpr | aggExpr | funcExpr | literal.map(Expr.Lit(_)) | colName.map(Expr.Col(_)))
 
-  /** An aggregate reference inside an expression (e.g. in HAVING): COUNT(*), SUM(col), … */
+  /** `CAST(<expr> AS <type>)` — desugars to the `cast` scalar function with the target type carried as
+    * a string literal second argument, so the engine handles it through `evalFunc` with no new node. */
+  private def castExpr[$: P]: P[Expr] =
+    P(kw("cast") ~ "(" ~ expr ~ kw("as") ~ ident ~ ")").map { case (e, tpe) => Expr.Func("cast", List(e, Expr.Lit(Literal.StrLit(tpe.toLowerCase)))) }
+
+  /** `CASE [<subject>] (WHEN <expr> THEN <expr>)+ [ELSE <expr>] END`. The optional subject is guarded
+    * by `!kw("when")` so the searched form (`CASE WHEN …`) does not read `WHEN` as the subject; this
+    * keeps `case`/`when`/`then`/`else`/`end` out of the reserved set (still usable as column names). */
+  private def caseExpr[$: P]: P[Expr] =
+    P(kw("case") ~ (!kw("when") ~ expr).? ~ whenClause.rep(1) ~ (kw("else") ~ expr).? ~ kw("end"))
+      .map { case (subject, branches, default) => Expr.Case(subject, branches.toList, default) }
+
+  private def whenClause[$: P]: P[(Expr, Expr)] =
+    P(kw("when") ~ expr ~ kw("then") ~ expr).map { case (c, r) => (c, r) }
+
+  /** An aggregate reference: `COUNT(*)`, `SUM(<expr>)`, `AVG(a + b)`, `COUNT(DISTINCT col)`, … The
+    * argument is any scalar expression; an optional leading `DISTINCT` dedupes the argument values. */
   private def aggExpr[$: P]: P[Expr] =
     P(
-      (kw("count") ~ "(" ~ "*" ~ ")").map(_ => Expr.Aggregate(AggFunc.Count, None)) |
-        (aggFunc ~ "(" ~ colName ~ ")").map { case (f, c) => Expr.Aggregate(f, Some(c)) }
+      (kw("count") ~ "(" ~ "*" ~ ")").map(_ => Expr.Aggregate(AggFunc.Count, None, distinct = false)) |
+        (aggFunc ~ "(" ~ distinctKw ~ expr ~ ")").map { case (f, dis, e) => Expr.Aggregate(f, Some(e), dis) }
     )
 
   /** A scalar function call `name(arg, …)` — e.g. `LENGTH(name)`, `YEAR(timestamp)`, `NOW()`,
@@ -102,10 +118,20 @@ object SqlParser {
     P(
       additive ~ (
         (kw("is") ~ kw("not").map(_ => true).? ~ kw("null")).map(neg => (e: Expr) => Expr.IsNull(e, neg.getOrElse(false))) |
-          (kw("like") ~ sqlString).map(p => (e: Expr) => Expr.Like(e, p)) |
+          (kw("not").map(_ => true).?.map(_.getOrElse(false)) ~ negatablePred).map { case (neg, f) => (e: Expr) => f(e, neg) } |
           (cmpOp ~ additive).map { case (op, r) => (e: Expr) => Expr.Cmp(op, e, r) }
       ).?
     ).map { case (e, fOpt) => fOpt.map(_(e)).getOrElse(e) }
+
+  /** A predicate that may be prefixed by `NOT`: `LIKE`, `IN`, or `BETWEEN`. Returns a builder taking
+    * the already-parsed left operand and the `NOT` flag. `LIKE` has no negated AST node, so a `NOT
+    * LIKE` is wrapped in `Expr.Not`; `IN`/`BETWEEN` carry the flag natively. */
+  private def negatablePred[$: P]: P[(Expr, Boolean) => Expr] =
+    P(
+      (kw("like") ~ sqlString).map(p => (e: Expr, neg: Boolean) => if (neg) Expr.Not(Expr.Like(e, p)) else Expr.Like(e, p)) |
+        (kw("in") ~ "(" ~ expr.rep(1, sep = ",") ~ ")").map(items => (e: Expr, neg: Boolean) => Expr.In(e, items.toList, neg)) |
+        (kw("between") ~ additive ~ kw("and") ~ additive).map { case (lo, hi) => (e: Expr, neg: Boolean) => Expr.Between(e, lo, hi, neg) }
+    )
 
   private def notExpr[$: P]: P[Expr] = P((kw("not") ~ notExpr).map(Expr.Not(_)) | term)
 
@@ -128,9 +154,9 @@ object SqlParser {
     * general expression (the last covers `GEO_DISTANCE(...)`, `LENGTH(...)`, …). */
   private def selectItem[$: P]: P[SelectItem] =
     P(expr ~ aliasOpt).map {
-      case (Expr.Col(n), al)          => SelectItem.Col(n, al)
-      case (Expr.Aggregate(f, c), al) => SelectItem.Agg(f, c, al)
-      case (e, al)                    => SelectItem.Expr(e, al)
+      case (Expr.Col(n), al)             => SelectItem.Col(n, al)
+      case (Expr.Aggregate(f, c, d), al) => SelectItem.Agg(f, c, d, al)
+      case (e, al)                       => SelectItem.Expr(e, al)
     }
 
   private def projection[$: P]: P[Projection] =

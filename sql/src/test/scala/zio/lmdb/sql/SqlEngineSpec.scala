@@ -299,6 +299,80 @@ object SqlEngineSpec extends ZIOSpecDefault {
         rows.map(r => field(r, "doubled")) == List(LongV(20), LongV(60))
       )
     },
+    test("CASE: searched form in a projection (with ELSE and a fall-through to NULL)") {
+      for {
+        _    <- seed
+        rows <- query(
+                  """SELECT _key,
+                    |       CASE WHEN age >= 40 THEN 'senior' WHEN age >= 30 THEN 'adult' ELSE 'young' END AS band,
+                    |       CASE WHEN age >= 100 THEN 'centenarian' END AS rare
+                    |FROM people
+                    |ORDER BY _key""".stripMargin
+                )
+      } yield assertTrue(
+        rows.map(r => field(r, "band")) == List(StringV("adult"), StringV("young"), StringV("senior")), // 30, 25, 40
+        rows.map(r => field(r, "rare")) == List(NullV, NullV, NullV)                                     // no branch, no ELSE → NULL
+      )
+    },
+    test("CASE: simple form compares the subject for equality") {
+      for {
+        _    <- seed
+        rows <- query(
+                  """SELECT _key, CASE age WHEN 25 THEN 'twentyfive' WHEN 30 THEN 'thirty' END AS label
+                    |FROM people
+                    |ORDER BY _key""".stripMargin
+                )
+      } yield assertTrue(
+        rows.map(r => field(r, "label")) == List(StringV("thirty"), StringV("twentyfive"), NullV) // 30, 25, 40(no match)
+      )
+    },
+    test("CASE: usable in WHERE and as a GROUP BY bucket") {
+      for {
+        _    <- seed
+        whr  <- query("select _key from people where (case when age >= 30 then 1 else 0 end) = 1 order by _key")
+        grp  <- query(
+                  """SELECT CASE WHEN age >= 30 THEN 'old' ELSE 'young' END AS band, count(*) AS n
+                    |FROM people
+                    |GROUP BY band
+                    |ORDER BY band""".stripMargin
+                )
+      } yield assertTrue(
+        whr.map(r => field(r, "_key")) == List(StringV("p1"), StringV("p3")),     // age 30 and 40
+        grp.map(r => field(r, "band")) == List(StringV("old"), StringV("young")),
+        grp.map(r => field(r, "n"))    == List(LongV(2), LongV(1))
+      )
+    },
+    test("COALESCE / NULLIF return first-non-null / null-on-equal") {
+      for {
+        _    <- seed
+        rows <- query(
+                  """SELECT _key,
+                    |       coalesce(nickname, name) AS display,
+                    |       nullif(name, 'Bob') AS notbob
+                    |FROM people
+                    |ORDER BY _key""".stripMargin
+                )
+      } yield assertTrue(
+        rows.map(r => field(r, "display")) == List(StringV("Alice"), StringV("Bob"), StringV("Carol")), // no nickname → falls back to name
+        rows.map(r => field(r, "notbob"))  == List(StringV("Alice"), NullV, StringV("Carol"))            // 'Bob' nulled out
+      )
+    },
+    test("CAST converts between types (and a numeric string parses)") {
+      for {
+        _    <- seed
+        rows <- query(
+                  """SELECT _key, cast(age AS string) AS ageStr, cast('42' AS integer) AS parsed, cast(age AS double) AS ageD
+                    |FROM people
+                    |WHERE _key = 'p2'""".stripMargin
+                )
+        whr  <- query("select _key from people where cast(age as string) = '40'")
+      } yield assertTrue(
+        field(rows.head, "ageStr") == StringV("25"),
+        field(rows.head, "parsed") == LongV(42),
+        field(rows.head, "ageD")   == DoubleV(25.0),
+        whr.map(r => field(r, "_key")) == List(StringV("p3")) // Carol, age 40
+      )
+    },
     test("nested value paths: SELECT, WHERE and ORDER BY descend into sub-objects") {
       for {
         _    <- seedOriginals
@@ -351,6 +425,50 @@ object SqlEngineSpec extends ZIOSpecDefault {
         rows <- query("select name from people where name like 'A%'")
       } yield assertTrue(rows.map(r => field(r, "name")) == List(StringV("Alice")))
     },
+    test("NOT LIKE negates the pattern match") {
+      for {
+        _    <- seed
+        rows <- query("select name from people where name not like 'A%' order by name")
+      } yield assertTrue(rows.map(r => field(r, "name")) == List(StringV("Bob"), StringV("Carol")))
+    },
+    test("IN / NOT IN test membership against a value list") {
+      for {
+        _    <- seed
+        in   <- query("select _key from people where age in (25, 40) order by _key")
+        str  <- query("select name from people where name in ('Alice', 'Zoe') order by name")
+        notI <- query("select _key from people where age not in (25, 40) order by _key")
+      } yield assertTrue(
+        in.map(r => field(r, "_key"))    == List(StringV("p2"), StringV("p3")),
+        str.map(r => field(r, "name"))   == List(StringV("Alice")),
+        notI.map(r => field(r, "_key"))  == List(StringV("p1")) // 30 is in neither list
+      )
+    },
+    test("BETWEEN / NOT BETWEEN test an inclusive range") {
+      for {
+        _    <- seed
+        btw  <- query("select _key from people where age between 26 and 40 order by age")
+        notB <- query("select _key from people where age not between 26 and 40 order by _key")
+        edge <- query("select _key from people where age between 25 and 30 order by age") // bounds are inclusive
+      } yield assertTrue(
+        btw.map(r => field(r, "_key"))  == List(StringV("p1"), StringV("p3")), // 30, 40
+        notB.map(r => field(r, "_key")) == List(StringV("p2")),                // 25
+        edge.map(r => field(r, "_key")) == List(StringV("p2"), StringV("p1"))  // 25, 30 — both endpoints included
+      )
+    },
+    test("IN combines with AND/OR and reuses an AS alias") {
+      for {
+        _    <- seedOrders
+        rows <- query(
+                  """SELECT _key, amount * 2 AS doubled
+                    |FROM orders
+                    |WHERE doubled IN (20, 60) AND customer = 'Alice'
+                    |ORDER BY _key""".stripMargin
+                )
+      } yield assertTrue(
+        rows.map(r => field(r, "_key"))    == List(StringV("o1"), StringV("o2")), // amount 10→20, 30→60
+        rows.map(r => field(r, "doubled")) == List(LongV(20), LongV(60))
+      )
+    },
     test("COUNT(*) counts all rows, and with WHERE counts the matches") {
       for {
         _   <- seed
@@ -382,6 +500,57 @@ object SqlEngineSpec extends ZIOSpecDefault {
         field(r.head, "min(age)") == LongV(25),
         field(r.head, "max(age)") == LongV(40),
         field(a.head, "avg(age)") == DecimalV(BigDecimal(35))
+      )
+    },
+    test("aggregate over an expression argument (SUM/AVG of amount * 2)") {
+      for {
+        _    <- seedOrders
+        rows <- query("select sum(amount * 2) as s, avg(amount + 10) as a from orders")
+      } yield assertTrue(
+        field(rows.head, "s") == DecimalV(BigDecimal(90)),          // (10 + 30 + 5) * 2
+        field(rows.head, "a") == DecimalV(BigDecimal(25))           // ((20 + 40 + 15) / 3)
+      )
+    },
+    test("a whole-table aggregate written as an expression over aggregates yields exactly one row") {
+      // Regression: an aggregate nested inside a function/arithmetic projection (no bare aggregate
+      // item, no GROUP BY) must still take the grouping path, not stream one row per source row.
+      for {
+        _    <- seedOrders
+        rows <- query("select round(avg(amount), 1) as avgRounded, sum(amount) / count(*) as mean from orders")
+      } yield assertTrue(
+        rows.size == 1,
+        field(rows.head, "avgRounded") == DecimalV(BigDecimal("15.0")),
+        field(rows.head, "mean")       == DecimalV(BigDecimal(15))
+      )
+    },
+    test("COUNT(DISTINCT col) counts distinct values, whole-table and per group") {
+      for {
+        _   <- seedOrders
+        all <- query("select count(distinct customer) as c, count(distinct amount) as d from orders")
+        grp <- query(
+                 """SELECT customer, count(distinct amount) AS d
+                   |FROM orders
+                   |GROUP BY customer
+                   |ORDER BY customer""".stripMargin
+               )
+      } yield assertTrue(
+        field(all.head, "c") == LongV(2),                            // Alice, Bob
+        field(all.head, "d") == LongV(3),                            // amounts 10, 30, 5 — all distinct
+        grp.map(r => field(r, "customer")) == List(StringV("Alice"), StringV("Bob")),
+        grp.map(r => field(r, "d"))        == List(LongV(2), LongV(1)) // Alice: {10,30}=2, Bob: {5}=1
+      )
+    },
+    test("SUM(DISTINCT col) sums only distinct values") {
+      for {
+        _   <- LMDB.collectionCreate[String, Order]("orders").flatMap { orders =>
+                 orders.upsertOverwrite("o1", Order("Alice", 10)) *>
+                   orders.upsertOverwrite("o2", Order("Bob", 10)) *>   // duplicate amount 10
+                   orders.upsertOverwrite("o3", Order("Carol", 30))
+               }
+        row <- query("select sum(distinct amount) as s, sum(amount) as total from orders")
+      } yield assertTrue(
+        field(row.head, "s")     == DecimalV(BigDecimal(40)),        // distinct {10, 30}
+        field(row.head, "total") == DecimalV(BigDecimal(50))         // 10 + 10 + 30
       )
     },
     test("GROUP BY with COUNT and SUM, ordered by the group key") {
@@ -461,6 +630,34 @@ object SqlEngineSpec extends ZIOSpecDefault {
         field(rows.head, "i") == LongV(4),             // 'o' is the 4th character of "Carol"
         whr.map(r => field(r, "_key")) == List(StringV("p1")) // only "Alice" starts with 'A'
       )
+    },
+    test("math functions: ABS/FLOOR/CEIL/ROUND/SIGN/MOD/POWER/SQRT") {
+      for {
+        _    <- seed
+        rows <- query(
+                  """SELECT abs(-7) AS a, floor(3.7) AS f, ceil(3.2) AS c,
+                    |       round(3.14159, 2) AS r, round(2.5) AS r0, sign(-9) AS sg,
+                    |       mod(10, 3) AS m, power(2, 10) AS p, sqrt(144) AS sq
+                    |FROM people
+                    |WHERE _key = 'p1'""".stripMargin
+                )
+      } yield assertTrue(
+        field(rows.head, "a")  == LongV(7),
+        field(rows.head, "f")  == LongV(3),
+        field(rows.head, "c")  == LongV(4),
+        field(rows.head, "r")  == DecimalV(BigDecimal("3.14")),
+        field(rows.head, "r0") == LongV(3),                 // HALF_UP
+        field(rows.head, "sg") == LongV(-1),
+        field(rows.head, "m")  == LongV(1),
+        field(rows.head, "p")  == DoubleV(1024.0),
+        field(rows.head, "sq") == DoubleV(12.0)
+      )
+    },
+    test("math functions are usable in WHERE (MOD as an even-number filter)") {
+      for {
+        _    <- seedOrders
+        rows <- query("select _key from orders where mod(amount, 2) = 0 order by _key")
+      } yield assertTrue(rows.map(r => field(r, "_key")) == List(StringV("o1"), StringV("o2"))) // 10, 30 even; 5 odd
     },
     test("HAVING filters groups by an aggregate") {
       for {

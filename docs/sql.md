@@ -68,6 +68,24 @@ connected to 'my-app'
 lmdb(my-app)> SELECT _key, name, age FROM users ORDER BY age DESC LIMIT 5;
 ```
 
+### Non-interactive execution
+
+Pass a database name as the first argument and one or more `--execute` (short `-e`) statements to run
+them without entering the shell. The result goes to stdout (logs go to stderr), so it pipes cleanly;
+`--format` (short `-f`) selects `table` (default), `json`, or `csv`. `--execute` is repeatable, and a
+failing statement prints `error: …` to stderr and exits non-zero.
+
+```bash
+# one query, default table output
+java ... -jar zio-lmdb-sql.jar my-app --execute "SELECT COUNT(*) FROM users"
+
+# CSV to a file, and several statements in one run
+java ... -jar zio-lmdb-sql.jar my-app -f csv -e "SELECT _key, name FROM users" > users.csv
+java ... -jar zio-lmdb-sql.jar my-app \
+     -e "SELECT COUNT(*) AS users FROM users" \
+     -e "SELECT COUNT(*) AS orders FROM orders"
+```
+
 ### Meta-commands
 
 | Command | Effect |
@@ -141,13 +159,27 @@ SELECT * FROM orders WHERE amount > 9.99 AND amount <= 100;
 SELECT * FROM users WHERE _key = 'alice';
 ```
 
-String matching with `LIKE` (`%` = any run, `_` = any single char):
+String matching with `LIKE` (`%` = any run, `_` = any single char), and its negation `NOT LIKE`:
 
 ```sql
 SELECT name FROM users WHERE name LIKE 'A%';
 SELECT name FROM users WHERE name LIKE '_ob';
 SELECT * FROM files WHERE path LIKE '%/2026/%';
+SELECT name FROM users WHERE name NOT LIKE 'A%';
 ```
+
+List membership with `IN` / `NOT IN`, and inclusive ranges with `BETWEEN` / `NOT BETWEEN` (both
+bounds included). The list items and the range bounds may be any expression, not just literals.
+
+```sql
+SELECT * FROM users WHERE country IN ('FR', 'BE', 'CH');
+SELECT * FROM users WHERE age NOT IN (0, 999);
+SELECT * FROM orders WHERE amount BETWEEN 10 AND 100;
+SELECT * FROM users WHERE age NOT BETWEEN 18 AND 65;
+```
+
+A `NULL` left-hand side matches nothing, so it is excluded by `IN`/`BETWEEN` *and* by their `NOT`
+forms.
 
 Null tests:
 
@@ -176,6 +208,26 @@ propagate to a `NULL` (or non-matching) result.
 ```sql
 SELECT * FROM users WHERE LENGTH(name) > 0;
 SELECT name, LENGTH(name) AS len FROM users ORDER BY len DESC;
+```
+
+#### Numeric functions
+
+| Function | Result |
+|---|---|
+| `ABS(x)` | absolute value (preserves the numeric kind) |
+| `FLOOR(x)` / `CEIL(x)` (alias `CEILING`) | round down / up to a whole number |
+| `ROUND(x)` / `ROUND(x, n)` | round half-up to the nearest integer, or to `n` decimal places |
+| `SIGN(x)` | `-1`, `0`, or `1` |
+| `MOD(a, b)` | remainder of `a / b` (`NULL` when `b` is `0`) |
+| `POWER(a, b)` (alias `POW`) | `a` raised to the power `b` |
+| `SQRT(x)` | square root (`NULL` for a negative `x`) |
+
+A non-numeric argument yields `NULL`.
+
+```sql
+SELECT _key, ROUND(amount, 2) AS rounded, ABS(balance) AS magnitude FROM accounts;
+SELECT _key FROM orders WHERE MOD(quantity, 2) = 0;          -- even quantities
+SELECT POWER(2, 10) AS kib, SQRT(area) AS side FROM shapes;
 ```
 
 #### String functions
@@ -296,6 +348,26 @@ SELECT YEAR(m.timestamp) AS dy, MONTH(m.timestamp) AS dm, COUNT(*) AS n
 `NOW()` is the wall clock at evaluation time; treat it as "approximately now" rather than a single
 fixed instant pinned for the whole query.
 
+#### Null handling and conversion
+
+| Function | Result |
+|---|---|
+| `COALESCE(a, b, …)` | the first non-`NULL` argument, or `NULL` if all are `NULL` |
+| `NULLIF(a, b)` | `NULL` when `a` equals `b`, otherwise `a` |
+| `CAST(x AS <type>)` | `x` converted to `<type>`; `NULL` (or an unconvertible value) stays `NULL` |
+
+`CAST` target types: `integer` (also `int`/`bigint`/`long`/`smallint`), `double` (also `float`/`real`),
+`decimal` (also `numeric`/`number`), `string` (also `text`/`varchar`/`char`), `boolean` (also `bool`),
+and `timestamp` (also `datetime`/`date`). Numeric parsing is lenient (a numeric string converts), and a
+decimal/double truncates toward zero when cast to an integer.
+
+```sql
+SELECT _key, COALESCE(nickname, name, '(anonymous)') AS display FROM users;
+SELECT NULLIF(status, 'unknown') AS status FROM jobs;          -- 'unknown' becomes NULL
+SELECT _key FROM orders WHERE CAST(amount AS integer) >= 100;
+SELECT CAST(age AS string) AS ageText, CAST('2024-01-01' AS timestamp) AS d FROM users;
+```
+
 ### Arithmetic
 
 Numeric expressions support `+`, `-`, `*`, `/`, and `%`, with the usual precedence (`*` `/` `%` bind
@@ -316,6 +388,39 @@ SELECT b.name, GEO_DISTANCE(m.location, 48.8566, 2.3522) / 1000 AS distKm
 Integer operands keep an integer result for `+`/`-`/`*`/`%`; division always yields a decimal. A
 non-numeric operand, or division/modulo by zero, yields `NULL` (which then fails comparisons, so the
 row is excluded).
+
+### CASE
+
+`CASE` is a conditional expression and may appear anywhere an expression is allowed — projection,
+`WHERE`, `HAVING`, `ORDER BY`, and as a `GROUP BY` bucket. Both standard forms are supported. The
+**searched** form tests a boolean condition per branch; the **simple** form compares a subject value
+to each branch value for equality. The first matching branch wins; with no match it yields the `ELSE`
+value, or `NULL` when there is no `ELSE`.
+
+```sql
+-- searched CASE
+SELECT _key,
+       CASE WHEN age >= 65 THEN 'senior'
+            WHEN age >= 18 THEN 'adult'
+            ELSE 'minor' END AS band
+  FROM users;
+
+-- simple CASE (subject compared for equality)
+SELECT _key,
+       CASE country WHEN 'FR' THEN 'France'
+                    WHEN 'US' THEN 'United States'
+                    ELSE country END AS countryName
+  FROM users;
+
+-- as a GROUP BY bucket, referenced by its alias
+SELECT CASE WHEN amount >= 100 THEN 'big' ELSE 'small' END AS bucket, COUNT(*) AS n
+  FROM orders
+  GROUP BY bucket
+  ORDER BY bucket;
+
+-- in WHERE
+SELECT _key FROM users WHERE (CASE WHEN active THEN age ELSE 0 END) >= 18;
+```
 
 ### ORDER BY and LIMIT
 
@@ -345,8 +450,17 @@ SELECT DISTINCT city, country FROM users ORDER BY country LIMIT 20;
 
 ## Aggregates and GROUP BY
 
-Aggregate functions: `COUNT(*)`, `COUNT(col)` (non-null values), `SUM(col)`, `AVG(col)`,
-`MIN(col)`, `MAX(col)`. Each output column is named `func(arg)` unless you give it an `AS` alias.
+Aggregate functions: `COUNT(*)`, `COUNT(x)` (non-null values), `SUM(x)`, `AVG(x)`, `MIN(x)`,
+`MAX(x)`. The argument `x` is **any expression**, not just a column — `SUM(price * qty)`,
+`AVG(amount + tax)`, `MAX(YEAR(timestamp))` all work. A leading `DISTINCT` dedupes the argument
+values first, e.g. `COUNT(DISTINCT customer)` or `SUM(DISTINCT amount)`. Each output column is named
+`func(arg)` unless you give it an `AS` alias.
+
+```sql
+SELECT SUM(amount * 2) AS doubled, AVG(amount + 10) AS bumped FROM orders;
+SELECT COUNT(DISTINCT customer) AS customers FROM orders;
+SELECT customer, COUNT(DISTINCT amount) AS distinctAmounts FROM orders GROUP BY customer;
+```
 
 ### Whole-table aggregates (no GROUP BY)
 
@@ -602,18 +716,20 @@ small results can be materialised with `result.toList` and large ones consumed l
 **Supported:** `SELECT` (`*`, columns, dotted nested-field paths, scalar/geo/date-time function
 expressions, aggregates, expressions over aggregates, `AS` aliases), `DISTINCT`, `INNER`/`LEFT JOIN`
 (with table aliases, qualified columns, and value→key coercion), `WHERE` (`= != <> < <= > >=`,
-`AND`/`OR`/`NOT`, parentheses, `LIKE`, `IS [NOT] NULL`, timestamp comparison), arithmetic
+`AND`/`OR`/`NOT`, parentheses, `LIKE`/`NOT LIKE`, `IN`/`NOT IN`, `BETWEEN`/`NOT BETWEEN`,
+`IS [NOT] NULL`, timestamp comparison), `CASE` (searched and simple forms), arithmetic
 (`+ - * / %` with precedence and parentheses), scalar functions (`LENGTH`, `UPPER`/`LOWER`,
-`TRIM`/`LTRIM`/`RTRIM`, `SUBSTR`/`SUBSTRING`, `CONCAT`, `REPLACE`, `INSTR`, `GEO_DISTANCE`,
+`TRIM`/`LTRIM`/`RTRIM`, `SUBSTR`/`SUBSTRING`, `CONCAT`, `REPLACE`, `INSTR`, `COALESCE`, `NULLIF`,
+`CAST`, `ABS`/`FLOOR`/`CEIL`/`ROUND`/`SIGN`/`MOD`/`POWER`/`SQRT`, `GEO_DISTANCE`,
 `GEO_WITHIN`, `YEAR`/`MONTH`/`DAY`/`HOUR`/`MINUTE`/`SECOND`, `DATE_DIFF`, `NOW`) usable in
 `SELECT`/`WHERE`/`HAVING`/`ORDER BY`, `GROUP BY` by column/alias/expression, `HAVING`, multi-key
-`ORDER BY` by column/alias/expression (`ASC`/`DESC`), `LIMIT`, `COUNT`/`SUM`/`AVG`/`MIN`/`MAX`,
+`ORDER BY` by column/alias/expression (`ASC`/`DESC`), `LIMIT`, `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` over
+arbitrary expression arguments with optional `DISTINCT` (e.g. `SUM(a * b)`, `COUNT(DISTINCT x)`),
 `INSERT`/`UPDATE`/`DELETE`, `DESCRIBE`, `SHOW COLLECTIONS`/`SHOW INDEXES`, the `_key`/`_value`
 pseudo-columns, and `AS` aliases referenceable in `WHERE`/`HAVING`/`GROUP BY`/`ORDER BY`.
 
 **Not (yet) supported:** `RIGHT`/`FULL`/`CROSS` joins, non-equi join conditions as the *only*
-predicate, subqueries, `UNION`, window functions, `CASE`, unary minus on a non-literal, user-defined
-scalar functions beyond the built-ins above, aggregate arguments that are expressions (e.g.
-`SUM(a + b)`), time-zone-aware date handling (calendar fields are read in UTC), writing into nested
-fields, and DDL (`CREATE`/`DROP`). Identifiers are letters/digits/underscore; keywords are
-case-insensitive.
+predicate, subqueries, `UNION`, window functions, unary minus on a non-literal, user-defined
+scalar functions beyond the built-ins above, time-zone-aware date handling (calendar fields are read
+in UTC), writing into nested fields, and DDL (`CREATE`/`DROP`). Identifiers are
+letters/digits/underscore; keywords are case-insensitive.

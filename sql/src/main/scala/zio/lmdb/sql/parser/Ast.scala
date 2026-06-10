@@ -60,7 +60,8 @@ enum AggFunc { case Count, Sum, Avg, Min, Max }
 sealed trait SelectItem { def alias: Option[String] }
 object SelectItem {
   final case class Col(name: String, alias: Option[String] = None)                          extends SelectItem
-  final case class Agg(func: AggFunc, column: Option[String], alias: Option[String] = None) extends SelectItem
+  /** An aggregate over an expression argument (`arg = None` is `COUNT(*)`), optionally `DISTINCT`. */
+  final case class Agg(func: AggFunc, arg: Option[zio.lmdb.sql.parser.Expr], distinct: Boolean = false, alias: Option[String] = None) extends SelectItem
   /** A scalar expression projection, e.g. `GEO_DISTANCE(...)` or `LENGTH(name)`. Evaluated per row;
     * only valid in a non-aggregate `SELECT`. */
   final case class Expr(expr: zio.lmdb.sql.parser.Expr, alias: Option[String] = None)       extends SelectItem
@@ -94,10 +95,20 @@ object Expr {
   final case class Not(inner: Expr)                        extends Expr
   final case class Like(target: Expr, pattern: String)     extends Expr
   final case class IsNull(target: Expr, negated: Boolean)  extends Expr
+  /** `target [NOT] IN (item, …)` — membership test against an explicit value list. */
+  final case class In(target: Expr, items: List[Expr], negated: Boolean) extends Expr
+  /** `target [NOT] BETWEEN low AND high` — inclusive range test (`low <= target <= high`). */
+  final case class Between(target: Expr, low: Expr, high: Expr, negated: Boolean) extends Expr
   /** A scalar function call, e.g. `LENGTH(name)`. `name` is lower-cased. */
   final case class Func(name: String, args: List[Expr])    extends Expr
-  /** An aggregate reference inside an expression (only meaningful in HAVING), e.g. `COUNT(*)`. */
-  final case class Aggregate(func: AggFunc, column: Option[String]) extends Expr
+  /** A `CASE` expression. `subject = None` is the searched form (`CASE WHEN <cond> THEN <r> … END`,
+    * each branch condition a boolean); `subject = Some(e)` is the simple form (`CASE <e> WHEN <v>
+    * THEN <r> … END`, each branch value compared to `e` for equality). `default` is the optional
+    * `ELSE` (absent ⇒ `NULL` when no branch matches). */
+  final case class Case(subject: Option[Expr], branches: List[(Expr, Expr)], default: Option[Expr]) extends Expr
+  /** An aggregate reference inside an expression (e.g. in HAVING), e.g. `COUNT(*)`, `SUM(a + b)`,
+    * `COUNT(DISTINCT col)`. `arg = None` is `COUNT(*)`; `distinct` dedupes the argument values. */
+  final case class Aggregate(func: AggFunc, arg: Option[Expr], distinct: Boolean) extends Expr
 }
 
 sealed trait Literal
