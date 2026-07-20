@@ -663,6 +663,64 @@ lmdb(my-app)> DESCRIBE users;
 (3 rows)
 ```
 
+`SHOW INDEXES` also lists each index's declared mapping (its source collection and the fields its
+key is built from), when one has been declared:
+
+```text
+lmdb(my-app)> SHOW INDEXES;
+ name             | source | on
+------------------+--------+---------------
+ mediaByBag       | medias | bagId
+ mediaByTimestamp | medias | timestamp, _key
+(2 rows)
+```
+
+---
+
+## Query planning and indexes
+
+Declared indexes (attached in code with
+[`withDeclaredIndex`](lmdb-index.html#withdeclaredindex)) persist a machine-readable mapping —
+which collection they index and which record fields feed each component of their key. The engine
+uses those mappings to answer queries without scanning the whole collection:
+
+- **Equality / `BETWEEN` / `<` `<=` `>` `>=` pushdown** — `WHERE` conjuncts on indexed fields are
+  matched against each index by the **leftmost-prefix rule** (equalities on the leading key
+  components, then at most one range on the next component) and become a byte-range scan over the
+  index, followed by point-fetches of the matching records.
+- **`ORDER BY` / `LIMIT` in index order** — when the `ORDER BY` columns (all ascending) follow the
+  index's remaining key components, rows stream in index order and the sort buffer is skipped, so
+  `ORDER BY timestamp LIMIT 50` touches ~50 index entries instead of the whole collection.
+- **Primary-key pushdown** — `_key = …` / `_key IN (…)` become point fetches, and `_key` ranges
+  become a cursor range scan over the collection's own key order.
+- Everything the scan cannot serve stays a **residual filter**, evaluated per fetched row. Pushed
+  conjuncts are *not* re-evaluated: the index component's key ordering (e.g. instant semantics for a
+  timestamp component) is authoritative for them. A `coalesce(...)` component is the exception — its
+  scan is a superset, so its conjunct is re-checked.
+
+Only conjuncts of the form `column <op> literal` combined with `AND` are pushable; an `OR`, a
+function call, or a comparison between two columns falls back to a full scan (possibly combined with
+the pushable conjuncts around it). Indexes attached with the opaque `withIndex`/`withIndexFull`
+lambdas have no mapping and are never planned.
+
+`EXPLAIN <select>` shows the chosen access path without executing:
+
+```text
+lmdb(my-app)> EXPLAIN SELECT * FROM medias WHERE bagId = '018f...' ORDER BY timestamp LIMIT 50;
+ step   | detail
+--------+------------------------------------------------------
+ access | index range scan on mediaByBag [eq(bagId) ordered]
+ lookup | fetch matching records from medias by primary key
+ order  | scan order matches ORDER BY (no sort)
+ filter | none
+(4 rows)
+```
+
+{: .note }
+SQL writes (`INSERT`/`UPDATE`/`DELETE`) do **not** maintain declared indexes — index updaters are
+attached to the typed collection facade in application code. Mutate indexed collections through the
+application, or rebuild indexes (`rebuildIndexes()`) after SQL-side writes.
+
 ---
 
 ## Output formats
@@ -725,8 +783,10 @@ expressions, aggregates, expressions over aggregates, `AS` aliases), `DISTINCT`,
 `SELECT`/`WHERE`/`HAVING`/`ORDER BY`, `GROUP BY` by column/alias/expression, `HAVING`, multi-key
 `ORDER BY` by column/alias/expression (`ASC`/`DESC`), `LIMIT`, `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` over
 arbitrary expression arguments with optional `DISTINCT` (e.g. `SUM(a * b)`, `COUNT(DISTINCT x)`),
-`INSERT`/`UPDATE`/`DELETE`, `DESCRIBE`, `SHOW COLLECTIONS`/`SHOW INDEXES`, the `_key`/`_value`
-pseudo-columns, and `AS` aliases referenceable in `WHERE`/`HAVING`/`GROUP BY`/`ORDER BY`.
+`INSERT`/`UPDATE`/`DELETE`, `DESCRIBE`, `SHOW COLLECTIONS`/`SHOW INDEXES`, `EXPLAIN`, the
+`_key`/`_value` pseudo-columns, `AS` aliases referenceable in `WHERE`/`HAVING`/`GROUP BY`/`ORDER BY`,
+and index-aware planning over declared indexes (equality/range pushdown, `ORDER BY` in index order,
+primary-key pushdown).
 
 **Not (yet) supported:** `RIGHT`/`FULL`/`CROSS` joins, non-equi join conditions as the *only*
 predicate, subqueries, `UNION`, window functions, unary minus on a non-literal, user-defined

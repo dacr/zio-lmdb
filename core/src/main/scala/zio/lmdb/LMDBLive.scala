@@ -79,9 +79,7 @@ class LMDBLive(
       }
   }
 
-  /** Look up the persisted metadata entry for `name`, returning `None` if no entry exists yet
-    * (which happens for the metadata sub-collection itself and for collections written before the
-    * `MetaDataEntry` layout existed).
+  /** Look up the persisted metadata entry for `name`, returning `None` if no entry exists yet (which happens for the metadata sub-collection itself and for collections written before the `MetaDataEntry` layout existed).
     */
   private def metadataLookup(name: String): IO[StorageSystemError, Option[MetaDataEntry]] = {
     if (name == config.metaDataCollectionName) ZIO.succeed(None)
@@ -95,9 +93,8 @@ class LMDBLive(
 
   /** L2A drift detection. Compares the caller's expected schema against the persisted one.
     *
-    * Policy: opaque schemas on either side are treated as "no claim", so they never raise drift.
-    * This keeps the opaque fallback usable for legacy or schemaless data while still catching
-    * real disagreements between concrete (JsonSchema/ProtobufSchema) declarations.
+    * Policy: opaque schemas on either side are treated as "no claim", so they never raise drift. This keeps the opaque fallback usable for legacy or schemaless data while still catching real disagreements between concrete (JsonSchema/ProtobufSchema)
+    * declarations.
     */
   private def checkSchemaDrift(
     name: String,
@@ -107,11 +104,11 @@ class LMDBLive(
   ): IO[SchemaDrift, Unit] = {
     import SchemaArtifact._
     (persisted, expected) match {
-      case (None, _)                             => ZIO.unit
-      case (Some(OpaqueSchema(_)), _)            => ZIO.unit
-      case (_, OpaqueSchema(_))                  => ZIO.unit
+      case (None, _)                                      => ZIO.unit
+      case (Some(OpaqueSchema(_)), _)                     => ZIO.unit
+      case (_, OpaqueSchema(_))                           => ZIO.unit
       case (Some(p), e) if p.fingerprint == e.fingerprint => ZIO.unit
-      case (Some(p), e)                          =>
+      case (Some(p), e)                                   =>
         ZIO.fail(SchemaDrift(name, side, expectedFingerprint = e.fingerprint, actualFingerprint = p.fingerprint))
     }
   }
@@ -125,7 +122,11 @@ class LMDBLive(
     keySchema: SchemaArtifact,
     valueSchema: SchemaArtifact
   ): ZIO[Any, StorageSystemError, Unit] =
-    persistMetadata(MetaDataEntry.typed(name, kind, keySchema, valueSchema))
+    // Preserve a previously declared index mapping: it is written by a separate call
+    // (`indexDeclare`) and must survive the metadata refresh done by every create.
+    metadataLookup(name).flatMap { existing =>
+      persistMetadata(MetaDataEntry.typed(name, kind, keySchema, valueSchema).copy(indexMapping = existing.flatMap(_.indexMapping)))
+    }
 
   private def persistMetadata(entry: MetaDataEntry): ZIO[Any, StorageSystemError, Unit] = {
     upsertOverwrite(config.metaDataCollectionName, entry.collectionName, entry)
@@ -403,7 +404,7 @@ class LMDBLive(
 
   /** @inheritdoc */
   override def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): IO[CreateErrors, LMDBCollection[K, T]] = {
-    val typedMeta = metadataUpdate(name, CollectionKind.Regular, keySchema.artifact, valueSchema.artifact).mapError(e => e: CreateErrors)
+    val typedMeta     = metadataUpdate(name, CollectionKind.Regular, keySchema.artifact, valueSchema.artifact).mapError(e => e: CreateErrors)
     val allocateLogic = if (failIfExists) {
       collectionAllocate(name) *> typedMeta
     } else {
@@ -1171,13 +1172,77 @@ class LMDBLive(
     }
   }
 
-  /** Iterator that stops as soon as the LMDB cursor reaches a key whose raw bytes no longer carry
-    * `prefixBytes` as a byte-level prefix. Used by `streamPrefix` / `streamPrefixWithKeys`.
+  /** Iterator emitting raw (key, value) byte copies, stopping as soon as the cursor reaches a key `>=` `upperExclusive`. Used by `streamRawRange`.
+    */
+  private case class RawRangeIterator(
+    jiterator: java.util.Iterator[KeyVal[ByteBuffer]],
+    upperExclusive: Option[Array[Byte]]
+  ) extends Iterator[(Array[Byte], Array[Byte])] {
+
+    private var nextEntry: (Array[Byte], Array[Byte]) = null
+    private var nextLoaded: Boolean                   = false
+    private var done: Boolean                         = false
+
+    private def keyBelowUpper(keyBuf: ByteBuffer): Boolean =
+      upperExclusive.forall { upper =>
+        val position = keyBuf.position()
+        val len      = keyBuf.limit() - position
+        var i        = 0
+        var cmp      = 0
+        while (cmp == 0 && i < len && i < upper.length) {
+          cmp = (keyBuf.get(position + i) & 0xff) - (upper(i) & 0xff)
+          i += 1
+        }
+        if (cmp != 0) cmp < 0 else len < upper.length
+      }
+
+    private def copyOf(buf: ByteBuffer): Array[Byte] = {
+      val out = new Array[Byte](buf.remaining())
+      buf.duplicate().get(out)
+      out
+    }
+
+    private def advance(): Unit = {
+      if (done || !jiterator.hasNext) {
+        done = true
+        nextLoaded = true
+        nextEntry = null
+      } else {
+        val kv     = jiterator.next()
+        val keyBuf = kv.key()
+        if (!keyBelowUpper(keyBuf)) {
+          done = true
+          nextLoaded = true
+          nextEntry = null
+        } else {
+          nextEntry = (copyOf(keyBuf), copyOf(kv.`val`()))
+          nextLoaded = true
+        }
+      }
+    }
+
+    override def hasNext: Boolean = {
+      if (!nextLoaded) advance()
+      nextEntry != null
+    }
+
+    override def next(): (Array[Byte], Array[Byte]) = {
+      if (!nextLoaded) advance()
+      if (nextEntry == null) throw new NoSuchElementException("next on empty iterator")
+      val out = nextEntry
+      nextLoaded = false
+      nextEntry = null
+      out
+    }
+  }
+
+  /** Iterator that stops as soon as the LMDB cursor reaches a key whose raw bytes no longer carry `prefixBytes` as a byte-level prefix. Used by `streamPrefix` / `streamPrefixWithKeys`.
     */
   private case class PrefixKeyValueIterator[K, T](
     jiterator: java.util.Iterator[KeyVal[ByteBuffer]],
     prefixBytes: Array[Byte]
-  )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T]) extends Iterator[KeyValue[K, T]] {
+  )(implicit kodec: KeyCodec[K], codec: LMDBCodec[T])
+      extends Iterator[KeyValue[K, T]] {
 
     private var nextEntry: KeyValue[K, T] = null
     private var nextLoaded: Boolean       = false
@@ -1188,7 +1253,7 @@ class LMDBLive(
       val position = keyBuf.position()
       if (limit - position < prefixBytes.length) false
       else {
-        var i = 0
+        var i  = 0
         var ok = true
         while (ok && i < prefixBytes.length) {
           if (keyBuf.get(position + i) != prefixBytes(i)) ok = false
@@ -1347,6 +1412,42 @@ class LMDBLive(
       }
   }
 
+  /** @inheritdoc */
+  override def streamRawRange(
+    collectionName: CollectionName,
+    lowerInclusive: Option[Array[Byte]] = None,
+    upperExclusive: Option[Array[Byte]] = None
+  ): ZStream[Any, StreamErrors, (Array[Byte], Array[Byte])] = {
+    val result =
+      for {
+        db       <- getCollectionDbi(collectionName)
+        _        <- readSemaphore.withPermitScoped
+        txn      <- ZIO.acquireRelease(
+                      ZIO
+                        .attempt(env.txnRead())
+                        .mapError[StreamErrors](err => InternalError(s"Couldn't acquire read transaction on $collectionName: $err", Some(err)))
+                    )(txn =>
+                      ZIO
+                        .attempt(txn.close())
+                        .ignoreLogged
+                    )
+        lowerBB  <- ZIO.foreach(lowerInclusive)(borrowKeyBufferScoped(_)(KeyCodec.byteArrayKeyCodec))
+        iterable <- ZIO.acquireRelease(
+                      ZIO
+                        .attempt(db.iterate(txn, lowerBB.fold(KeyRange.all[ByteBuffer]())(KeyRange.atLeast)))
+                        .mapError[StreamErrors](err => InternalError(s"Couldn't acquire iterable on $collectionName: $err", Some(err)))
+                    )(cursor =>
+                      ZIO
+                        .attempt(cursor.close())
+                        .ignoreLogged
+                    )
+      } yield ZStream
+        .fromIterator(RawRangeIterator(iterable.iterator(), upperExclusive))
+        .mapError[StreamErrors](err => InternalError(s"Couldn't streamRawRange from $collectionName: $err", Some(err)))
+
+    ZStream.unwrapScoped(result).onExecutor(readExecutor)
+  }
+
   private def streamPrefixLogic[P, K, T](
     txn: Txn[ByteBuffer],
     dbi: Dbi[ByteBuffer],
@@ -1493,8 +1594,11 @@ class LMDBLive(
   }
 
   /** @inheritdoc */
-  override def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY], fromSchema: LMDBSchema[FROM_KEY], toSchema: LMDBSchema[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
-    val typedMeta = metadataUpdate(name, CollectionKind.Index, fromSchema.artifact, toSchema.artifact).mapError(e => e: IndexErrors)
+  override def indexCreate[FROM_KEY, TO_KEY](
+    name: IndexName,
+    failIfExists: Boolean
+  )(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY], fromSchema: LMDBSchema[FROM_KEY], toSchema: LMDBSchema[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] = {
+    val typedMeta     = metadataUpdate(name, CollectionKind.Index, fromSchema.artifact, toSchema.artifact).mapError(e => e: IndexErrors)
     val allocateLogic = if (failIfExists) {
       indexAllocate(name) *> typedMeta
     } else {
@@ -1514,6 +1618,17 @@ class LMDBLive(
       _      <- checkSchemaDrift(name, "fromKey", meta.flatMap(_.keySchema), fromSchema.artifact)
       _      <- checkSchemaDrift(name, "toKey", meta.flatMap(_.valueSchema), toSchema.artifact)
     } yield LMDBIndex[FROM_KEY, TO_KEY](name, None, this)
+  }
+
+  /** @inheritdoc */
+  override def indexDeclare(name: IndexName, mapping: IndexMapping): IO[IndexErrors, Unit] = {
+    for {
+      exists <- indexExists(name)
+      _      <- ZIO.cond[IndexNotFound, Unit](exists, (), IndexNotFound(name))
+      meta   <- metadataLookup(name).mapError(e => e: IndexErrors)
+      entry   = meta.getOrElse(MetaDataEntry.untyped(name, CollectionKind.Index))
+      _      <- persistMetadata(entry.copy(indexMapping = Some(mapping))).mapError(e => e: IndexErrors)
+    } yield ()
   }
 
   /** @inheritdoc */
@@ -2006,7 +2121,7 @@ class LMDBLive(
   }
 
   override def multiCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): IO[CreateErrors, LMDBMulti[K, T]] = {
-    val typedMeta = metadataUpdate(name, CollectionKind.Multi, keySchema.artifact, valueSchema.artifact).mapError(e => e: CreateErrors)
+    val typedMeta     = metadataUpdate(name, CollectionKind.Multi, keySchema.artifact, valueSchema.artifact).mapError(e => e: CreateErrors)
     val allocateLogic = if (failIfExists) {
       multiAllocate(name) *> typedMeta
     } else {
@@ -2131,15 +2246,15 @@ class LMDBLive(
                     val valueBytes = codec.encode(document)
                     if (keyBytes.length > env.getMaxKeySize) Left(OverSizedKey(key.toString, keyBytes.length, env.getMaxKeySize): ContainsErrors)
                     else {
-                      val keyBB   = fillKeyScratch(keyBytes)
-                      val valueBB = fillValueScratch(valueBytes)
+                      val keyBB                = fillKeyScratch(keyBytes)
+                      val valueBB              = fillValueScratch(valueBytes)
                       @scala.annotation.tailrec
                       def findValue(): Boolean = {
                         if (cursor.`val`().compareTo(valueBB) == 0) true
                         else if (cursor.seek(SeekOp.MDB_NEXT_DUP)) findValue()
                         else false
                       }
-                      val result  = if (cursor.get(keyBB, GetOp.MDB_SET)) findValue() else false
+                      val result               = if (cursor.get(keyBB, GetOp.MDB_SET)) findValue() else false
                       Right(result)
                     }
                   }

@@ -479,10 +479,8 @@ trait LMDB {
 
   /** Stream all collection records whose key starts with the byte-encoding of the given prefix.
     *
-    * The prefix is encoded with its own `KeyCodec[P]`. Keys are decoded with `KeyCodec[K]`. The
-    * stream terminates as soon as the cursor reaches a key that no longer carries the prefix as
-    * a byte-level prefix. This makes typical "all (a, b, *)" scans cursor-backed and O(matches +
-    * log n).
+    * The prefix is encoded with its own `KeyCodec[P]`. Keys are decoded with `KeyCodec[K]`. The stream terminates as soon as the cursor reaches a key that no longer carries the prefix as a byte-level prefix. This makes typical "all (a, b, *)" scans
+    * cursor-backed and O(matches + log n).
     * @param collectionName
     *   the collection name
     * @param prefix
@@ -520,6 +518,23 @@ trait LMDB {
     prefix: P
   )(implicit pcodec: KeyCodec[P], kcodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[Any, StreamErrors, (K, T)]
 
+  /** Stream raw (key bytes, value bytes) pairs of a collection or index over a byte range, in key order — the cursor-backed primitive behind index/key range scans (e.g. the SQL query planner). On a DUPSORT index every (key, duplicate-value) pair is
+    * emitted, duplicates in value order.
+    * @param collectionName
+    *   the collection or index name
+    * @param lowerInclusive
+    *   start at the first key `>=` these bytes (default: from the beginning)
+    * @param upperExclusive
+    *   stop before the first key `>=` these bytes (default: to the end)
+    * @return
+    *   the stream of raw (key, value) byte pairs
+    */
+  def streamRawRange(
+    collectionName: CollectionName,
+    lowerInclusive: Option[Array[Byte]] = None,
+    upperExclusive: Option[Array[Byte]] = None
+  ): ZStream[Any, StreamErrors, (Array[Byte], Array[Byte])]
+
   /** Create an index
     * @param name
     *   the index name
@@ -532,7 +547,12 @@ trait LMDB {
     * @return
     *   the index helper facade
     */
-  def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY], fromSchema: LMDBSchema[FROM_KEY], toSchema: LMDBSchema[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
+  def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true)(implicit
+    keyCodec: KeyCodec[FROM_KEY],
+    toKeyCodec: KeyCodec[TO_KEY],
+    fromSchema: LMDBSchema[FROM_KEY],
+    toSchema: LMDBSchema[TO_KEY]
+  ): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
 
   /** Get an index helper facade.
     * @param name
@@ -545,6 +565,15 @@ trait LMDB {
     *   the index helper facade
     */
   def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY], fromSchema: LMDBSchema[FROM_KEY], toSchema: LMDBSchema[TO_KEY]): IO[IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]]
+
+  /** Persist the declarative mapping of an existing index (which collection it indexes and how its key components are derived from a record). Usually called through `LMDBCollection.withDeclaredIndex` rather than directly. Redeclaring overwrites the
+    * previous mapping.
+    * @param name
+    *   the index name
+    * @param mapping
+    *   the declarative index mapping
+    */
+  def indexDeclare(name: IndexName, mapping: IndexMapping): IO[IndexErrors, Unit]
 
   /** Check if an index exists
     * @param name
@@ -874,7 +903,8 @@ object LMDB {
     * @return
     *   the collection helper facade
     */
-  def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): ZIO[LMDB, CreateErrors, LMDBCollection[K, T]] = ZIO.serviceWithZIO(_.collectionCreate(name, failIfExists))
+  def collectionCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): ZIO[LMDB, CreateErrors, LMDBCollection[K, T]] =
+    ZIO.serviceWithZIO(_.collectionCreate(name, failIfExists))
 
   /** Create a collection
     *
@@ -930,7 +960,8 @@ object LMDB {
     * @return
     *   the multi-collection helper facade
     */
-  def multiCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): ZIO[LMDB, CreateErrors, LMDBMulti[K, T]] = ZIO.serviceWithZIO(_.multiCreate(name, failIfExists))
+  def multiCreate[K, T](name: CollectionName, failIfExists: Boolean = true)(implicit kodec: KeyCodec[K], codec: LMDBCodec[T], keySchema: LMDBSchema[K], valueSchema: LMDBSchema[T]): ZIO[LMDB, CreateErrors, LMDBMulti[K, T]] =
+    ZIO.serviceWithZIO(_.multiCreate(name, failIfExists))
 
   /** Get a multi-collection helper facade.
     *
@@ -1305,6 +1336,15 @@ object LMDB {
   )(implicit pcodec: KeyCodec[P], kcodec: KeyCodec[K], codec: LMDBCodec[T]): ZStream[LMDB, StreamErrors, (K, T)] =
     ZStream.serviceWithStream(_.streamPrefixWithKeys[P, K, T](collectionName, prefix))
 
+  /** Stream raw (key bytes, value bytes) pairs of a collection or index over a byte range.
+    */
+  def streamRawRange(
+    collectionName: CollectionName,
+    lowerInclusive: Option[Array[Byte]] = None,
+    upperExclusive: Option[Array[Byte]] = None
+  ): ZStream[LMDB, StreamErrors, (Array[Byte], Array[Byte])] =
+    ZStream.serviceWithStream(_.streamRawRange(collectionName, lowerInclusive, upperExclusive))
+
   /** Create an index
     * @param name
     *   the index name
@@ -1317,7 +1357,12 @@ object LMDB {
     * @return
     *   the index helper facade
     */
-  def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY], fromSchema: LMDBSchema[FROM_KEY], toSchema: LMDBSchema[TO_KEY]): ZIO[LMDB, IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] =
+  def indexCreate[FROM_KEY, TO_KEY](name: IndexName, failIfExists: Boolean = true)(implicit
+    keyCodec: KeyCodec[FROM_KEY],
+    toKeyCodec: KeyCodec[TO_KEY],
+    fromSchema: LMDBSchema[FROM_KEY],
+    toSchema: LMDBSchema[TO_KEY]
+  ): ZIO[LMDB, IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] =
     ZIO.serviceWithZIO(_.indexCreate(name, failIfExists))
 
   /** Get an index helper facade.
@@ -1332,6 +1377,15 @@ object LMDB {
     */
   def indexGet[FROM_KEY, TO_KEY](name: IndexName)(implicit keyCodec: KeyCodec[FROM_KEY], toKeyCodec: KeyCodec[TO_KEY], fromSchema: LMDBSchema[FROM_KEY], toSchema: LMDBSchema[TO_KEY]): ZIO[LMDB, IndexErrors, LMDBIndex[FROM_KEY, TO_KEY]] =
     ZIO.serviceWithZIO(_.indexGet(name))
+
+  /** Persist the declarative mapping of an existing index.
+    * @param name
+    *   the index name
+    * @param mapping
+    *   the declarative index mapping
+    */
+  def indexDeclare(name: IndexName, mapping: IndexMapping): ZIO[LMDB, IndexErrors, Unit] =
+    ZIO.serviceWithZIO(_.indexDeclare(name, mapping))
 
   /** Check if an index exists
     * @param name

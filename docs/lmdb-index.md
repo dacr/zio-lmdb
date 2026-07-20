@@ -186,6 +186,43 @@ def withIndexFull[IK, IV](index: LMDBIndex[IK, IV])(extractor: (K, T) => Iterabl
 
 Generic variant when the index target value should differ from the collection's primary key. The extractor receives both the collection key and the value, and returns `(indexKey, indexValue)` pairs.
 
+### withDeclaredIndex
+
+```scala
+def withDeclaredIndex[IK, IV](index: LMDBIndex[IK, IV])(from: IndexKeySpec[K, T, IK], to: IndexKeySpec[K, T, IV]): IO[IndexErrors, LMDBCollection[K, T]]
+```
+
+Like `withIndexFull`, but each key component is **declared**: a field path (persisted in the index's metadata) paired with the typed accessor that computes it. The write path behaves exactly like `withIndexFull`; in addition, the declaration is stored as an `IndexMapping` in the index's `MetaDataEntry`, which is what lets the [SQL engine](sql.html)'s query planner serve `WHERE` / `ORDER BY` clauses from the index instead of scanning the collection.
+
+Components are built with the `IdxKey` DSL and combined with `IdxKey.of` / `IdxKey.tuple` / `IdxKey.tuple3` / `IdxKey.tuple4` (matching the tuple `KeyCodec`s):
+
+- `IdxKey.field("path")((k, t) => …)` — a value field that is always present (the path may be dotted for nested fields);
+- `IdxKey.fieldOpt("path")((k, t) => Option(…))` — an optional field; a `None` leaves the record unindexed;
+- `IdxKey.coalesce("p1", "p2", …)((k, t) => …)` — the first non-null of several fields;
+- `IdxKey.primaryKey` — the record's own key;
+- `IdxKey.opaque("hint")((k, t) => …)` — custom logic with no declarative form (documented, but not usable by the planner).
+
+```scala
+case class Media(originalId: UUID, timestamp: OffsetDateTime, bagId: Option[UUID]) derives LMDBCodecJson
+
+for {
+  byTimestamp <- lmdb.indexCreate[(Instant, UUID), UUID]("mediaByTimestamp", failIfExists = false)
+  byBag       <- lmdb.indexCreate[UUID, (Instant, UUID)]("mediaByBag", failIfExists = false)
+  medias      <- lmdb
+                   .collectionCreate[UUID, Media]("medias", failIfExists = false)
+                   .flatMap(_.withDeclaredIndex(byTimestamp)(
+                     from = IdxKey.tuple(IdxKey.field("timestamp")((_, m) => m.timestamp.toInstant), IdxKey.primaryKey),
+                     to   = IdxKey.of(IdxKey.primaryKey)
+                   ))
+                   .flatMap(_.withDeclaredIndex(byBag)(
+                     from = IdxKey.of(IdxKey.fieldOpt("bagId")((_, m) => m.bagId)),
+                     to   = IdxKey.tuple(IdxKey.field("timestamp")((_, m) => m.timestamp.toInstant), IdxKey.primaryKey)
+                   ))
+} yield medias
+```
+
+The declared path and the accessor live side by side on purpose: the path must describe what the accessor reads (that contract is not machine-checked — keep them in sync when the model evolves). Redeclaring an index overwrites its persisted mapping, and databases whose indexes have no mapping keep working — queries just fall back to full scans.
+
 ---
 
 ## Transactions

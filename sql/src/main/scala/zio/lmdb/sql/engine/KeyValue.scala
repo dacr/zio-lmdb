@@ -20,9 +20,8 @@ import zio.lmdb.json.JValue
 import java.time.Instant
 import java.util.UUID
 
-/** The runtime, type-erased decoding of a key — the dynamic counterpart of the static key type,
-  * obtained from the bytes via the collection's recorded `keyId`. Carries a `JValue` projection (so
-  * keys flow through the same row machinery as values) and a human render for display.
+/** The runtime, type-erased decoding of a key — the dynamic counterpart of the static key type, obtained from the bytes via the collection's recorded `keyId`. Carries a `JValue` projection (so keys flow through the same row machinery as values) and
+  * a human render for display.
   */
 sealed trait KeyValue {
   def toJValue: JValue
@@ -30,15 +29,21 @@ sealed trait KeyValue {
 }
 
 object KeyValue {
-  final case class KStr(value: String)     extends KeyValue { def toJValue = JValue.StringV(value);     def render = value          }
-  final case class KLong(value: Long)      extends KeyValue { def toJValue = JValue.LongV(value);       def render = value.toString }
-  final case class KUuid(value: UUID)      extends KeyValue { def toJValue = JValue.IdentifierV(value); def render = value.toString }
-  final case class KInstant(value: Instant) extends KeyValue { def toJValue = JValue.InstantV(value);   def render = value.toString }
+  final case class KStr(value: String)      extends KeyValue { def toJValue = JValue.StringV(value); def render = value              }
+  final case class KLong(value: Long)       extends KeyValue { def toJValue = JValue.LongV(value); def render = value.toString       }
+  final case class KUuid(value: UUID)       extends KeyValue { def toJValue = JValue.IdentifierV(value); def render = value.toString }
+  final case class KInstant(value: Instant) extends KeyValue { def toJValue = JValue.InstantV(value); def render = value.toString    }
+
+  /** A composite (tuple) key, decoded component by component. */
+  final case class KTuple(values: List[KeyValue]) extends KeyValue {
+    def toJValue = JValue.ListV(values.map(_.toJValue))
+    def render   = values.map(_.render).mkString("(", ", ", ")")
+  }
 
   /** Fallback for keys whose codec is unknown/unloaded or non-invertible (e.g. a UCA sort key). */
   final case class KBytes(value: Array[Byte]) extends KeyValue {
-    private def hex   = value.iterator.map(b => f"${b & 0xff}%02x").mkString
-    def toJValue      = JValue.StringV(s"0x$hex")
-    def render        = s"0x$hex"
+    private def hex = value.iterator.map(b => f"${b & 0xff}%02x").mkString
+    def toJValue    = JValue.StringV(s"0x$hex")
+    def render      = s"0x$hex"
   }
 }

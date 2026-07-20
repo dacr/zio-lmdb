@@ -19,21 +19,52 @@ import fastparse.*
 import fastparse.MultiLineWhitespace.*
 import zio.lmdb.sql.SqlError
 
-/** fastparse grammar for the L2C SQL subset. Pure `String => Either[SqlError.Parse, Statement]`;
-  * no ZIO, no LMDB. Keywords are case-insensitive; identifiers are letters/digits/underscore (so
-  * the `_key` pseudo-column is a valid identifier).
+/** fastparse grammar for the L2C SQL subset. Pure `String => Either[SqlError.Parse, Statement]`; no ZIO, no LMDB. Keywords are case-insensitive; identifiers are letters/digits/underscore (so the `_key` pseudo-column is a valid identifier).
   */
 object SqlParser {
 
   private val reserved: Set[String] =
-    Set("select", "distinct", "as", "from", "join", "inner", "left", "outer", "on", "where", "group", "having", "order", "by", "asc", "desc", "limit",
-        "insert", "into", "values", "update", "set", "delete", "describe", "show", "collections", "indexes", "and", "or", "not",
-        "like", "is", "null", "true", "false")
+    Set(
+      "select",
+      "distinct",
+      "as",
+      "from",
+      "join",
+      "inner",
+      "left",
+      "outer",
+      "on",
+      "where",
+      "group",
+      "having",
+      "order",
+      "by",
+      "asc",
+      "desc",
+      "limit",
+      "insert",
+      "into",
+      "values",
+      "update",
+      "set",
+      "delete",
+      "describe",
+      "show",
+      "collections",
+      "indexes",
+      "and",
+      "or",
+      "not",
+      "like",
+      "is",
+      "null",
+      "true",
+      "false"
+    )
 
-  /** A column reference as a dotted path: a bare column (`col`), a table-qualified column
-    * (`alias.col`), or a nested value path of any depth (`alias.field.sub`, `field.sub.leaf`). The
-    * first segment may be a table alias or a pseudo-column (`_key`/`_value`); any further segments
-    * index into nested object fields. */
+  /** A column reference as a dotted path: a bare column (`col`), a table-qualified column (`alias.col`), or a nested value path of any depth (`alias.field.sub`, `field.sub.leaf`). The first segment may be a table alias or a pseudo-column
+    * (`_key`/`_value`); any further segments index into nested object fields.
+    */
   private def colName[$: P]: P[String] =
     P(ident ~~ ("." ~~ ident).repX).map { case (head, tail) => (head +: tail).mkString(".") }
 
@@ -70,14 +101,14 @@ object SqlParser {
   private def primary[$: P]: P[Expr] =
     P(("(" ~ expr ~ ")") | caseExpr | castExpr | aggExpr | funcExpr | literal.map(Expr.Lit(_)) | colName.map(Expr.Col(_)))
 
-  /** `CAST(<expr> AS <type>)` — desugars to the `cast` scalar function with the target type carried as
-    * a string literal second argument, so the engine handles it through `evalFunc` with no new node. */
+  /** `CAST(<expr> AS <type>)` — desugars to the `cast` scalar function with the target type carried as a string literal second argument, so the engine handles it through `evalFunc` with no new node.
+    */
   private def castExpr[$: P]: P[Expr] =
     P(kw("cast") ~ "(" ~ expr ~ kw("as") ~ ident ~ ")").map { case (e, tpe) => Expr.Func("cast", List(e, Expr.Lit(Literal.StrLit(tpe.toLowerCase)))) }
 
-  /** `CASE [<subject>] (WHEN <expr> THEN <expr>)+ [ELSE <expr>] END`. The optional subject is guarded
-    * by `!kw("when")` so the searched form (`CASE WHEN …`) does not read `WHEN` as the subject; this
-    * keeps `case`/`when`/`then`/`else`/`end` out of the reserved set (still usable as column names). */
+  /** `CASE [<subject>] (WHEN <expr> THEN <expr>)+ [ELSE <expr>] END`. The optional subject is guarded by `!kw("when")` so the searched form (`CASE WHEN …`) does not read `WHEN` as the subject; this keeps `case`/`when`/`then`/`else`/`end` out of the
+    * reserved set (still usable as column names).
+    */
   private def caseExpr[$: P]: P[Expr] =
     P(kw("case") ~ (!kw("when") ~ expr).? ~ whenClause.rep(1) ~ (kw("else") ~ expr).? ~ kw("end"))
       .map { case (subject, branches, default) => Expr.Case(subject, branches.toList, default) }
@@ -85,19 +116,17 @@ object SqlParser {
   private def whenClause[$: P]: P[(Expr, Expr)] =
     P(kw("when") ~ expr ~ kw("then") ~ expr).map { case (c, r) => (c, r) }
 
-  /** An aggregate reference: `COUNT(*)`, `SUM(<expr>)`, `AVG(a + b)`, `COUNT(DISTINCT col)`, … The
-    * argument is any scalar expression; an optional leading `DISTINCT` dedupes the argument values. */
+  /** An aggregate reference: `COUNT(*)`, `SUM(<expr>)`, `AVG(a + b)`, `COUNT(DISTINCT col)`, … The argument is any scalar expression; an optional leading `DISTINCT` dedupes the argument values.
+    */
   private def aggExpr[$: P]: P[Expr] =
     P(
       (kw("count") ~ "(" ~ "*" ~ ")").map(_ => Expr.Aggregate(AggFunc.Count, None, distinct = false)) |
         (aggFunc ~ "(" ~ distinctKw ~ expr ~ ")").map { case (f, dis, e) => Expr.Aggregate(f, Some(e), dis) }
     )
 
-  /** A scalar function call `name(arg, …)` — e.g. `LENGTH(name)`, `YEAR(timestamp)`, `NOW()`,
-    * `GEO_DISTANCE(lat1, lon1, lat2, lon2)`, `GEO_WITHIN(point, lat, lon, radius)`. Function names are
-    * case-insensitive and not reserved, so an identifier not followed by `(` falls through to a column
-    * reference; aggregates are matched earlier in `primary`. Zero-argument calls (e.g. `NOW()`) are
-    * allowed. */
+  /** A scalar function call `name(arg, …)` — e.g. `LENGTH(name)`, `YEAR(timestamp)`, `NOW()`, `GEO_DISTANCE(lat1, lon1, lat2, lon2)`, `GEO_WITHIN(point, lat, lon, radius)`. Function names are case-insensitive and not reserved, so an identifier not
+    * followed by `(` falls through to a column reference; aggregates are matched earlier in `primary`. Zero-argument calls (e.g. `NOW()`) are allowed.
+    */
   private def funcExpr[$: P]: P[Expr] =
     P(ident ~ "(" ~ expr.rep(0, sep = ",") ~ ")").map { case (name, args) => Expr.Func(name.toLowerCase, args.toList) }
 
@@ -123,9 +152,9 @@ object SqlParser {
       ).?
     ).map { case (e, fOpt) => fOpt.map(_(e)).getOrElse(e) }
 
-  /** A predicate that may be prefixed by `NOT`: `LIKE`, `IN`, or `BETWEEN`. Returns a builder taking
-    * the already-parsed left operand and the `NOT` flag. `LIKE` has no negated AST node, so a `NOT
-    * LIKE` is wrapped in `Expr.Not`; `IN`/`BETWEEN` carry the flag natively. */
+  /** A predicate that may be prefixed by `NOT`: `LIKE`, `IN`, or `BETWEEN`. Returns a builder taking the already-parsed left operand and the `NOT` flag. `LIKE` has no negated AST node, so a `NOT LIKE` is wrapped in `Expr.Not`; `IN`/`BETWEEN` carry
+    * the flag natively.
+    */
   private def negatablePred[$: P]: P[(Expr, Boolean) => Expr] =
     P(
       (kw("like") ~ sqlString).map(p => (e: Expr, neg: Boolean) => if (neg) Expr.Not(Expr.Like(e, p)) else Expr.Like(e, p)) |
@@ -150,8 +179,8 @@ object SqlParser {
   /** Optional `AS <name>` column alias. */
   private def aliasOpt[$: P]: P[Option[String]] = P((kw("as") ~ ident).?)
 
-  /** A projected item: any scalar expression, classified into a plain column, an aggregate, or a
-    * general expression (the last covers `GEO_DISTANCE(...)`, `LENGTH(...)`, …). */
+  /** A projected item: any scalar expression, classified into a plain column, an aggregate, or a general expression (the last covers `GEO_DISTANCE(...)`, `LENGTH(...)`, …).
+    */
   private def selectItem[$: P]: P[SelectItem] =
     P(expr ~ aliasOpt).map {
       case (Expr.Col(n), al)             => SelectItem.Col(n, al)
@@ -173,13 +202,13 @@ object SqlParser {
   private def distinctKw[$: P]: P[Boolean] =
     P((kw("distinct").map(_ => true)).?).map(_.getOrElse(false))
 
-  /** `GROUP BY <expr> [, <expr>]…` — each key may be a column, a (qualified/nested) path, an output
-    * alias, or any scalar expression (e.g. `YEAR(timestamp)`). */
+  /** `GROUP BY <expr> [, <expr>]…` — each key may be a column, a (qualified/nested) path, an output alias, or any scalar expression (e.g. `YEAR(timestamp)`).
+    */
   private def groupByClause[$: P]: P[List[Expr]] =
     P(kw("group") ~ kw("by") ~ expr.rep(1, sep = ",")).map(_.toList)
 
-  /** `<collection> [[AS] <alias>]`. The alias parser stops at keywords (reserved), so a missing alias
-    * followed by JOIN/WHERE/… is handled naturally. */
+  /** `<collection> [[AS] <alias>]`. The alias parser stops at keywords (reserved), so a missing alias followed by JOIN/WHERE/… is handled naturally.
+    */
   private def tableRef[$: P]: P[TableRef] =
     P(ident ~ (kw("as").? ~ ident).?).map { case (name, alias) => TableRef(name, alias) }
 
@@ -213,8 +242,11 @@ object SqlParser {
   private def showStmt[$: P]: P[Statement.Show] =
     P(kw("show") ~ (kw("collections").map(_ => ShowTarget.Collections) | kw("indexes").map(_ => ShowTarget.Indexes))).map(Statement.Show(_))
 
+  private def explainStmt[$: P]: P[Statement.Explain] =
+    P(kw("explain") ~ selectStmt).map(Statement.Explain(_))
+
   private def statement[$: P]: P[Statement] =
-    P(selectStmt | insertStmt | updateStmt | deleteStmt | describeStmt | showStmt)
+    P(explainStmt | selectStmt | insertStmt | updateStmt | deleteStmt | describeStmt | showStmt)
 
   private def top[$: P]: P[Statement] = P(Start ~ statement ~ ";".? ~ End)
 

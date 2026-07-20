@@ -20,6 +20,7 @@ import zio.stream.ZStream
 import zio.lmdb.*
 import zio.lmdb.json.JValue
 import zio.lmdb.json.JValue.*
+import zio.lmdb.keycodecs.TupleKeyLayout
 import zio.lmdb.keycodecs.geo.GEOTools
 import zio.lmdb.schema.SchemaArtifact
 import zio.lmdb.sql.SqlError
@@ -31,17 +32,15 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets.UTF_8
 import scala.collection.immutable.ListMap
 
-/** The L2C execution engine: `parse → bind (catalog) → execute` over dynamic `(KeyValue, JValue)`
-  * rows. Reads use the `[Array[Byte], Array[Byte]]` escape hatch and decode generically (key via the
-  * recorded `keyId`, value as plain JSON), so no static `K`/`T` is needed. Reads stream; `ORDER BY`
-  * is the one buffering operator.
+/** The L2C execution engine: `parse → bind (catalog) → execute` over dynamic `(KeyValue, JValue)` rows. Reads use the `[Array[Byte], Array[Byte]]` escape hatch and decode generically (key via the recorded `keyId`, value as plain JSON), so no static
+  * `K`/`T` is needed. Reads stream; `ORDER BY` is the one buffering operator.
   */
 object SqlEngine {
 
   /** Raw value bytes, used verbatim. */
   private given rawValueCodec: LMDBCodec[Array[Byte]] = new LMDBCodec[Array[Byte]] {
-    override def encode(value: Array[Byte]): Array[Byte]                            = value
-    override def decode(valueBytes: ByteBuffer): Either[String, Array[Byte]]        = {
+    override def encode(value: Array[Byte]): Array[Byte]                     = value
+    override def decode(valueBytes: ByteBuffer): Either[String, Array[Byte]] = {
       val a = new Array[Byte](valueBytes.remaining()); valueBytes.get(a); Right(a)
     }
   }
@@ -58,6 +57,7 @@ object SqlEngine {
   private def execute(lmdb: LMDB, stmt: Statement): IO[SqlError, QueryResult] =
     stmt match {
       case s: Statement.Select   => selectResult(lmdb, s)
+      case e: Statement.Explain  => explainResult(lmdb, e.select)
       case i: Statement.Insert   => Catalog.lookup(lmdb, i.into).flatMap(insertResult(lmdb, _, i))
       case u: Statement.Update   => Catalog.lookup(lmdb, u.table).flatMap(updateResult(lmdb, _, u))
       case d: Statement.Delete   => Catalog.lookup(lmdb, d.from).flatMap(deleteResult(lmdb, _, d))
@@ -67,14 +67,12 @@ object SqlEngine {
 
   // ── SELECT ─────────────────────────────────────────────────────────────────────────────────
 
-  /** A read row, looked up by (possibly `alias.`-qualified) column name. This abstraction unifies
-    * single-table and join rows, so WHERE / ORDER BY / GROUP BY / projection share one pipeline. */
+  /** A read row, looked up by (possibly `alias.`-qualified) column name. This abstraction unifies single-table and join rows, so WHERE / ORDER BY / GROUP BY / projection share one pipeline.
+    */
   private type Row    = String => JValue
   private type Source = (String, CollectionInfo)
 
-  /** Three shapes: an aggregate/`GROUP BY` query (buffers per-group state), a `DISTINCT` query
-    * (buffers to de-duplicate), or a plain streaming `SELECT` (the only one that never buffers; a
-    * JOIN buffers regardless).
+  /** Three shapes: an aggregate/`GROUP BY` query (buffers per-group state), a `DISTINCT` query (buffers to de-duplicate), or a plain streaming `SELECT` (the only one that never buffers; a JOIN buffers regardless).
     */
   private def selectResult(lmdb: LMDB, sel0: Statement.Select): IO[SqlError, QueryResult] = {
     val sel = resolveSelectAliases(sel0)
@@ -88,8 +86,8 @@ object SqlEngine {
     } yield result
   }
 
-  /** The row sources in order: FROM first, then each JOIN, paired with the alias used to qualify its
-    * columns (the explicit alias, else the collection name). */
+  /** The row sources in order: FROM first, then each JOIN, paired with the alias used to qualify its columns (the explicit alias, else the collection name).
+    */
   private def resolveSources(lmdb: LMDB, sel: Statement.Select): IO[SqlError, List[Source]] =
     Catalog.lookup(lmdb, sel.from).flatMap { fromInfo =>
       ZIO
@@ -97,9 +95,9 @@ object SqlEngine {
         .map(joinSources => (sel.fromAlias.getOrElse(sel.from), fromInfo) :: joinSources)
     }
 
-  /** HAVING and aggregate projections both put the query on the grouping path. An aggregate counts
-    * even when nested inside an expression projection (`ROUND(AVG(x), 2)`, `SUM(a) / COUNT(*)`) or an
-    * ORDER BY key — otherwise a whole-table aggregate written that way is wrongly streamed per row. */
+  /** HAVING and aggregate projections both put the query on the grouping path. An aggregate counts even when nested inside an expression projection (`ROUND(AVG(x), 2)`, `SUM(a) / COUNT(*)`) or an ORDER BY key — otherwise a whole-table aggregate
+    * written that way is wrongly streamed per row.
+    */
   private def isAggregate(sel: Statement.Select): Boolean =
     sel.groupBy.nonEmpty || sel.having.isDefined ||
       (sel.projection match {
@@ -112,19 +110,17 @@ object SqlEngine {
     if (where.toList.flatMap(aggsInExpr).isEmpty) Right(())
     else Left(SqlError.Unsupported("aggregate functions are not allowed in WHERE (use HAVING)"))
 
-  /** Make `AS` aliases referenceable in `WHERE`, `HAVING`, `GROUP BY`, and `ORDER BY` — a friendly
-    * extension to standard SQL, which only exposes them in `ORDER BY`. Each explicit alias is
-    * substituted by the expression it names, so `… geo_distance(...) AS dist … WHERE dist <= n` reuses
-    * the projected expression, and `SELECT year(ts) AS y … GROUP BY y` groups by `year(ts)`. An alias
-    * that resolves to an aggregate is then handled by the usual validation (e.g. an aggregate alias in
-    * `WHERE` is still rejected). */
+  /** Make `AS` aliases referenceable in `WHERE`, `HAVING`, `GROUP BY`, and `ORDER BY` — a friendly extension to standard SQL, which only exposes them in `ORDER BY`. Each explicit alias is substituted by the expression it names, so
+    * `… geo_distance(...) AS dist … WHERE dist <= n` reuses the projected expression, and `SELECT year(ts) AS y … GROUP BY y` groups by `year(ts)`. An alias that resolves to an aggregate is then handled by the usual validation (e.g. an aggregate
+    * alias in `WHERE` is still rejected).
+    */
   private def resolveSelectAliases(sel: Statement.Select): Statement.Select = {
     val aliases = aliasBindings(sel.projection)
     if (aliases.isEmpty) sel
     else
       sel.copy(
-        where   = sel.where.map(substituteAliases(_, aliases)),
-        having  = sel.having.map(substituteAliases(_, aliases)),
+        where = sel.where.map(substituteAliases(_, aliases)),
+        having = sel.having.map(substituteAliases(_, aliases)),
         groupBy = sel.groupBy.map(substituteAliases(_, aliases)),
         orderBy = sel.orderBy.map(ob => ob.copy(expr = substituteAliases(ob.expr, aliases)))
       )
@@ -136,31 +132,35 @@ object SqlEngine {
       case Projection.Star         => Map.empty
       case Projection.Items(items) =>
         items.collect {
-          case SelectItem.Col(n, Some(a))    => a -> (Expr.Col(n): Expr)
-          case SelectItem.Expr(e, Some(a))   => a -> e
+          case SelectItem.Col(n, Some(a))       => a -> (Expr.Col(n): Expr)
+          case SelectItem.Expr(e, Some(a))      => a -> e
           case SelectItem.Agg(f, c, d, Some(a)) => a -> (Expr.Aggregate(f, c, d): Expr)
         }.toMap
     }
 
-  /** Replace each `Expr.Col(alias)` with the expression the alias names (one level only — the
-    * replacement is a SELECT expression and cannot itself reference an alias). */
+  /** Replace each `Expr.Col(alias)` with the expression the alias names (one level only — the replacement is a SELECT expression and cannot itself reference an alias).
+    */
   private def substituteAliases(e: Expr, aliases: Map[String, Expr]): Expr =
     e match {
-      case Expr.Col(n)          => aliases.getOrElse(n, e)
-      case Expr.Lit(_)          => e
-      case Expr.Aggregate(_, _, _) => e
-      case Expr.Arith(op, l, r) => Expr.Arith(op, substituteAliases(l, aliases), substituteAliases(r, aliases))
-      case Expr.Cmp(op, l, r)   => Expr.Cmp(op, substituteAliases(l, aliases), substituteAliases(r, aliases))
-      case Expr.And(l, r)       => Expr.And(substituteAliases(l, aliases), substituteAliases(r, aliases))
-      case Expr.Or(l, r)        => Expr.Or(substituteAliases(l, aliases), substituteAliases(r, aliases))
-      case Expr.Not(x)          => Expr.Not(substituteAliases(x, aliases))
-      case Expr.Like(t, p)      => Expr.Like(substituteAliases(t, aliases), p)
-      case Expr.IsNull(t, neg)  => Expr.IsNull(substituteAliases(t, aliases), neg)
+      case Expr.Col(n)                  => aliases.getOrElse(n, e)
+      case Expr.Lit(_)                  => e
+      case Expr.Aggregate(_, _, _)      => e
+      case Expr.Arith(op, l, r)         => Expr.Arith(op, substituteAliases(l, aliases), substituteAliases(r, aliases))
+      case Expr.Cmp(op, l, r)           => Expr.Cmp(op, substituteAliases(l, aliases), substituteAliases(r, aliases))
+      case Expr.And(l, r)               => Expr.And(substituteAliases(l, aliases), substituteAliases(r, aliases))
+      case Expr.Or(l, r)                => Expr.Or(substituteAliases(l, aliases), substituteAliases(r, aliases))
+      case Expr.Not(x)                  => Expr.Not(substituteAliases(x, aliases))
+      case Expr.Like(t, p)              => Expr.Like(substituteAliases(t, aliases), p)
+      case Expr.IsNull(t, neg)          => Expr.IsNull(substituteAliases(t, aliases), neg)
       case Expr.In(t, its, neg)         => Expr.In(substituteAliases(t, aliases), its.map(substituteAliases(_, aliases)), neg)
       case Expr.Between(t, lo, hi, neg) => Expr.Between(substituteAliases(t, aliases), substituteAliases(lo, aliases), substituteAliases(hi, aliases), neg)
-      case Expr.Func(n, as)     => Expr.Func(n, as.map(substituteAliases(_, aliases)))
-      case Expr.Case(s, br, d)  =>
-        Expr.Case(s.map(substituteAliases(_, aliases)), br.map { case (c, r) => (substituteAliases(c, aliases), substituteAliases(r, aliases)) }, d.map(substituteAliases(_, aliases)))
+      case Expr.Func(n, as)             => Expr.Func(n, as.map(substituteAliases(_, aliases)))
+      case Expr.Case(s, br, d)          =>
+        Expr.Case(
+          s.map(substituteAliases(_, aliases)),
+          br.map { case (c, r) => (substituteAliases(c, aliases), substituteAliases(r, aliases)) },
+          d.map(substituteAliases(_, aliases))
+        )
     }
 
   // ── plain streaming SELECT ─────────────────────────────────────────────────────────────────────
@@ -169,21 +169,21 @@ object SqlEngine {
     val cols = projectionColumns(sources, sel.projection)
     val plan = plainProjection(sources, sel.projection)
 
-    val filtered = filterRows(rowSource(lmdb, sources, sel), sel.where)
+    val planned                              = plannedRowSource(lmdb, sources, sel)
+    val filtered                             = filterRows(planned.rows, planned.plan.residualWhere)
     val ordered: ZStream[Any, SqlError, Row] =
-      if (sel.orderBy.isEmpty) filtered
+      if (sel.orderBy.isEmpty || planned.plan.orderedSatisfied) filtered
       else {
         val keys = sel.orderBy.map(ob => (resolveOrderExpr(plan, ob.expr), ob.descending))
         ZStream.fromIterableZIO(filtered.runCollect.map(c => sortRowsByKeys(c.toList, keys)))
       }
-    val limited   = sel.limit.fold(ordered)(n => ordered.take(n))
-    val projected = limited.map(row => projectRow(row, plan))
+    val limited                              = sel.limit.fold(ordered)(n => ordered.take(n))
+    val projected                            = limited.map(row => projectRow(row, plan))
     QueryResult(cols, projected)
   }
 
-  /** Output-name → source-expression pairs for a non-aggregate projection (resolves `AS` aliases and
-    * `*`). A plain column is an `Expr.Col`; a function projection (e.g. `GEO_DISTANCE(...)`) keeps its
-    * expression so it is evaluated per row. */
+  /** Output-name → source-expression pairs for a non-aggregate projection (resolves `AS` aliases and `*`). A plain column is an `Expr.Col`; a function projection (e.g. `GEO_DISTANCE(...)`) keeps its expression so it is evaluated per row.
+    */
   private def plainProjection(sources: List[Source], proj: Projection): List[(String, Expr)] =
     proj match {
       case Projection.Star         => projectionColumns(sources, proj).map(c => c.name -> (Expr.Col(c.name): Expr))
@@ -194,8 +194,8 @@ object SqlEngine {
         }
     }
 
-  /** If ORDER BY names a projected output (an `AS` alias or column), sort by that item's source
-    * expression; otherwise sort by the ORDER BY expression as written (e.g. a `GEO_DISTANCE(...)`). */
+  /** If ORDER BY names a projected output (an `AS` alias or column), sort by that item's source expression; otherwise sort by the ORDER BY expression as written (e.g. a `GEO_DISTANCE(...)`).
+    */
   private def resolveOrderExpr(plan: List[(String, Expr)], e: Expr): Expr =
     e match {
       case Expr.Col(name) => plan.collectFirst { case (out, src) if out == name => src }.getOrElse(e)
@@ -205,8 +205,8 @@ object SqlEngine {
   private def filterRows(rows: ZStream[Any, SqlError, Row], where: Option[Expr]): ZStream[Any, SqlError, Row] =
     where.fold(rows)(w => rows.filter(row => evalBool(w, row)))
 
-  /** Multi-key sort of read rows: compare on each ORDER BY expression in turn, honouring its
-    * direction, until one breaks the tie. */
+  /** Multi-key sort of read rows: compare on each ORDER BY expression in turn, honouring its direction, until one breaks the tie.
+    */
   private def sortRowsByKeys(rows: List[Row], keys: List[(Expr, Boolean)]): List[Row] =
     rows.sortWith { (a, b) =>
       keys.iterator.map { case (e, desc) => val c = cmpTotal(operand(e, a), operand(e, b)); if (desc) -c else c }.find(_ != 0).getOrElse(0) < 0
@@ -217,58 +217,103 @@ object SqlEngine {
 
   // ── SELECT DISTINCT ────────────────────────────────────────────────────────────────────────────
 
-  /** Project, then de-duplicate the projected rows (buffering, like ORDER BY). ORDER BY/LIMIT apply
-    * to the distinct rows; ORDER BY references the projected (output) column name.
+  /** Project, then de-duplicate the projected rows (buffering, like ORDER BY). ORDER BY/LIMIT apply to the distinct rows; ORDER BY references the projected (output) column name.
     */
   private def distinctResult(lmdb: LMDB, sources: List[Source], sel: Statement.Select): QueryResult = {
-    val cols = projectionColumns(sources, sel.projection)
-    val plan = plainProjection(sources, sel.projection)
-    val rows =
-      filterRows(rowSource(lmdb, sources, sel), sel.where).map(row => projectRow(row, plan)).runCollect.map { chunk =>
-        val distinct = chunk.toList.distinct
+    val cols    = projectionColumns(sources, sel.projection)
+    val plan    = plainProjection(sources, sel.projection)
+    val planned = plannedRowSource(lmdb, sources, sel)
+    val rows    =
+      filterRows(planned.rows, planned.plan.residualWhere).map(row => projectRow(row, plan)).runCollect.map { chunk =>
+        val distinct = chunk.toList.distinct // preserves first-occurrence order, so an order-matching scan stays sorted
         val ordered  =
-          if (sel.orderBy.isEmpty) distinct
+          if (sel.orderBy.isEmpty || planned.plan.orderedSatisfied) distinct
           else sortJRowsByKeys(distinct, sel.orderBy.map(ob => (resolveOrderOutput(plan, ob.expr), ob.descending)))
         sel.limit.fold(ordered)(n => ordered.take(n.toInt))
       }
     QueryResult(cols, ZStream.fromIterableZIO(rows))
   }
 
-  /** The projected output-column name an ORDER BY expression refers to (for DISTINCT/aggregate, which
-    * sort already-projected rows): a column matching an output alias/name, or a function expression
-    * equal to a projected item's source expression; falls back to the expression's own label. */
+  /** The projected output-column name an ORDER BY expression refers to (for DISTINCT/aggregate, which sort already-projected rows): a column matching an output alias/name, or a function expression equal to a projected item's source expression; falls
+    * back to the expression's own label.
+    */
   private def resolveOrderOutput(plan: List[(String, Expr)], e: Expr): String =
-    plan.collectFirst { case (out, src) if src == e || Expr.Col(out) == e => out }
+    plan
+      .collectFirst { case (out, src) if src == e || Expr.Col(out) == e => out }
       .getOrElse(e match { case Expr.Col(n) => unqualify(n); case other => exprLabel(other) })
 
   // ── row sources & JOIN ─────────────────────────────────────────────────────────────────────────
 
-  private def rowSource(lmdb: LMDB, sources: List[Source], sel: Statement.Select): ZStream[Any, SqlError, Row] =
+  /** A row stream plus the [[ScanPlan]] that produced it: consumers filter on `plan.residualWhere` (not the whole WHERE) and may skip sorting when `plan.orderedSatisfied`.
+    */
+  private final case class PlannedRows(rows: ZStream[Any, SqlError, Row], plan: ScanPlan)
+
+  private def plannedRowSource(lmdb: LMDB, sources: List[Source], sel: Statement.Select): PlannedRows =
     if (sel.joins.isEmpty) {
       val (alias, info) = sources.head
-      rawStream(lmdb, info).map(r => combinedLookup(List((alias, Some(r)))))
+      val plan          = Planner.plan(alias, info, sel.where, sel.orderBy)
+      PlannedRows(executePlan(lmdb, info, plan).map(r => combinedLookup(List((alias, Some(r))))), plan)
     } else
-      ZStream.fromIterableZIO(executeJoins(lmdb, sources, sel.joins)).map(parts => combinedLookup(parts))
+      PlannedRows(
+        ZStream.fromIterableZIO(executeJoins(lmdb, sources, sel.joins)).map(parts => combinedLookup(parts)),
+        ScanPlan.FullScan(sel.where)
+      )
 
-  /** Resolve a (possibly `alias.`-qualified, possibly nested) column against a combined row. A
-    * leading segment that names a known source is the table alias; the remaining segments form a
-    * path that may descend into nested object fields (e.g. `o.location.altitude`). An unqualified
-    * path is taken from the first source that has a non-null value for it; a `None` part (an
-    * unmatched LEFT join side) yields NULL for all of its columns. */
+  /** Materialize a [[ScanPlan]] as a `RawRow` stream: a collection scan, primary-key point fetches, a primary-key byte-range scan, or an index byte-range scan followed by per-entry primary-key fetches (the `TO_KEY` component `pkComponent` holds the
+    * record's key).
+    */
+  private def executePlan(lmdb: LMDB, info: CollectionInfo, plan: ScanPlan): ZStream[Any, SqlError, RawRow] = {
+    val keyId                                                   = info.keyId.getOrElse("lmdb:bytes")
+    def toRow(kb: Array[Byte], vb: Array[Byte])                 = RawRow(kb, KeyRegistry.decode(keyId, kb), decodeValueBytes(vb))
+    def fetchRow(kb: Array[Byte]): IO[SqlError, Option[RawRow]] =
+      lmdb
+        .fetch[Array[Byte], Array[Byte]](info.name, kb)
+        .mapError(e => SqlError.Storage(e.toString): SqlError)
+        .map(_.map(vb => toRow(kb, vb)))
+
+    plan match {
+      case ScanPlan.FullScan(_) => rawStream(lmdb, info)
+
+      case ScanPlan.PkFetch(keys, _, _) =>
+        ZStream.fromIterable(keys).mapZIO(fetchRow).collectSome
+
+      case ScanPlan.PkRange(lower, upper, _, _, _) =>
+        lmdb
+          .streamRawRange(info.name, lower, upper)
+          .mapError(e => SqlError.Storage(e.toString): SqlError)
+          .map { case (kb, vb) => toRow(kb, vb) }
+
+      case ScanPlan.IndexScan(indexName, _, lower, upper, toWidths, pkComponent, _, _, _) =>
+        lmdb
+          .streamRawRange(indexName, lower, upper)
+          .mapError(e => SqlError.Storage(e.toString): SqlError)
+          .mapZIO { case (_, toBytes) =>
+            val pkBytes =
+              if (toWidths.size <= 1) Right(toBytes)
+              else TupleKeyLayout.decodeComponents(toWidths, toBytes).map(_(pkComponent)).left.map(e => SqlError.Storage(s"cannot split index entry of $indexName: $e"))
+            ZIO.fromEither(pkBytes).flatMap(fetchRow) // a dangling index entry (no record) is skipped
+          }
+          .collectSome
+    }
+  }
+
+  /** Resolve a (possibly `alias.`-qualified, possibly nested) column against a combined row. A leading segment that names a known source is the table alias; the remaining segments form a path that may descend into nested object fields (e.g.
+    * `o.location.altitude`). An unqualified path is taken from the first source that has a non-null value for it; a `None` part (an unmatched LEFT join side) yields NULL for all of its columns.
+    */
   private def combinedLookup(parts: List[(String, Option[RawRow])])(name: String): JValue = {
     val segments = splitPath(name)
     segments match {
       case alias :: rest if rest.nonEmpty && parts.exists(_._1 == alias) =>
         parts.collectFirst { case (a, ro) if a == alias => ro.fold(NullV: JValue)(r => lookupPath(r, rest)) }.getOrElse(NullV)
-      case _ =>
+      case _                                                             =>
         parts.iterator.map { case (_, ro) => ro.fold(NullV: JValue)(r => lookupPath(r, segments)) }.find(_ != NullV).getOrElse(NullV)
     }
   }
 
-  /** Execute the JOINs left-to-right, one hash join per step (buffers both sides). Each result is a
-    * combined row: the per-alias `RawRow`s, with `None` where a LEFT join found no match. */
+  /** Execute the JOINs left-to-right, one hash join per step (buffers both sides). Each result is a combined row: the per-alias `RawRow`s, with `None` where a LEFT join found no match.
+    */
   private def executeJoins(lmdb: LMDB, sources: List[Source], joins: List[Join]): IO[SqlError, List[List[(String, Option[RawRow])]]] = {
-    val (fromAlias, fromInfo) = sources.head
+    val (fromAlias, fromInfo)                                     = sources.head
     val start: IO[SqlError, List[List[(String, Option[RawRow])]]] =
       rawStream(lmdb, fromInfo).map(r => List((fromAlias, Some(r): Option[RawRow]))).runCollect.map(_.toList)
     joins.zip(sources.tail).foldLeft(start) { case (leftZ, (join, (rightAlias, rightInfo))) =>
@@ -286,7 +331,7 @@ object SqlEngine {
     val (pairs, residual) = joinKeys(join.on, rightAlias)
     // Coercion per equi-pair: if either side is a `_key`, normalize both sides to that key's type;
     // otherwise compare value fields structurally (their types must already match).
-    val coercions = pairs.map { case (probeCol, buildCol) => colKeyId(sources, buildCol).orElse(colKeyId(sources, probeCol)) }
+    val coercions         = pairs.map { case (probeCol, buildCol) => colKeyId(sources, buildCol).orElse(colKeyId(sources, probeCol)) }
 
     val index: Map[List[JValue], List[RawRow]] =
       rightRows.foldLeft(Map.empty[List[JValue], List[RawRow]]) { (m, r) =>
@@ -309,8 +354,8 @@ object SqlEngine {
     }
   }
 
-  /** Split an ON condition into equi-join pairs `(probeColumn on the left, buildColumn on the right)`
-    * and a residual predicate (anything that is not a simple `left = right` equality). */
+  /** Split an ON condition into equi-join pairs `(probeColumn on the left, buildColumn on the right)` and a residual predicate (anything that is not a simple `left = right` equality).
+    */
   private def joinKeys(on: Expr, rightAlias: String): (List[(String, String)], List[Expr]) = {
     def conjuncts(e: Expr): List[Expr] = e match { case Expr.And(l, r) => conjuncts(l) ++ conjuncts(r); case _ => List(e) }
     conjuncts(on).foldLeft((List.empty[(String, String)], List.empty[Expr])) {
@@ -320,7 +365,7 @@ object SqlEngine {
           case (false, true) => (ps :+ (a, b), rs)
           case _             => (ps, rs :+ c)
         }
-      case ((ps, rs), other) => (ps, rs :+ other)
+      case ((ps, rs), other)                                            => (ps, rs :+ other)
     }
   }
 
@@ -335,17 +380,18 @@ object SqlEngine {
 
   private def normalizeJoinVal(jv: JValue, coercion: Option[String]): JValue = coercion.fold(jv)(keyId => coerceToKey(jv, keyId))
 
-  /** Convert a value field to the JValue type a key of `keyId` decodes to, so a value column can be
-    * joined against a `_key`. NULL stays NULL; a value that cannot be converted becomes NULL (no match). */
+  /** Convert a value field to the JValue type a key of `keyId` decodes to, so a value column can be joined against a `_key`. NULL stays NULL; a value that cannot be converted becomes NULL (no match).
+    */
   private def coerceToKey(jv: JValue, keyId: String): JValue =
     if (jv == NullV) NullV
-    else keyId match {
-      case "lmdb:str" | "lmdb-ulid:v1" | "lmdb:bytes" => StringV(jvToString(jv))
-      case "lmdb:int64" | "lmdb:int32" | "lmdb:int16" => coerceToLong(jv)
-      case "lmdb:uuid" | "lmdb-uuidv7:v1"             => coerceToUuid(jv)
-      case "lmdb-ts:instant/v1"                       => coerceToInstant(jv)
-      case _                                          => jv
-    }
+    else
+      keyId match {
+        case "lmdb:str" | "lmdb-ulid:v1" | "lmdb:bytes" => StringV(jvToString(jv))
+        case "lmdb:int64" | "lmdb:int32" | "lmdb:int16" => coerceToLong(jv)
+        case "lmdb:uuid" | "lmdb-uuidv7:v1"             => coerceToUuid(jv)
+        case "lmdb-ts:instant/v1"                       => coerceToInstant(jv)
+        case _                                          => jv
+      }
 
   private def coerceToLong(jv: JValue): JValue =
     jv match {
@@ -372,9 +418,8 @@ object SqlEngine {
 
   // ── aggregates / GROUP BY ──────────────────────────────────────────────────────────────────────
 
-  /** Aggregate query: fold the WHERE-filtered rows into one accumulator set per group key (so memory
-    * scales with the number of groups, not rows), then emit one row per group. With no GROUP BY there
-    * is a single, always-present group — `COUNT(*)` of an empty table is `0`, other aggregates `NULL`.
+  /** Aggregate query: fold the WHERE-filtered rows into one accumulator set per group key (so memory scales with the number of groups, not rows), then emit one row per group. With no GROUP BY there is a single, always-present group — `COUNT(*)` of
+    * an empty table is `0`, other aggregates `NULL`.
     */
   private def aggregateResult(lmdb: LMDB, sources: List[Source], sel: Statement.Select): IO[SqlError, QueryResult] =
     for {
@@ -392,53 +437,52 @@ object SqlEngine {
       case Projection.Star         => Left(SqlError.Unsupported("SELECT * cannot be combined with GROUP BY or aggregate functions"))
     }
 
-  /** A synthetic, un-typeable column name standing for the i-th GROUP BY expression's value (the leading
-    * space cannot appear in a parsed identifier, so it never collides with a real column). */
+  /** A synthetic, un-typeable column name standing for the i-th GROUP BY expression's value (the leading space cannot appear in a parsed identifier, so it never collides with a real column).
+    */
   private val GroupBindPrefix = " g"
 
   /** Pair each GROUP BY expression with its synthetic binding name. */
   private def groupBindings(groupBy: List[Expr]): List[(Expr, String)] =
     groupBy.zipWithIndex.map { case (e, i) => (e, s"$GroupBindPrefix$i") }
 
-  /** Rewrite an expression for evaluation in the grouped context: every occurrence of a whole GROUP BY
-    * expression is replaced by a reference to its precomputed group value, so `year(ts)` in SELECT /
-    * HAVING / ORDER BY reads the group key instead of re-evaluating against a (now absent) row.
-    * Aggregates are left intact (resolved against the per-group accumulator results). */
+  /** Rewrite an expression for evaluation in the grouped context: every occurrence of a whole GROUP BY expression is replaced by a reference to its precomputed group value, so `year(ts)` in SELECT / HAVING / ORDER BY reads the group key instead of
+    * re-evaluating against a (now absent) row. Aggregates are left intact (resolved against the per-group accumulator results).
+    */
   private def bindGroups(e: Expr, bindings: List[(Expr, String)]): Expr =
     bindings.collectFirst { case (g, name) if g == e => Expr.Col(name): Expr }.getOrElse {
       e match {
-        case Expr.Arith(op, l, r) => Expr.Arith(op, bindGroups(l, bindings), bindGroups(r, bindings))
-        case Expr.Cmp(op, l, r)   => Expr.Cmp(op, bindGroups(l, bindings), bindGroups(r, bindings))
-        case Expr.And(l, r)       => Expr.And(bindGroups(l, bindings), bindGroups(r, bindings))
-        case Expr.Or(l, r)        => Expr.Or(bindGroups(l, bindings), bindGroups(r, bindings))
-        case Expr.Not(x)          => Expr.Not(bindGroups(x, bindings))
-        case Expr.Like(t, p)      => Expr.Like(bindGroups(t, bindings), p)
-        case Expr.IsNull(t, neg)  => Expr.IsNull(bindGroups(t, bindings), neg)
+        case Expr.Arith(op, l, r)         => Expr.Arith(op, bindGroups(l, bindings), bindGroups(r, bindings))
+        case Expr.Cmp(op, l, r)           => Expr.Cmp(op, bindGroups(l, bindings), bindGroups(r, bindings))
+        case Expr.And(l, r)               => Expr.And(bindGroups(l, bindings), bindGroups(r, bindings))
+        case Expr.Or(l, r)                => Expr.Or(bindGroups(l, bindings), bindGroups(r, bindings))
+        case Expr.Not(x)                  => Expr.Not(bindGroups(x, bindings))
+        case Expr.Like(t, p)              => Expr.Like(bindGroups(t, bindings), p)
+        case Expr.IsNull(t, neg)          => Expr.IsNull(bindGroups(t, bindings), neg)
         case Expr.In(t, its, neg)         => Expr.In(bindGroups(t, bindings), its.map(bindGroups(_, bindings)), neg)
         case Expr.Between(t, lo, hi, neg) => Expr.Between(bindGroups(t, bindings), bindGroups(lo, bindings), bindGroups(hi, bindings), neg)
-        case Expr.Func(n, as)     => Expr.Func(n, as.map(bindGroups(_, bindings)))
-        case Expr.Case(s, br, d)  =>
+        case Expr.Func(n, as)             => Expr.Func(n, as.map(bindGroups(_, bindings)))
+        case Expr.Case(s, br, d)          =>
           Expr.Case(s.map(bindGroups(_, bindings)), br.map { case (c, r) => (bindGroups(c, bindings), bindGroups(r, bindings)) }, d.map(bindGroups(_, bindings)))
-        case leaf                 => leaf // Col, Lit, Aggregate
+        case leaf                         => leaf // Col, Lit, Aggregate
       }
     }
 
-  /** The source expression of a select item (a plain column, a function/arithmetic expression, or an
-    * aggregate reference) — the common shape that grouping, projection, and ordering all evaluate. */
+  /** The source expression of a select item (a plain column, a function/arithmetic expression, or an aggregate reference) — the common shape that grouping, projection, and ordering all evaluate.
+    */
   private def itemExpr(item: SelectItem): Expr =
     item match {
-      case SelectItem.Col(n, _)    => Expr.Col(n)
-      case SelectItem.Expr(e, _)   => e
+      case SelectItem.Col(n, _)       => Expr.Col(n)
+      case SelectItem.Expr(e, _)      => e
       case SelectItem.Agg(f, c, d, _) => Expr.Aggregate(f, c, d)
     }
 
-  /** Columns still referenced (outside any aggregate) after binding GROUP BY expressions — i.e.
-    * ungrouped, non-aggregated columns, which make a projection / HAVING / ORDER BY invalid. */
+  /** Columns still referenced (outside any aggregate) after binding GROUP BY expressions — i.e. ungrouped, non-aggregated columns, which make a projection / HAVING / ORDER BY invalid.
+    */
   private def ungroupedCols(e: Expr, bindings: List[(Expr, String)]): List[String] =
     freeColsInExpr(bindGroups(e, bindings)).filterNot(_.startsWith(GroupBindPrefix))
 
-  /** Every projected column or expression must be either an aggregate or fully covered by the GROUP BY
-    * (so no ungrouped, non-aggregated columns remain after binding). */
+  /** Every projected column or expression must be either an aggregate or fully covered by the GROUP BY (so no ungrouped, non-aggregated columns remain after binding).
+    */
   private def validateGrouping(items: List[SelectItem], bindings: List[(Expr, String)]): Either[SqlError, Unit] =
     items.flatMap(it => ungroupedCols(itemExpr(it), bindings)).headOption match {
       case Some(c) => Left(SqlError.Unsupported(s"column '$c' must appear in GROUP BY or be used in an aggregate function"))
@@ -452,8 +496,8 @@ object SqlEngine {
       case None    => Right(())
     }
 
-  /** In an aggregate query, every ORDER BY key must be evaluable per group — a grouping expression or
-    * an aggregate — so no ungrouped column may remain after binding. */
+  /** In an aggregate query, every ORDER BY key must be evaluable per group — a grouping expression or an aggregate — so no ungrouped column may remain after binding.
+    */
   private def validateOrderBy(orderBy: List[OrderBy], bindings: List[(Expr, String)]): Either[SqlError, Unit] =
     orderBy.flatMap(ob => ungroupedCols(ob.expr, bindings)).headOption match {
       case Some(c) => Left(SqlError.Unsupported(s"ORDER BY column '$c' must appear in GROUP BY or be used in an aggregate function"))
@@ -462,13 +506,14 @@ object SqlEngine {
 
   private def computeGroups(lmdb: LMDB, sources: List[Source], sel: Statement.Select, items: List[SelectItem], bindings: List[(Expr, String)]): IO[SqlError, List[JValue]] = {
     // Every aggregate to compute per group: those in the projection, HAVING, and ORDER BY.
-    val aggKeys   =
+    val aggKeys                              =
       (items.flatMap(it => aggsInExpr(itemExpr(it))) ++ sel.having.toList.flatMap(aggsInExpr) ++ sel.orderBy.flatMap(ob => aggsInExpr(ob.expr))).distinct
-    val freshAccs = aggKeys.map { case (f, _, dis) => initAcc(f, dis) }.toVector
-    val bindNames = bindings.map(_._2)
+    val freshAccs                            = aggKeys.map { case (f, _, dis) => initAcc(f, dis) }.toVector
+    val bindNames                            = bindings.map(_._2)
     val seed: Map[List[JValue], Vector[Acc]] =
       if (sel.groupBy.isEmpty) Map(Nil -> freshAccs) else Map.empty
-    filterRows(rowSource(lmdb, sources, sel), sel.where)
+    val planned                              = plannedRowSource(lmdb, sources, sel)
+    filterRows(planned.rows, planned.plan.residualWhere)
       .runFold(seed) { (groups, row) =>
         val key     = sel.groupBy.map(g => operand(g, row))
         val current = groups.getOrElse(key, freshAccs)
@@ -477,11 +522,11 @@ object SqlEngine {
       }
       .map { groups =>
         // Per-group evaluation context: synthetic group cols → key values; aggregates → results.
-        def groupLk(key: List[JValue]): String => JValue = { val m = bindNames.zip(key).toMap; name => m.getOrElse(name, NullV) }
-        def aggLk(results: Map[AggKey, JValue]): AggKey => JValue = k => results.getOrElse(k, NullV)
+        def groupLk(key: List[JValue]): String => JValue                             = { val m = bindNames.zip(key).toMap; name => m.getOrElse(name, NullV) }
+        def aggLk(results: Map[AggKey, JValue]): AggKey => JValue                    = k => results.getOrElse(k, NullV)
         def evalIn(e: Expr, key: List[JValue], results: Map[AggKey, JValue]): JValue = operand(bindGroups(e, bindings), groupLk(key), aggLk(results))
 
-        val kept = groups.toList.flatMap { case (key, accs) =>
+        val kept    = groups.toList.flatMap { case (key, accs) =>
           val results = aggKeys.zip(accs).map { case (k, acc) => k -> acc.result }.toMap
           val passes  = sel.having.forall(h => evalBool(bindGroups(h, bindings), groupLk(key), aggLk(results)))
           if (passes) Some((key, results)) else None
@@ -489,9 +534,12 @@ object SqlEngine {
         val ordered =
           if (sel.orderBy.nonEmpty)
             kept.sortWith { (a, b) =>
-              sel.orderBy.iterator.map { ob =>
-                val c = cmpTotal(evalIn(ob.expr, a._1, a._2), evalIn(ob.expr, b._1, b._2)); if (ob.descending) -c else c
-              }.find(_ != 0).getOrElse(0) < 0
+              sel.orderBy.iterator
+                .map { ob =>
+                  val c = cmpTotal(evalIn(ob.expr, a._1, a._2), evalIn(ob.expr, b._1, b._2)); if (ob.descending) -c else c
+                }
+                .find(_ != 0)
+                .getOrElse(0) < 0
             }
           else if (sel.groupBy.isEmpty) kept
           else kept.sortWith { (a, b) => compareKeys(a._1, b._1) < 0 }
@@ -501,8 +549,8 @@ object SqlEngine {
       }
   }
 
-  /** Build one grouped output row: each item's value is its (group-bound) source expression evaluated
-    * against the group key and aggregate results. */
+  /** Build one grouped output row: each item's value is its (group-bound) source expression evaluated against the group key and aggregate results.
+    */
   private def groupRow(items: List[SelectItem], bindings: List[(Expr, String)], lk: String => JValue, agg: AggKey => JValue): JValue =
     MapV(ListMap.from(items.map(it => outputName(it) -> operand(bindGroups(itemExpr(it), bindings), lk, agg))))
 
@@ -510,16 +558,15 @@ object SqlEngine {
   private def compareKeys(a: List[JValue], b: List[JValue]): Int =
     a.iterator.zip(b.iterator).map { case (x, y) => cmpTotal(x, y) }.find(_ != 0).getOrElse(0)
 
-  /** The output column name: the `AS` alias when given, otherwise the (unqualified) column name or
-    * `func(arg)`. A qualifying table alias is dropped, so `o.amount` → `amount`, `SUM(o.amount)` →
-    * `sum(amount)`. */
+  /** The output column name: the `AS` alias when given, otherwise the (unqualified) column name or `func(arg)`. A qualifying table alias is dropped, so `o.amount` → `amount`, `SUM(o.amount)` → `sum(amount)`.
+    */
   private def outputName(item: SelectItem): String =
     item.alias.getOrElse {
       item match {
-        case SelectItem.Col(n, _)          => unqualify(n)
-        case SelectItem.Agg(f, None, _, _)        => s"${aggLabel(f)}(*)"
-        case SelectItem.Agg(f, Some(e), dis, _)   => s"${aggLabel(f)}(${if (dis) "distinct " else ""}${exprLabel(e)})"
-        case SelectItem.Expr(e, _)         => exprLabel(e)
+        case SelectItem.Col(n, _)               => unqualify(n)
+        case SelectItem.Agg(f, None, _, _)      => s"${aggLabel(f)}(*)"
+        case SelectItem.Agg(f, Some(e), dis, _) => s"${aggLabel(f)}(${if (dis) "distinct " else ""}${exprLabel(e)})"
+        case SelectItem.Expr(e, _)              => exprLabel(e)
       }
     }
 
@@ -530,8 +577,8 @@ object SqlEngine {
 
   private def outputColumn(sources: List[Source], item: SelectItem): Column =
     item match {
-      case SelectItem.Col(n, _)        => Column(outputName(item), hintFor(sources, n))
-      case SelectItem.Expr(e, _)       => Column(outputName(item), exprTypeHint(e, sources))
+      case SelectItem.Col(n, _)         => Column(outputName(item), hintFor(sources, n))
+      case SelectItem.Expr(e, _)        => Column(outputName(item), exprTypeHint(e, sources))
       case SelectItem.Agg(f, arg, _, _) =>
         val tpe = f match {
           case AggFunc.Count             => "integer"
@@ -541,8 +588,8 @@ object SqlEngine {
         Column(outputName(item), tpe)
     }
 
-  /** The value fed to an aggregate from a row: the argument expression evaluated against the row, or a
-    * non-null tally for `COUNT(*)`. */
+  /** The value fed to an aggregate from a row: the argument expression evaluated against the row, or a non-null tally for `COUNT(*)`.
+    */
   private def aggInput(arg: Option[Expr], row: Row): JValue =
     arg match {
       case None    => BoolV(true) // COUNT(*) — always a non-null tally
@@ -552,7 +599,7 @@ object SqlEngine {
   // ── aggregate accumulators (immutable; folded over the stream) ──────────────────────────────────
 
   private sealed trait Acc { def add(v: JValue): Acc; def result: JValue }
-  private final case class CountAcc(n: Long) extends Acc {
+  private final case class CountAcc(n: Long)                      extends Acc {
     def add(v: JValue): Acc = if (v != NullV) CountAcc(n + 1) else this
     def result: JValue      = LongV(n)
   }
@@ -560,20 +607,21 @@ object SqlEngine {
     def add(v: JValue): Acc = asBigDecimal(v).fold(this: Acc)(d => SumAcc(sum + d, true))
     def result: JValue      = if (seen) DecimalV(sum) else NullV
   }
-  private final case class AvgAcc(sum: BigDecimal, n: Long) extends Acc {
+  private final case class AvgAcc(sum: BigDecimal, n: Long)       extends Acc {
     def add(v: JValue): Acc = asBigDecimal(v).fold(this: Acc)(d => AvgAcc(sum + d, n + 1))
     def result: JValue      = if (n > 0) DecimalV(sum / BigDecimal(n)) else NullV
   }
-  private final case class MinAcc(cur: Option[JValue]) extends Acc {
+  private final case class MinAcc(cur: Option[JValue])            extends Acc {
     def add(v: JValue): Acc = if (v == NullV) this else MinAcc(Some(cur.fold(v)(c => if (cmpTotal(v, c) < 0) v else c)))
     def result: JValue      = cur.getOrElse(NullV)
   }
-  private final case class MaxAcc(cur: Option[JValue]) extends Acc {
+  private final case class MaxAcc(cur: Option[JValue])            extends Acc {
     def add(v: JValue): Acc = if (v == NullV) this else MaxAcc(Some(cur.fold(v)(c => if (cmpTotal(v, c) > 0) v else c)))
     def result: JValue      = cur.getOrElse(NullV)
   }
-  /** `DISTINCT` wrapper: forwards each non-null argument value to `inner` only the first time it is
-    * seen, so `COUNT(DISTINCT x)` counts distinct values, `SUM(DISTINCT x)` sums distinct values, etc. */
+
+  /** `DISTINCT` wrapper: forwards each non-null argument value to `inner` only the first time it is seen, so `COUNT(DISTINCT x)` counts distinct values, `SUM(DISTINCT x)` sums distinct values, etc.
+    */
   private final case class DistinctAcc(seen: Set[JValue], inner: Acc) extends Acc {
     def add(v: JValue): Acc = if (v == NullV || seen.contains(v)) this else DistinctAcc(seen + v, inner.add(v))
     def result: JValue      = inner.result
@@ -592,7 +640,7 @@ object SqlEngine {
 
   private def projectionColumns(sources: List[Source], proj: Projection): List[Column] =
     proj match {
-      case Projection.Star =>
+      case Projection.Star         =>
         sources match {
           case (_, info) :: Nil => Column("_key", info.keyId.getOrElse("key")) :: valueColumns(info)
           // SELECT * over a JOIN: every column from every source, qualified to avoid collisions.
@@ -604,15 +652,14 @@ object SqlEngine {
   private def valueColumns(info: CollectionInfo): List[Column] =
     if (info.columns.nonEmpty) info.columns.map(c => Column(c.name, c.typeHint)) else List(Column("_value", "any"))
 
-  /** Type hint for a (possibly `alias.`-qualified, possibly nested) column across the query's
-    * sources. Nested paths are resolved against the value `JsonSchema`; top-level columns use the
-    * catalog's flat column list. */
+  /** Type hint for a (possibly `alias.`-qualified, possibly nested) column across the query's sources. Nested paths are resolved against the value `JsonSchema`; top-level columns use the catalog's flat column list.
+    */
   private def hintFor(sources: List[Source], name: String): String = {
     val segments = splitPath(name)
     segments match {
       case alias :: rest if rest.nonEmpty && sources.exists(_._1 == alias) =>
         hintForPath(sources.collect { case (a, info) if a == alias => info }, rest)
-      case _ =>
+      case _                                                               =>
         hintForPath(sources.map(_._2), segments)
     }
   }
@@ -625,8 +672,8 @@ object SqlEngine {
       case nested        => infos.iterator.map(info => nestedTypeHint(info, nested)).find(_ != "any").getOrElse("any")
     }
 
-  /** Walk the value `JsonSchema` to find the declared type at a path of nested fields; "any" when
-    * the schema is absent or the path is not described. */
+  /** Walk the value `JsonSchema` to find the declared type at a path of nested fields; "any" when the schema is absent or the path is not described.
+    */
   private def nestedTypeHint(info: CollectionInfo, path: List[String]): String =
     info.valueSchema match {
       case Some(SchemaArtifact.JsonSchema(root)) => schemaTypeAt(root, path)
@@ -643,7 +690,7 @@ object SqlEngine {
               case Some(MapV(props)) => props.get(seg).map(schemaTypeAt(_, rest)).getOrElse("any")
               case _                 => "any"
             }
-          case _ => "any"
+          case _       => "any"
         }
     }
 
@@ -659,7 +706,7 @@ object SqlEngine {
           val valueFields = pairs.filterNot(_._1 == "_key")
           val valueJV     = valueFields match {
             case List(("_value", v)) => litToJV(v)
-            case _                    => MapV(ListMap.from(valueFields.map { case (c, v) => c -> litToJV(v) }))
+            case _                   => MapV(ListMap.from(valueFields.map { case (c, v) => c -> litToJV(v) }))
           }
           lmdb
             .upsertOverwrite[Array[Byte], Array[Byte]](info.name, keyBytes, JValue.toPlainJson(valueJV))
@@ -698,12 +745,56 @@ object SqlEngine {
         .as(QueryResult.affected(rows.size.toLong))
     }
 
+  // ── EXPLAIN ──────────────────────────────────────────────────────────────────────────────────
+
+  /** Run only the planner and render the chosen access path (no data is read). */
+  private def explainResult(lmdb: LMDB, sel0: Statement.Select): IO[SqlError, QueryResult] = {
+    val sel = resolveSelectAliases(sel0)
+    for {
+      _       <- ZIO.fromEither(validateNoAggregatesInWhere(sel.where))
+      sources <- resolveSources(lmdb, sel)
+    } yield {
+      val steps =
+        if (sel.joins.nonEmpty)
+          sources.map { case (alias, info) => "access" -> s"full scan of ${info.name} (as $alias; JOINs are not index-assisted yet)" }
+        else {
+          val (alias, info) = sources.head
+          describePlan(info, Planner.plan(alias, info, sel.where, sel.orderBy))
+        }
+      QueryResult.of(
+        List(Column("step", "string"), Column("detail", "string")),
+        steps.map { case (s, d) => MapV(ListMap("step" -> StringV(s), "detail" -> StringV(d))) }
+      )
+    }
+  }
+
+  private def describePlan(info: CollectionInfo, plan: ScanPlan): List[(String, String)] = {
+    def residualSteps(r: Option[Expr]): List[(String, String)] =
+      List("filter" -> r.fold("none")(Planner.renderExpr))
+    def orderedSteps(ordered: Boolean): List[(String, String)] =
+      if (ordered) List("order" -> "scan order matches ORDER BY (no sort)") else Nil
+
+    plan match {
+      case ScanPlan.FullScan(r)                                         =>
+        List("access" -> s"full scan of ${info.name}") ++ residualSteps(r)
+      case ScanPlan.PkFetch(keys, r, detail)                            =>
+        List("access" -> s"primary-key fetch on ${info.name} [$detail; ${keys.size} key(s)]") ++ residualSteps(r)
+      case ScanPlan.PkRange(_, _, ordered, r, detail)                   =>
+        List("access" -> s"primary-key range scan on ${info.name} [$detail]") ++ orderedSteps(ordered) ++ residualSteps(r)
+      case ScanPlan.IndexScan(idx, src, _, _, _, _, ordered, r, detail) =>
+        List(
+          "access" -> s"index range scan on $idx [$detail]",
+          "lookup" -> s"fetch matching records from $src by primary key"
+        ) ++ orderedSteps(ordered) ++ residualSteps(r)
+    }
+  }
+
   // ── DESCRIBE / SHOW ──────────────────────────────────────────────────────────────────────────
 
   private def describeResult(info: CollectionInfo): QueryResult = {
     def row(col: String, tpe: String): JValue = MapV(ListMap("column" -> StringV(col), "type" -> StringV(tpe)))
-    val keyRow   = row("_key", info.keyId.getOrElse("(unknown)"))
-    val valueRows =
+    val keyRow                                = row("_key", info.keyId.getOrElse("(unknown)"))
+    val valueRows                             =
       if (info.columns.nonEmpty) info.columns.map(c => row(c.name, c.typeHint))
       else List(row("_value", "any"))
     QueryResult.of(List(Column("column", "string"), Column("type", "string")), keyRow :: valueRows)
@@ -712,11 +803,33 @@ object SqlEngine {
   private def showResult(lmdb: LMDB, target: ShowTarget): IO[SqlError, QueryResult] =
     Catalog.list(lmdb).map { entries =>
       val wantIndex = target == ShowTarget.Indexes
-      val rows = entries
+      val filtered  = entries
         .filter(e => if (wantIndex) e.collectionKind == CollectionKind.Index else e.collectionKind != CollectionKind.Index)
         .sortBy(_.collectionName)
-        .map(e => MapV(ListMap("name" -> StringV(e.collectionName), "kind" -> StringV(e.collectionKind.toString))))
-      QueryResult.of(List(Column("name", "string"), Column("kind", "string")), rows)
+      if (wantIndex) {
+        // Surface the declared mapping so index-aware planning is discoverable from the REPL.
+        def componentLabel(c: IndexComponent): String =
+          c.source match {
+            case IndexComponentSource.Field(p)     => p
+            case IndexComponentSource.PrimaryKey   => "_key"
+            case IndexComponentSource.Coalesce(ps) => ps.mkString("coalesce(", ", ", ")")
+            case IndexComponentSource.Opaque(h)    => s"opaque($h)"
+          }
+        val rows                                      = filtered.map { e =>
+          val on = e.indexMapping.fold("")(_.fromComponents.map(componentLabel).mkString(", "))
+          MapV(
+            ListMap(
+              "name"   -> StringV(e.collectionName),
+              "source" -> StringV(e.indexMapping.fold("")(_.sourceCollection)),
+              "on"     -> StringV(on)
+            )
+          )
+        }
+        QueryResult.of(List(Column("name", "string"), Column("source", "string"), Column("on", "string")), rows)
+      } else {
+        val rows = filtered.map(e => MapV(ListMap("name" -> StringV(e.collectionName), "kind" -> StringV(e.collectionKind.toString))))
+        QueryResult.of(List(Column("name", "string"), Column("kind", "string")), rows)
+      }
     }
 
   // ── row plumbing ─────────────────────────────────────────────────────────────────────────────
@@ -732,8 +845,10 @@ object SqlEngine {
   private def filterWhere(stream: ZStream[Any, SqlError, RawRow], where: Option[Expr]): ZStream[Any, SqlError, RawRow] =
     where.fold(stream)(w => stream.filter(r => evalBool(w, lookup(r))))
 
-  private def collectMatching(lmdb: LMDB, info: CollectionInfo, where: Option[Expr]): IO[SqlError, List[RawRow]] =
-    filterWhere(rawStream(lmdb, info), where).runCollect.map(_.toList)
+  private def collectMatching(lmdb: LMDB, info: CollectionInfo, where: Option[Expr]): IO[SqlError, List[RawRow]] = {
+    val plan = Planner.plan(info.name, info, where, Nil)
+    filterWhere(executePlan(lmdb, info, plan), plan.residualWhere).runCollect.map(_.toList)
+  }
 
   private def decodeValueBytes(vb: Array[Byte]): JValue =
     JValue.fromPlainJson(vb).fold(_ => StringV(new String(vb, UTF_8)), identity)
@@ -743,9 +858,8 @@ object SqlEngine {
   /** Split a column reference into its dotted segments. */
   private def splitPath(name: String): List[String] = name.split('.').toList
 
-  /** Resolve a path against a raw row: a leading `_key`/`_value` selects the key or the whole value,
-    * then any remaining segments descend into nested object fields; an ordinary path descends into
-    * the value tree from the top. */
+  /** Resolve a path against a raw row: a leading `_key`/`_value` selects the key or the whole value, then any remaining segments descend into nested object fields; an ordinary path descends into the value tree from the top.
+    */
   private def lookupPath(r: RawRow, segments: List[String]): JValue =
     segments match {
       case "_key" :: rest   => walk(r.key.toJValue, rest)
@@ -753,8 +867,8 @@ object SqlEngine {
       case all              => walk(r.value, all)
     }
 
-  /** Descend into nested `MapV` objects following `segments`; a non-object or a missing field on the
-    * way yields NULL. An empty path returns the value unchanged. */
+  /** Descend into nested `MapV` objects following `segments`; a non-object or a missing field on the way yields NULL. An empty path returns the value unchanged.
+    */
   private def walk(root: JValue, segments: List[String]): JValue =
     segments.foldLeft(root) {
       case (MapV(m), seg) => m.getOrElse(seg, NullV)
@@ -765,8 +879,8 @@ object SqlEngine {
   private def fieldOf(row: JValue, name: String): JValue =
     row match { case MapV(m) => m.getOrElse(name, NullV); case _ => NullV }
 
-  /** Order projected (`MapV`) rows by several output columns in turn, each with its own direction —
-    * used by DISTINCT (which sorts already-projected rows). */
+  /** Order projected (`MapV`) rows by several output columns in turn, each with its own direction — used by DISTINCT (which sorts already-projected rows).
+    */
   private def sortJRowsByKeys(rows: List[JValue], keys: List[(String, Boolean)]): List[JValue] =
     rows.sortWith { (a, b) =>
       keys.iterator.map { case (col, desc) => val c = cmpTotal(fieldOf(a, col), fieldOf(b, col)); if (desc) -c else c }.find(_ != 0).getOrElse(0) < 0
@@ -791,10 +905,9 @@ object SqlEngine {
       case _           => None
     }
 
-  /** Binary arithmetic over numeric values. A non-numeric operand, or division/modulo by zero, yields
-    * NULL (so it propagates harmlessly through comparisons). Two integral operands stay integral for
-    * `+`/`-`/`*`/`%`; division always yields a decimal (computed with `DECIMAL64` to avoid
-    * non-terminating expansions). */
+  /** Binary arithmetic over numeric values. A non-numeric operand, or division/modulo by zero, yields NULL (so it propagates harmlessly through comparisons). Two integral operands stay integral for `+`/`-`/`*`/`%`; division always yields a decimal
+    * (computed with `DECIMAL64` to avoid non-terminating expansions).
+    */
   private def evalArith(op: ArithOp, a: JValue, b: JValue): JValue =
     (asBigDecimal(a), asBigDecimal(b)) match {
       case (Some(x), Some(y)) =>
@@ -805,7 +918,7 @@ object SqlEngine {
           case ArithOp.Mod => if (y.signum == 0) NullV else numResult(a, b, x.remainder(y))
           case ArithOp.Div => if (y.signum == 0) NullV else DecimalV(BigDecimal(x.bigDecimal.divide(y.bigDecimal, java.math.MathContext.DECIMAL64)))
         }
-      case _ => NullV
+      case _                  => NullV
     }
 
   /** Keep integral arithmetic integral (`LongV` ⊕ `LongV` ⇒ `LongV`); otherwise a decimal. */
@@ -862,25 +975,24 @@ object SqlEngine {
       case CmpOp.Ge => compareJV(a, b).exists(_ >= 0)
     }
 
-  /** Identifies an aggregate: its function, optional argument expression (`None` = `COUNT(*)`), and the
-    * `DISTINCT` flag. Two aggregates with the same key share one accumulator. */
+  /** Identifies an aggregate: its function, optional argument expression (`None` = `COUNT(*)`), and the `DISTINCT` flag. Two aggregates with the same key share one accumulator.
+    */
   private type AggKey = (AggFunc, Option[Expr], Boolean)
 
   // `lk` resolves a column/group name; `agg` resolves an aggregate (only populated for HAVING).
   private def operand(e: Expr, lk: String => JValue, agg: AggKey => JValue = _ => NullV): JValue =
     e match {
-      case Expr.Col(n)            => lk(n)
-      case Expr.Lit(l)            => litToJV(l)
-      case Expr.Func(name, as)    => evalFunc(name, as.map(operand(_, lk, agg)))
-      case Expr.Aggregate(f, c, d) => agg((f, c, d))
-      case Expr.Arith(op, l, r)   => evalArith(op, operand(l, lk, agg), operand(r, lk, agg))
+      case Expr.Col(n)                        => lk(n)
+      case Expr.Lit(l)                        => litToJV(l)
+      case Expr.Func(name, as)                => evalFunc(name, as.map(operand(_, lk, agg)))
+      case Expr.Aggregate(f, c, d)            => agg((f, c, d))
+      case Expr.Arith(op, l, r)               => evalArith(op, operand(l, lk, agg), operand(r, lk, agg))
       case Expr.Case(subj, branches, default) => evalCase(subj, branches, default, lk, agg)
-      case other                  => BoolV(evalBool(other, lk, agg))
+      case other                              => BoolV(evalBool(other, lk, agg))
     }
 
-  /** Evaluate a `CASE`: the searched form returns the first branch whose condition is true; the simple
-    * form returns the first branch whose value equals the subject. With no match, the `ELSE` value, or
-    * `NULL`. */
+  /** Evaluate a `CASE`: the searched form returns the first branch whose condition is true; the simple form returns the first branch whose value equals the subject. With no match, the `ELSE` value, or `NULL`.
+    */
   private def evalCase(subject: Option[Expr], branches: List[(Expr, Expr)], default: Option[Expr], lk: String => JValue, agg: AggKey => JValue): JValue = {
     val hit = subject match {
       case None    => branches.collectFirst { case (cond, res) if evalBool(cond, lk, agg) => res }
@@ -891,13 +1003,13 @@ object SqlEngine {
 
   private def evalBool(e: Expr, lk: String => JValue, agg: AggKey => JValue = _ => NullV): Boolean =
     e match {
-      case Expr.And(l, r)      => evalBool(l, lk, agg) && evalBool(r, lk, agg)
-      case Expr.Or(l, r)       => evalBool(l, lk, agg) || evalBool(r, lk, agg)
-      case Expr.Not(x)         => !evalBool(x, lk, agg)
-      case Expr.Cmp(op, l, r)  => compareOp(op, operand(l, lk, agg), operand(r, lk, agg))
-      case Expr.IsNull(t, neg) => val isN = operand(t, lk, agg) == NullV; if (neg) !isN else isN
-      case Expr.Like(t, pat)   => operand(t, lk, agg) match { case StringV(s) => likeMatch(s, pat); case _ => false }
-      case Expr.In(t, items, neg) =>
+      case Expr.And(l, r)               => evalBool(l, lk, agg) && evalBool(r, lk, agg)
+      case Expr.Or(l, r)                => evalBool(l, lk, agg) || evalBool(r, lk, agg)
+      case Expr.Not(x)                  => !evalBool(x, lk, agg)
+      case Expr.Cmp(op, l, r)           => compareOp(op, operand(l, lk, agg), operand(r, lk, agg))
+      case Expr.IsNull(t, neg)          => val isN = operand(t, lk, agg) == NullV; if (neg) !isN else isN
+      case Expr.Like(t, pat)            => operand(t, lk, agg) match { case StringV(s) => likeMatch(s, pat); case _ => false }
+      case Expr.In(t, items, neg)       =>
         operand(t, lk, agg) match {
           case NullV => false // a NULL target matches nothing (and NOT IN of NULL is likewise no match)
           case v     => val m = items.exists(it => eqJV(operand(it, lk, agg), v)); if (neg) !m else m
@@ -909,7 +1021,7 @@ object SqlEngine {
             val in = compareJV(v, operand(lo, lk, agg)).exists(_ >= 0) && compareJV(v, operand(hi, lk, agg)).exists(_ <= 0)
             if (neg) !in else in
         }
-      case other               => operand(other, lk, agg) match { case BoolV(b) => b; case _ => false }
+      case other                        => operand(other, lk, agg) match { case BoolV(b) => b; case _ => false }
     }
 
   /** Scalar functions. NULL arguments propagate to a NULL (or non-matching) result.
@@ -921,15 +1033,11 @@ object SqlEngine {
     *   - `CONCAT(a, b, …)` — concatenate the arguments as text.
     *   - `REPLACE(s, from, to)` — replace every literal occurrence of `from` with `to`.
     *   - `INSTR(s, sub)` — 1-based index of the first occurrence of `sub` in `s` (`0` if absent).
-    *   - `GEO_DISTANCE(lat1, lon1, lat2, lon2)` / `GEO_DISTANCE(point, lat2, lon2)` — great-circle
-    *     distance in metres (haversine); the object form reads `latitude`/`longitude` from `point`.
-    *   - `GEO_WITHIN(lat1, lon1, lat2, lon2, radius)` / `GEO_WITHIN(point, lat2, lon2, radius)` —
-    *     boolean `distance <= radius` (metres).
+    *   - `GEO_DISTANCE(lat1, lon1, lat2, lon2)` / `GEO_DISTANCE(point, lat2, lon2)` — great-circle distance in metres (haversine); the object form reads `latitude`/`longitude` from `point`.
+    *   - `GEO_WITHIN(lat1, lon1, lat2, lon2, radius)` / `GEO_WITHIN(point, lat2, lon2, radius)` — boolean `distance <= radius` (metres).
     *   - `NOW()` — the current instant.
-    *   - `YEAR/MONTH/DAY/HOUR/MINUTE/SECOND(ts)` — extract a UTC calendar field as an integer; `ts`
-    *     may be an instant or an ISO-8601 string (date, date-time, or offset date-time).
-    *   - `DATE_DIFF(unit, a, b)` — `a - b` as a whole number of `unit`s (`second`/`minute`/`hour`/
-    *     `day`/`millisecond`, singular or plural).
+    *   - `YEAR/MONTH/DAY/HOUR/MINUTE/SECOND(ts)` — extract a UTC calendar field as an integer; `ts` may be an instant or an ISO-8601 string (date, date-time, or offset date-time).
+    *   - `DATE_DIFF(unit, a, b)` — `a - b` as a whole number of `unit`s (`second`/`minute`/`hour`/ `day`/`millisecond`, singular or plural).
     */
   private def evalFunc(name: String, args: List[JValue]): JValue =
     (name, args) match {
@@ -966,16 +1074,16 @@ object SqlEngine {
       case ("nullif", List(a, b))                => if (a != NullV && eqJV(a, b)) NullV else a
       case ("cast", List(v, StringV(tpe)))       => castValue(v, tpe)
 
-      case ("abs", List(v))               => numUnary(v)(_.abs)
-      case ("floor", List(v))             => intUnary(v)(_.setScale(0, BigDecimal.RoundingMode.FLOOR))
-      case ("ceil" | "ceiling", List(v))  => intUnary(v)(_.setScale(0, BigDecimal.RoundingMode.CEILING))
-      case ("sign", List(v))              => asBigDecimal(v).fold(NullV: JValue)(d => LongV(d.signum.toLong))
-      case ("round", List(v))             => asBigDecimal(v).fold(NullV: JValue)(d => LongV(d.setScale(0, BigDecimal.RoundingMode.HALF_UP).toLong))
-      case ("round", List(v, n))          =>
+      case ("abs", List(v))              => numUnary(v)(_.abs)
+      case ("floor", List(v))            => intUnary(v)(_.setScale(0, BigDecimal.RoundingMode.FLOOR))
+      case ("ceil" | "ceiling", List(v)) => intUnary(v)(_.setScale(0, BigDecimal.RoundingMode.CEILING))
+      case ("sign", List(v))             => asBigDecimal(v).fold(NullV: JValue)(d => LongV(d.signum.toLong))
+      case ("round", List(v))            => asBigDecimal(v).fold(NullV: JValue)(d => LongV(d.setScale(0, BigDecimal.RoundingMode.HALF_UP).toLong))
+      case ("round", List(v, n))         =>
         (asBigDecimal(v), asInt(n)) match { case (Some(d), Some(p)) => DecimalV(d.setScale(p, BigDecimal.RoundingMode.HALF_UP)); case _ => NullV }
-      case ("mod", List(a, b))            => evalArith(ArithOp.Mod, a, b)
-      case ("power" | "pow", List(a, b))  => (asDouble(a), asDouble(b)) match { case (Some(x), Some(y)) => DoubleV(math.pow(x, y)); case _ => NullV }
-      case ("sqrt", List(v))              => asDouble(v).filter(_ >= 0).fold(NullV: JValue)(d => DoubleV(math.sqrt(d)))
+      case ("mod", List(a, b))           => evalArith(ArithOp.Mod, a, b)
+      case ("power" | "pow", List(a, b)) => (asDouble(a), asDouble(b)) match { case (Some(x), Some(y)) => DoubleV(math.pow(x, y)); case _ => NullV }
+      case ("sqrt", List(v))             => asDouble(v).filter(_ >= 0).fold(NullV: JValue)(d => DoubleV(math.sqrt(d)))
 
       case ("geo_distance", List(la1, lo1, la2, lo2)) => geoDistance(la1, lo1, la2, lo2)
       case ("geo_distance", List(p, la2, lo2))        => pointLatLon(p).fold(NullV: JValue) { case (la1, lo1) => geoDistance(la1, lo1, la2, lo2) }
@@ -983,13 +1091,13 @@ object SqlEngine {
       case ("geo_within", List(la1, lo1, la2, lo2, r)) => geoWithin(la1, lo1, la2, lo2, r)
       case ("geo_within", List(p, la2, lo2, r))        => pointLatLon(p).fold(NullV: JValue) { case (la1, lo1) => geoWithin(la1, lo1, la2, lo2, r) }
 
-      case ("now", Nil)         => InstantV(java.time.Instant.now())
-      case ("year", List(v))    => instantField(v)(_.getYear.toLong)
-      case ("month", List(v))   => instantField(v)(_.getMonthValue.toLong)
-      case ("day", List(v))     => instantField(v)(_.getDayOfMonth.toLong)
-      case ("hour", List(v))    => instantField(v)(_.getHour.toLong)
-      case ("minute", List(v))  => instantField(v)(_.getMinute.toLong)
-      case ("second", List(v))  => instantField(v)(_.getSecond.toLong)
+      case ("now", Nil)                    => InstantV(java.time.Instant.now())
+      case ("year", List(v))               => instantField(v)(_.getYear.toLong)
+      case ("month", List(v))              => instantField(v)(_.getMonthValue.toLong)
+      case ("day", List(v))                => instantField(v)(_.getDayOfMonth.toLong)
+      case ("hour", List(v))               => instantField(v)(_.getHour.toLong)
+      case ("minute", List(v))             => instantField(v)(_.getMinute.toLong)
+      case ("second", List(v))             => instantField(v)(_.getSecond.toLong)
       case ("date_diff", List(unit, a, b)) => dateDiff(unit, a, b)
 
       case _ => NullV
@@ -998,8 +1106,8 @@ object SqlEngine {
   /** Field set whose `DATE_DIFF`/extraction results are integer-typed (for the result `Column` hint). */
   private val dateIntFuncs: Set[String] = Set("year", "month", "day", "hour", "minute", "second")
 
-  /** Interpret a value as an instant: an `InstantV`, or an ISO-8601 string (date / date-time / offset
-    * date-time). Stored timestamps decode as plain strings, so both shapes must be accepted. */
+  /** Interpret a value as an instant: an `InstantV`, or an ISO-8601 string (date / date-time / offset date-time). Stored timestamps decode as plain strings, so both shapes must be accepted.
+    */
   private def asInstant(jv: JValue): Option[java.time.Instant] =
     jv match {
       case InstantV(i) => Some(i)
@@ -1020,21 +1128,21 @@ object SqlEngine {
   private def instantField(v: JValue)(f: java.time.ZonedDateTime => Long): JValue =
     asInstant(v).fold(NullV: JValue)(i => LongV(f(i.atZone(java.time.ZoneOffset.UTC))))
 
-  /** `a - b` as a whole number of the named unit; NULL if either side is not an instant or the unit is
-    * unknown. */
+  /** `a - b` as a whole number of the named unit; NULL if either side is not an instant or the unit is unknown.
+    */
   private def dateDiff(unit: JValue, a: JValue, b: JValue): JValue =
     (asInstant(a), asInstant(b), unit) match {
       case (Some(ia), Some(ib), StringV(u)) =>
         val d = java.time.Duration.between(ib, ia)
         u.toLowerCase match {
-          case "second" | "seconds" | "sec"           => LongV(d.getSeconds)
-          case "minute" | "minutes" | "min"           => LongV(d.toMinutes)
-          case "hour" | "hours"                        => LongV(d.toHours)
-          case "day" | "days"                          => LongV(d.toDays)
-          case "millisecond" | "milliseconds" | "ms"  => LongV(d.toMillis)
-          case _                                       => NullV
+          case "second" | "seconds" | "sec"          => LongV(d.getSeconds)
+          case "minute" | "minutes" | "min"          => LongV(d.toMinutes)
+          case "hour" | "hours"                      => LongV(d.toHours)
+          case "day" | "days"                        => LongV(d.toDays)
+          case "millisecond" | "milliseconds" | "ms" => LongV(d.toMillis)
+          case _                                     => NullV
         }
-      case _ => NullV
+      case _                                => NullV
     }
 
   /** String functions whose result is text (for the result `Column` hint). */
@@ -1048,8 +1156,8 @@ object SqlEngine {
   /** Apply a text transform NULL-safely. */
   private def textFn(v: JValue)(f: String => String): JValue = asText(v).fold(NullV: JValue)(s => StringV(f(s)))
 
-  /** 1-based substring; `start` is clamped to the string and a missing/negative `len` runs to the end.
-    * NULL (or a non-numeric `start`/`len`) yields NULL. */
+  /** 1-based substring; `start` is clamped to the string and a missing/negative `len` runs to the end. NULL (or a non-numeric `start`/`len`) yields NULL.
+    */
   private def substr(s: JValue, start: JValue, length: Option[JValue]): JValue =
     (asText(s), asInt(start)) match {
       case (Some(str), Some(st)) =>
@@ -1060,7 +1168,7 @@ object SqlEngine {
           if (from >= str.length) StringV("")
           else StringV(str.substring(from, lenInt.flatten.fold(str.length)(l => math.min(str.length, from + math.max(0, l)))))
         }
-      case _ => NullV
+      case _                     => NullV
     }
 
   /** Great-circle distance in metres, or NULL if any coordinate is missing/non-numeric. */
@@ -1092,15 +1200,15 @@ object SqlEngine {
       case _           => None
     }
 
-  /** A unary numeric transform that preserves the operand's numeric kind (`LongV`/`DoubleV`/`DecimalV`);
-    * NULL for a non-numeric operand. Used by `ABS`. */
+  /** A unary numeric transform that preserves the operand's numeric kind (`LongV`/`DoubleV`/`DecimalV`); NULL for a non-numeric operand. Used by `ABS`.
+    */
   private def numUnary(v: JValue)(f: BigDecimal => BigDecimal): JValue =
     asBigDecimal(v).fold(NullV: JValue) { d =>
       v match { case LongV(_) => LongV(f(d).toLong); case DoubleV(_) => DoubleV(f(d).toDouble); case _ => DecimalV(f(d)) }
     }
 
-  /** A unary numeric transform that yields a whole number (`LongV`); NULL for a non-numeric operand.
-    * Used by `FLOOR`/`CEIL`. */
+  /** A unary numeric transform that yields a whole number (`LongV`); NULL for a non-numeric operand. Used by `FLOOR`/`CEIL`.
+    */
   private def intUnary(v: JValue)(f: BigDecimal => BigDecimal): JValue =
     asBigDecimal(v).fold(NullV: JValue)(d => LongV(f(d).toLong))
 
@@ -1116,9 +1224,9 @@ object SqlEngine {
   private val castBoolTypes    = Set("boolean", "bool")
   private val castTsTypes      = Set("timestamp", "datetime", "instant", "date")
 
-  /** `CAST(value AS type)`: convert `value` to the named SQL type. `NULL` stays `NULL`; a value that
-    * cannot be converted (or an unknown target type) yields `NULL`. Numeric parsing is lenient (a
-    * numeric string converts), and a decimal/double truncates toward zero when cast to an integer. */
+  /** `CAST(value AS type)`: convert `value` to the named SQL type. `NULL` stays `NULL`; a value that cannot be converted (or an unknown target type) yields `NULL`. Numeric parsing is lenient (a numeric string converts), and a decimal/double
+    * truncates toward zero when cast to an integer.
+    */
   private def castValue(v: JValue, tpe: String): JValue =
     if (v == NullV) NullV
     else if (castIntTypes(tpe))
@@ -1154,19 +1262,19 @@ object SqlEngine {
     else if (castTsTypes(tpe)) "timestamp"
     else "any"
 
-  /** A compact textual label for an expression — the default output-column name when no `AS` alias is
-    * given (e.g. `geo_distance(latitude, longitude, 48.8566, 2.3522)`). */
+  /** A compact textual label for an expression — the default output-column name when no `AS` alias is given (e.g. `geo_distance(latitude, longitude, 48.8566, 2.3522)`).
+    */
   private def exprLabel(e: Expr): String =
     e match {
-      case Expr.Col(n)          => unqualify(n)
-      case Expr.Lit(l)          => litToJV(l) match { case StringV(s) => s; case other => jvToString(other) }
-      case Expr.Func(name, as)  => s"$name(${as.map(exprLabel).mkString(", ")})"
-      case Expr.Aggregate(f, c, d) => c.fold(s"${aggLabel(f)}(*)")(e => s"${aggLabel(f)}(${if (d) "distinct " else ""}${exprLabel(e)})")
-      case Expr.Arith(op, l, r) => s"${exprLabel(l)} ${arithSymbol(op)} ${exprLabel(r)}"
+      case Expr.Col(n)                  => unqualify(n)
+      case Expr.Lit(l)                  => litToJV(l) match { case StringV(s) => s; case other => jvToString(other) }
+      case Expr.Func(name, as)          => s"$name(${as.map(exprLabel).mkString(", ")})"
+      case Expr.Aggregate(f, c, d)      => c.fold(s"${aggLabel(f)}(*)")(e => s"${aggLabel(f)}(${if (d) "distinct " else ""}${exprLabel(e)})")
+      case Expr.Arith(op, l, r)         => s"${exprLabel(l)} ${arithSymbol(op)} ${exprLabel(r)}"
       case Expr.In(t, its, neg)         => s"${exprLabel(t)}${if (neg) " not" else ""} in (${its.map(exprLabel).mkString(", ")})"
       case Expr.Between(t, lo, hi, neg) => s"${exprLabel(t)}${if (neg) " not" else ""} between ${exprLabel(lo)} and ${exprLabel(hi)}"
-      case Expr.Case(_, _, _)   => "case"
-      case _                    => "expr"
+      case Expr.Case(_, _, _)           => "case"
+      case _                            => "expr"
     }
 
   private def arithSymbol(op: ArithOp): String =
@@ -1175,31 +1283,31 @@ object SqlEngine {
   /** The result type hint of a projected expression (for the result `Column`). */
   private def exprTypeHint(e: Expr, sources: List[Source]): String =
     e match {
-      case Expr.Col(n)                  => hintFor(sources, n)
-      case Expr.Func("geo_distance", _) => "number"
-      case Expr.Func("geo_within", _)   => "boolean"
-      case Expr.Func("length", _)       => "integer"
-      case Expr.Func("instr", _)        => "integer"
-      case Expr.Func("date_diff", _)    => "integer"
-      case Expr.Func("now", _)          => "timestamp"
-      case Expr.Func(n, _) if dateIntFuncs(n) => "integer"
-      case Expr.Func(n, _) if strTextFuncs(n) => "string"
-      case Expr.Func(n, _) if mathIntFuncs(n) => "integer"
-      case Expr.Func(n, _) if mathNumFuncs(n) => "number"
+      case Expr.Col(n)                                               => hintFor(sources, n)
+      case Expr.Func("geo_distance", _)                              => "number"
+      case Expr.Func("geo_within", _)                                => "boolean"
+      case Expr.Func("length", _)                                    => "integer"
+      case Expr.Func("instr", _)                                     => "integer"
+      case Expr.Func("date_diff", _)                                 => "integer"
+      case Expr.Func("now", _)                                       => "timestamp"
+      case Expr.Func(n, _) if dateIntFuncs(n)                        => "integer"
+      case Expr.Func(n, _) if strTextFuncs(n)                        => "string"
+      case Expr.Func(n, _) if mathIntFuncs(n)                        => "integer"
+      case Expr.Func(n, _) if mathNumFuncs(n)                        => "number"
       case Expr.Func("cast", List(_, Expr.Lit(Literal.StrLit(tpe)))) => castTypeHint(tpe)
-      case Expr.Func("coalesce", args) => args.map(exprTypeHint(_, sources)).distinct match { case List(single) => single; case _ => "any" }
-      case Expr.Func("nullif", a :: _) => exprTypeHint(a, sources)
-      case Expr.Func(_, _)              => "any"
-      case Expr.Case(_, branches, default) =>
+      case Expr.Func("coalesce", args)                               => args.map(exprTypeHint(_, sources)).distinct match { case List(single) => single; case _ => "any" }
+      case Expr.Func("nullif", a :: _)                               => exprTypeHint(a, sources)
+      case Expr.Func(_, _)                                           => "any"
+      case Expr.Case(_, branches, default)                           =>
         // The result type is the common hint of all branch results (and the ELSE), else "any".
         (branches.map(_._2) ++ default.toList).map(exprTypeHint(_, sources)).distinct match { case List(single) => single; case _ => "any" }
-      case Expr.Arith(_, _, _)          => "number"
-      case Expr.Lit(Literal.IntLit(_))  => "integer"
-      case Expr.Lit(Literal.DecLit(_))  => "number"
-      case Expr.Lit(Literal.StrLit(_))  => "string"
-      case Expr.Lit(Literal.BoolLit(_)) => "boolean"
-      case Expr.Lit(Literal.NullLit)    => "any"
-      case _                            => "boolean" // comparisons / logical operators
+      case Expr.Arith(_, _, _)                                       => "number"
+      case Expr.Lit(Literal.IntLit(_))                               => "integer"
+      case Expr.Lit(Literal.DecLit(_))                               => "number"
+      case Expr.Lit(Literal.StrLit(_))                               => "string"
+      case Expr.Lit(Literal.BoolLit(_))                              => "boolean"
+      case Expr.Lit(Literal.NullLit)                                 => "any"
+      case _                                                         => "boolean" // comparisons / logical operators
     }
 
   private def jvToString(jv: JValue): String =
@@ -1215,51 +1323,51 @@ object SqlEngine {
       case other          => new String(JValue.toPlainJson(other), UTF_8)
     }
 
-  /** All aggregate references in an expression (used to gather HAVING aggregates and to reject
-    * aggregates in WHERE). */
+  /** All aggregate references in an expression (used to gather HAVING aggregates and to reject aggregates in WHERE).
+    */
   private def aggsInExpr(e: Expr): List[AggKey] =
     e match {
-      case Expr.Aggregate(f, c, d)   => List((f, c, d))
-      case Expr.Func(_, args)        => args.flatMap(aggsInExpr)
-      case Expr.Arith(_, l, r)       => aggsInExpr(l) ++ aggsInExpr(r)
-      case Expr.Cmp(_, l, r)         => aggsInExpr(l) ++ aggsInExpr(r)
-      case Expr.And(l, r)            => aggsInExpr(l) ++ aggsInExpr(r)
-      case Expr.Or(l, r)             => aggsInExpr(l) ++ aggsInExpr(r)
-      case Expr.Not(x)               => aggsInExpr(x)
-      case Expr.Like(t, _)           => aggsInExpr(t)
-      case Expr.IsNull(t, _)         => aggsInExpr(t)
-      case Expr.In(t, its, _)        => aggsInExpr(t) ++ its.flatMap(aggsInExpr)
+      case Expr.Aggregate(f, c, d)    => List((f, c, d))
+      case Expr.Func(_, args)         => args.flatMap(aggsInExpr)
+      case Expr.Arith(_, l, r)        => aggsInExpr(l) ++ aggsInExpr(r)
+      case Expr.Cmp(_, l, r)          => aggsInExpr(l) ++ aggsInExpr(r)
+      case Expr.And(l, r)             => aggsInExpr(l) ++ aggsInExpr(r)
+      case Expr.Or(l, r)              => aggsInExpr(l) ++ aggsInExpr(r)
+      case Expr.Not(x)                => aggsInExpr(x)
+      case Expr.Like(t, _)            => aggsInExpr(t)
+      case Expr.IsNull(t, _)          => aggsInExpr(t)
+      case Expr.In(t, its, _)         => aggsInExpr(t) ++ its.flatMap(aggsInExpr)
       case Expr.Between(t, lo, hi, _) => aggsInExpr(t) ++ aggsInExpr(lo) ++ aggsInExpr(hi)
-      case Expr.Case(s, br, d)       => s.toList.flatMap(aggsInExpr) ++ br.flatMap { case (c, r) => aggsInExpr(c) ++ aggsInExpr(r) } ++ d.toList.flatMap(aggsInExpr)
-      case Expr.Col(_) | Expr.Lit(_) => Nil
+      case Expr.Case(s, br, d)        => s.toList.flatMap(aggsInExpr) ++ br.flatMap { case (c, r) => aggsInExpr(c) ++ aggsInExpr(r) } ++ d.toList.flatMap(aggsInExpr)
+      case Expr.Col(_) | Expr.Lit(_)  => Nil
     }
 
   /** Columns referenced outside any aggregate (these must be grouping columns in HAVING). */
   private def freeColsInExpr(e: Expr): List[String] =
     e match {
-      case Expr.Col(n)          => List(n)
-      case Expr.Aggregate(_, _, _) => Nil
-      case Expr.Func(_, args)   => args.flatMap(freeColsInExpr)
-      case Expr.Arith(_, l, r)  => freeColsInExpr(l) ++ freeColsInExpr(r)
-      case Expr.Cmp(_, l, r)    => freeColsInExpr(l) ++ freeColsInExpr(r)
-      case Expr.And(l, r)       => freeColsInExpr(l) ++ freeColsInExpr(r)
-      case Expr.Or(l, r)        => freeColsInExpr(l) ++ freeColsInExpr(r)
-      case Expr.Not(x)          => freeColsInExpr(x)
-      case Expr.Like(t, _)      => freeColsInExpr(t)
-      case Expr.IsNull(t, _)    => freeColsInExpr(t)
-      case Expr.In(t, its, _)        => freeColsInExpr(t) ++ its.flatMap(freeColsInExpr)
+      case Expr.Col(n)                => List(n)
+      case Expr.Aggregate(_, _, _)    => Nil
+      case Expr.Func(_, args)         => args.flatMap(freeColsInExpr)
+      case Expr.Arith(_, l, r)        => freeColsInExpr(l) ++ freeColsInExpr(r)
+      case Expr.Cmp(_, l, r)          => freeColsInExpr(l) ++ freeColsInExpr(r)
+      case Expr.And(l, r)             => freeColsInExpr(l) ++ freeColsInExpr(r)
+      case Expr.Or(l, r)              => freeColsInExpr(l) ++ freeColsInExpr(r)
+      case Expr.Not(x)                => freeColsInExpr(x)
+      case Expr.Like(t, _)            => freeColsInExpr(t)
+      case Expr.IsNull(t, _)          => freeColsInExpr(t)
+      case Expr.In(t, its, _)         => freeColsInExpr(t) ++ its.flatMap(freeColsInExpr)
       case Expr.Between(t, lo, hi, _) => freeColsInExpr(t) ++ freeColsInExpr(lo) ++ freeColsInExpr(hi)
-      case Expr.Case(s, br, d)       => s.toList.flatMap(freeColsInExpr) ++ br.flatMap { case (c, r) => freeColsInExpr(c) ++ freeColsInExpr(r) } ++ d.toList.flatMap(freeColsInExpr)
-      case Expr.Lit(_)          => Nil
+      case Expr.Case(s, br, d)        => s.toList.flatMap(freeColsInExpr) ++ br.flatMap { case (c, r) => freeColsInExpr(c) ++ freeColsInExpr(r) } ++ d.toList.flatMap(freeColsInExpr)
+      case Expr.Lit(_)                => Nil
     }
 
   private def likeMatch(s: String, pattern: String): Boolean = {
     val sb = new StringBuilder("^")
     pattern.foreach {
-      case '%'                                  => sb.append(".*")
-      case '_'                                  => sb.append('.')
+      case '%'                                     => sb.append(".*")
+      case '_'                                     => sb.append('.')
       case c if "\\.[]{}()*+-?^$|".indexOf(c) >= 0 => sb.append('\\').append(c)
-      case c                                    => sb.append(c)
+      case c                                       => sb.append(c)
     }
     sb.append('$')
     s.matches(sb.toString)

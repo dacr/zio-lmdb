@@ -24,8 +24,17 @@ import zio.lmdb.sql.SqlError
 /** A value-side column resolved from the value `JsonSchema`. */
 final case class ColumnInfo(name: String, typeHint: String)
 
-/** The catalog view of one collection, read from its `MetaDataEntry`: the key's `keyId` (from
-  * `KeySchema`) and the value columns (from `JsonSchema`).
+/** An index declared over a collection (via `withDeclaredIndex`): its name, the two sides' key component descriptions, and the `keyId`s recorded for its `FROM_KEY` / `TO_KEY`.
+  */
+final case class IndexInfo(
+  name: String,
+  fromComponents: List[IndexComponent],
+  toComponents: List[IndexComponent],
+  fromKeyId: Option[String],
+  toKeyId: Option[String]
+)
+
+/** The catalog view of one collection, read from its `MetaDataEntry`: the key's `keyId` (from `KeySchema`), the value columns (from `JsonSchema`), and the declared indexes over it.
   */
 final case class CollectionInfo(
   name: String,
@@ -33,22 +42,34 @@ final case class CollectionInfo(
   keyId: Option[String],
   columns: List[ColumnInfo],
   keySchema: Option[SchemaArtifact],
-  valueSchema: Option[SchemaArtifact]
+  valueSchema: Option[SchemaArtifact],
+  indexes: List[IndexInfo] = Nil
 )
 
 object Catalog {
 
   private val metaName = LMDBConfig.default.metaDataCollectionName
 
-  /** Resolve a collection by name, or fail with `UnknownCollection`. */
+  /** Resolve a collection by name — including the indexes declared over it — or fail with `UnknownCollection`.
+    */
   def lookup(lmdb: LMDB, name: String): IO[SqlError, CollectionInfo] =
     lmdb
       .fetch[String, MetaDataEntry](metaName, name)
       .mapError(e => SqlError.Storage(e.toString))
       .flatMap {
-        case Some(entry) => ZIO.succeed(toInfo(entry))
+        case Some(entry) => indexesOf(lmdb, name).map(idx => toInfo(entry).copy(indexes = idx))
         case None        => ZIO.fail(SqlError.UnknownCollection(name))
       }
+
+  /** All indexes whose declared mapping points at `collection`. */
+  private def indexesOf(lmdb: LMDB, collection: String): IO[SqlError, List[IndexInfo]] =
+    list(lmdb).map { entries =>
+      entries.collect {
+        case e if e.collectionKind == CollectionKind.Index && e.indexMapping.exists(_.sourceCollection == collection) =>
+          val mapping = e.indexMapping.get
+          IndexInfo(e.collectionName, mapping.fromComponents, mapping.toComponents, keyIdOf(e.keySchema), keyIdOf(e.valueSchema))
+      }
+    }
 
   /** All collection metadata entries (for `SHOW`). */
   def list(lmdb: LMDB): IO[SqlError, List[MetaDataEntry]] =
@@ -72,7 +93,7 @@ object Catalog {
           case Some(JValue.MapV(props)) => props.toList.map { case (n, jv) => ColumnInfo(n, typeHintOf(jv)) }
           case _                        => Nil
         }
-      case _ => Nil
+      case _                                                  => Nil
     }
 
   private def typeHintOf(jv: JValue): String =

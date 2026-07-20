@@ -96,6 +96,27 @@ case class LMDBCollection[K, T](name: CollectionName, lmdb: LMDB, indexUpdaters:
     this.copy(indexUpdaters = indexUpdaters :+ updater)
   }
 
+  /** Link an index to this collection with a declarative description of how each key component is derived from a record. Behaves like [[withIndexFull]] on the write path (an extractor is built from the component accessors), and additionally persists
+    * the [[IndexMapping]] into the index's metadata so tools like the SQL query planner can serve predicates on the declared fields from the index instead of scanning the collection.
+    *
+    * A record is indexed only when every component of both specs is present (`eval` returns `Some`). Redeclaring overwrites the previously persisted mapping.
+    *
+    * @param index
+    *   The index to link
+    * @param from
+    *   How the index `FROM_KEY` is derived from a record (see [[IdxKey]])
+    * @param to
+    *   How the index `TO_KEY` is derived from a record (typically `IdxKey.of(IdxKey.primaryKey)`)
+    * @return
+    *   The collection facade with the index updater attached, after the mapping has been persisted
+    */
+  def withDeclaredIndex[IK, IV](index: LMDBIndex[IK, IV])(from: IndexKeySpec[K, T, IK], to: IndexKeySpec[K, T, IV]): IO[IndexErrors, LMDBCollection[K, T]] = {
+    val mapping = IndexMapping(name, from.components, to.components)
+    lmdb
+      .indexDeclare(index.name, mapping)
+      .as(withIndexFull(index)((k: K, t: T) => from.eval(k, t).zip(to.eval(k, t)).toList))
+  }
+
   /** Get how many items a collection contains
     *
     * @return
