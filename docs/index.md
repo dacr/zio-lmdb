@@ -32,6 +32,7 @@ It wraps [lmdb-java](https://github.com/lmdbjava/lmdbjava) with a higher-level, 
 | Regular | one key → one value | [`LMDBCollection[K, T]`](collection.html) |
 | Multi | one key → many values | [`LMDBMulti[K, T]`](multi.html) |
 | Index | one key → many keys | [`LMDBIndex[FROM, TO]`](lmdb-index.html) |
+| Vector | one key → one embedding | [`LMDBVectorIndex[K]`](vector-search.html) (separate `zio-lmdb-vector` module) |
 
 ---
 
@@ -98,3 +99,4 @@ When LMDB is used with recent JVMs, add the following options at startup:
 - **[SQL](sql.html)** — query and mutate collections with SQL, plus the REPL.
 - **[Query DSL](query-dsl.html)** — fluent query and join API.
 - **[Configuration](configuration.html)** — all configuration parameters.
+- **[Vector Search](vector-search.html)** — nearest-neighbor search over embeddings (`zio-lmdb-vector` module).

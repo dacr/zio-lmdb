@@ -53,6 +53,7 @@ lazy val root = (project in file("."))
     keycodecsTimestamp,
     keycodecsUca,
     queryDsl,
+    vectorSearch,
     sql
   )
 
@@ -168,6 +169,19 @@ lazy val queryDsl = (project in file("query-dsl"))
   .settings(
     name        := "query-dsl",
     description := "Query DSL for ZIO LMDB",
+    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio-test"            % versions.zio % Test,
+      "dev.zio" %% "zio-test-sbt"        % versions.zio % Test,
+      "dev.zio" %% "zio-test-scalacheck" % versions.zio % Test
+    )
+  )
+  .dependsOn(core)
+
+lazy val vectorSearch = (project in file("vector-search"))
+  .settings(commonSettings)
+  .settings(
+    name        := "zio-lmdb-vector",
+    description := "Vector similarity search for ZIO LMDB",
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio-test"            % versions.zio % Test,
       "dev.zio" %% "zio-test-sbt"        % versions.zio % Test,
