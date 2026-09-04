@@ -25,9 +25,9 @@ faceIndex: FaceId → Array[Float] (512 components)
   search(queryVector, k = 5) → [(faceId7, 0.04), (faceId3, 0.11), ...]  // sorted by ascending distance
 ```
 
-Vectors are stored as an ordinary collection — one record per key — so they get the usual LMDB properties for free: ACID writes, mmap'd/page-cached reads, backup/restore. There is no separate graph structure to keep in sync, which also means `searchNearest` is an **exact**, full-scan search: every stored vector is compared against the query. To keep that affordable, the scan is spread across CPU cores instead of running on a single thread (see below).
+Vectors are stored as an ordinary collection — one record per key — so they get the usual LMDB properties for free: ACID writes, mmap'd/page-cached reads, backup/restore. `searchNearest` is an **exact**, full-scan search: every stored vector is compared against the query, with the scan spread across CPU cores instead of running on a single thread (see below).
 
-This tradeoff — exact but linear — is a good fit up to a few hundred thousand, or some millions, of vectors. Past that, an approximate index (HNSW, IVF, ...) with sub-linear search cost becomes the better fit; `LMDBVectorIndex` doesn't provide one (yet).
+For workloads that run many searches against a mostly-static corpus, `searchApproximate` trades a little recall for search cost that grows logarithmically rather than linearly — see [Approximate search](#approximate-search-hnsw) below.
 
 ---
 
@@ -149,6 +149,32 @@ val program = for {
 
 ---
 
-## Beyond a flat index
+## Approximate search (HNSW)
 
-Once the O(n) cost of a full scan stops being fast enough — the corpus has grown into the millions, or a latency-sensitive interactive path needs sub-linear search — an approximate nearest-neighbor structure (e.g. HNSW) is the next step. See `docs/internal/vector-search-hnsw-design.md` for a sketch of how that would layer onto the same `LMDBCollection` primitives, persisted in-database rather than requiring an external vector database.
+When the number of searches to run is large compared to the number of vectors, an exact full scan per query stops being the right shape: it costs O(n) *per search*, however well parallelized. `buildApproximateIndex` builds an in-memory [HNSW](https://arxiv.org/abs/1603.09320) graph whose search cost grows logarithmically with the corpus instead.
+
+```scala
+def buildApproximateIndex(params: HnswParams = HnswParams()): IO[StreamErrors, Unit]
+def searchApproximate(query: Array[Float], k: Int, ef: Option[Int] = None): IO[..., Chunk[(K, Double)]]
+```
+
+```scala
+_    <- ZIO.foreachDiscard(knownVectors) { case (key, v) => index.insert(key, v) }
+_    <- index.buildApproximateIndex(HnswParams(m = 16, efConstruction = 100, efSearch = 64))
+hits <- ZIO.foreach(manyQueries)(q => index.searchApproximate(q, k = 8))
+```
+
+| Parameter | Meaning |
+|---|---|
+| `m` | neighbors kept per node per layer (layer 0 keeps `2 * m`) — better connectivity, more memory, slower build |
+| `efConstruction` | candidate-list width during build — better graph, proportionally slower build |
+| `efSearch` | default candidate-list width per query — better recall, proportionally slower search |
+| `seed` | makes the layer assignment, and therefore the build, reproducible |
+
+**The tradeoff is recall, and it is not free.** A search explores a bounded neighborhood rather than every vector, so it can miss a true nearest neighbor. Note that "miss a neighbor" is not always a smaller answer: if your logic *rejects* a candidate because a conflicting neighbor is present, dropping that conflicting neighbor can flip the decision the other way. Measure recall on your own data — `searchNearest` is the exact reference to compare against — and treat any downstream decision rule as part of what you are measuring.
+
+Both the build and the resulting graph are in-memory and snapshot-like: any `insert`/`delete` invalidates them, after which `searchApproximate` transparently falls back to the exact scan until you build again. The graph is immutable once built, so searches run concurrently from any number of fibers without locking.
+
+**When it pays**: the build reads and links every vector, so it costs meaningfully more than a single exact scan. It wins when many searches amortize it — a batch job matching a large query set against a mostly-static corpus — and loses for a handful of one-off queries, where `searchNearest` finishes sooner than a build would.
+
+An on-disk, incrementally-maintained variant (persisting the graph in LMDB rather than rebuilding it per process) is sketched in `docs/internal/vector-search-hnsw-design.md`.

@@ -75,6 +75,25 @@ object LMDBVectorIndexSpec extends ZIOSpecDefault {
         expected = naiveNearest(vectors, query, k = 5, VectorMetric.Cosine)
       } yield assertTrue(got.map(_._1).toList == expected)
     },
+    test("searchApproximate uses the graph once built, and falls back to the exact scan before that") {
+      val dimension = 16
+      val count     = 400
+      for {
+        index    <- LMDBVectorIndex.create[String]("vec-approximate", dimension, metric = VectorMetric.Cosine, failIfExists = false)
+        keys      = (0 until count).map(i => s"k$i").toList
+        vectors  <- ZIO.foreach(keys)(key => randomVector(dimension).map(key -> _))
+        _        <- ZIO.foreach(vectors) { case (key, v) => index.insert(key, v) }
+        query    <- randomVector(dimension)
+        // No graph yet: this must still answer, by falling back to the exact scan.
+        fallback <- index.searchApproximate(query, k = 5)
+        exact    <- index.searchNearest(query, k = 5)
+        _        <- index.buildApproximateIndex(HnswParams(m = 16, efConstruction = 100, efSearch = 64))
+        viaGraph <- index.searchApproximate(query, k = 5)
+      } yield assertTrue(
+        fallback == exact,
+        viaGraph.map(_._1) == exact.map(_._1)
+      )
+    },
     test("searchNearest gives the same result warm or cold, and a write invalidates the warm snapshot") {
       for {
         index <- LMDBVectorIndex.create[String]("vec-warm", dimension = 3, metric = VectorMetric.Euclidean, failIfExists = false)

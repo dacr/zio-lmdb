@@ -27,7 +27,7 @@ The test JVM requires `--add-opens java.base/java.nio=ALL-UNNAMED --add-opens ja
 - `core` (artifact `zio-lmdb`) — the database itself; depends on `keycodecs`.
 - `codecs/keycodecs` — the `KeyCodec[K]` abstraction plus codecs for standard types; sibling modules `keycodecs-ulid`, `keycodecs-uuidv7`, `keycodecs-geo`, `keycodecs-timestamp`, `keycodecs-uca` add one dependency-heavy codec each and all depend only on `keycodecs`.
 - `query-dsl` — `QueryBuilder` fluent filtering/streaming API on top of `core`.
-- `vector-search` (artifact `zio-lmdb-vector`) — `LMDBVectorIndex[K]` nearest-neighbor search over fixed-dimension float vectors (embeddings), backed by a plain `LMDBCollection`; exact/flat search parallelized across cores. Depends only on `core`.
+- `vector-search` (artifact `zio-lmdb-vector`) — `LMDBVectorIndex[K]` nearest-neighbor search over fixed-dimension float vectors (embeddings), backed by a plain `LMDBCollection`. Two search paths: `searchNearest` (exact full scan, parallelized across cores, optionally over a `warm()` in-memory snapshot) and `searchApproximate` (in-memory `HnswIndex` graph built by `buildApproximateIndex`, sub-linear but approximate). Depends only on `core`.
 - `sql` (artifact `zio-lmdb-sql`) — SQL REPL over any zio-lmdb database; depends on core, query-dsl, and all keycodec modules. Assembles to a runnable jar (`assembly / mainClass` = `zio.lmdb.sql.repl.Main`).
 
 ## Core architecture

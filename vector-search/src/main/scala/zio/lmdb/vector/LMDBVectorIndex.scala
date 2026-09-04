@@ -47,15 +47,16 @@ case class LMDBVectorIndex[K](
   collection: LMDBCollection[K, Array[Float]],
   dimension: Int,
   metric: VectorMetric,
-  private val cache: Ref[Option[Chunk[(K, Array[Float])]]]
+  private val cache: Ref[Option[Chunk[(K, Array[Float])]]],
+  private val approximate: Ref[Option[HnswIndex[K]]]
 ) {
 
-  /** Adds or replaces the vector stored for `key`. Invalidates the warm cache, if any. */
+  /** Adds or replaces the vector stored for `key`. Invalidates the warm cache and the approximate index, if any. */
   def insert(key: K, vector: Array[Float]): IO[UpsertErrors | IndexErrors | VectorDimensionMismatch, Unit] =
-    checkDimension(vector.length) *> collection.upsertOverwrite(key, vector) <* cache.set(None)
+    checkDimension(vector.length) *> collection.upsertOverwrite(key, vector) <* invalidate
 
-  /** Removes the vector stored for `key`, if any, returning it. Invalidates the warm cache, if any. */
-  def delete(key: K): IO[DeleteErrors | IndexErrors, Option[Array[Float]]] = collection.delete(key) <* cache.set(None)
+  /** Removes the vector stored for `key`, if any, returning it. Invalidates the warm cache and the approximate index, if any. */
+  def delete(key: K): IO[DeleteErrors | IndexErrors, Option[Array[Float]]] = collection.delete(key) <* invalidate
 
   /** Fetches the vector stored for `key`, if any. */
   def get(key: K): IO[FetchErrors, Option[Array[Float]]] = collection.fetch(key)
@@ -69,8 +70,20 @@ case class LMDBVectorIndex[K](
   def warm(): IO[StreamErrors, Unit] =
     collection.streamWithKeys().runCollect.flatMap(vectors => cache.set(Some(vectors)))
 
-  /** Drops the warm snapshot, if any, so the next `searchNearest` reads the collection directly again. */
-  def cooldown(): UIO[Unit] = cache.set(None)
+  /** Drops the warm snapshot and the approximate index, if any, so the next search reads the collection directly again. */
+  def cooldown(): UIO[Unit] = invalidate
+
+  /** Builds an in-memory [[HnswIndex]] over the collection, enabling `searchApproximate`. This is the expensive step of approximate search — it reads every vector and wires up a navigable graph — and it buys searches that no longer scale with the
+    * size of the corpus. Worth it when the number of searches to run is large compared to the number of vectors; for a handful of queries, the exact `searchNearest` will finish sooner than this build does.
+    *
+    * Like `warm()`, the result is a point-in-time snapshot that any `insert`/`delete` invalidates, after which `searchApproximate` falls back to an exact scan until this is called again.
+    */
+  def buildApproximateIndex(params: HnswParams = HnswParams()): IO[StreamErrors, Unit] =
+    collection.streamWithKeys().runCollect.flatMap { vectors =>
+      ZIO.succeedBlocking(HnswIndex.build(vectors, metric, params)).flatMap(graph => approximate.set(Some(graph)))
+    }
+
+  private def invalidate: UIO[Unit] = cache.set(None) *> approximate.set(None)
 
   /** Finds the `k` vectors closest to `query` according to `metric`, sorted by ascending distance.
     *
@@ -103,6 +116,29 @@ case class LMDBVectorIndex[K](
             .grouped(batchSize)
             .mapZIOParUnordered(parallelism) { batch => ZIO.succeed(batchTopK(batch, query, k)) }
             .runFold(Chunk.empty[(K, Double)])((acc, next) => mergeTopK(acc, next, k))
+        }
+
+  /** Finds approximately the `k` closest vectors to `query`, using the graph built by `buildApproximateIndex`.
+    *
+    * Unlike `searchNearest`, this does **not** look at every stored vector: it walks a navigable graph, so its cost grows logarithmically rather than linearly with the size of the corpus. The price is recall — a search can miss a true neighbor —
+    * which `ef` trades back against time. Measure recall for your own data against `searchNearest`, which remains the exact reference.
+    *
+    * With no approximate index built (or after a write invalidated it), this falls back to the exact `searchNearest`, so the results stay correct and only the speed advantage is lost.
+    *
+    * @param query
+    *   the vector to search neighbors for; must have `dimension` components
+    * @param k
+    *   how many nearest neighbors to return
+    * @param ef
+    *   candidate-list width for this query; defaults to the built index's `efSearch`, and is always raised to at least `k`
+    */
+  def searchApproximate(query: Array[Float], k: Int, ef: Option[Int] = None): IO[StreamErrors | VectorDimensionMismatch, Chunk[(K, Double)]] =
+    if (k <= 0) ZIO.succeed(Chunk.empty)
+    else
+      checkDimension(query.length) *>
+        approximate.get.flatMap {
+          case Some(graph) => ZIO.succeed(graph.search(query, k, ef.getOrElse(graph.params.efSearch)))
+          case None        => searchNearest(query, k)
         }
 
   private def checkDimension(actual: Int): IO[VectorDimensionMismatch, Unit] =
@@ -184,8 +220,9 @@ object LMDBVectorIndex {
   )(implicit kodec: KeyCodec[K]): ZIO[LMDB, CreateErrors, LMDBVectorIndex[K]] = {
     import VectorCodec.given
     for {
-      collection <- LMDB.collectionCreate[K, Array[Float]](name, failIfExists)
-      cache      <- Ref.make(Option.empty[Chunk[(K, Array[Float])]])
-    } yield LMDBVectorIndex(collection, dimension, metric, cache)
+      collection  <- LMDB.collectionCreate[K, Array[Float]](name, failIfExists)
+      cache       <- Ref.make(Option.empty[Chunk[(K, Array[Float])]])
+      approximate <- Ref.make(Option.empty[HnswIndex[K]])
+    } yield LMDBVectorIndex(collection, dimension, metric, cache, approximate)
   }
 }
