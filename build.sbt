@@ -12,20 +12,20 @@ ThisBuild / scalaVersion := "3.3.7"
 lazy val versions = new {
   val zio        = "2.1.26"
   val zionio     = "2.0.2"
-  val zioconfig  = "4.0.7"
+  val zioconfig  = "4.0.8"
   val ziologging = "2.5.3"
   val lmdb       = "0.9.3"
-  val airframe   = "2026.1.6"
+  val airframe   = "2026.2.2"
   val scalapbrt  = scalapb.compiler.Version.scalapbVersion
-  val jsoniter   = "2.38.14"
+  val jsoniter   = "2.40.1"
 }
 
 lazy val commonSettings = Seq(
-  organization                 := "fr.janalyse",
-  licenses += "NON-AI-APACHE2" -> url(s"https://github.com/non-ai-licenses/non-ai-licenses/blob/main/NON-AI-APACHE2"),
-  homepage                     := Some(url("https://github.com/dacr/zio-lmdb")),
-  scmInfo                      := Some(ScmInfo(url(s"https://github.com/dacr/zio-lmdb.git"), s"git@github.com:dacr/zio-lmdb.git")),
-  developers                   := List(
+  organization := "fr.janalyse",
+  licenses     := Seq("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0")),
+  homepage     := Some(url("https://github.com/dacr/zio-lmdb")),
+  scmInfo      := Some(ScmInfo(url(s"https://github.com/dacr/zio-lmdb.git"), s"git@github.com:dacr/zio-lmdb.git")),
+  developers   := List(
     Developer(
       id = "dacr",
       name = "David Crosson",
@@ -33,7 +33,8 @@ lazy val commonSettings = Seq(
       url = url("https://github.com/dacr")
     )
   ),
-  fork                         := true,
+  scalacOptions += "-no-indent",
+  fork         := true,
   javaOptions ++= Seq("--add-opens", "java.base/java.nio=ALL-UNNAMED", "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED"),
   testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
 )
@@ -63,18 +64,18 @@ lazy val core = (project in file("core"))
     name                       := "zio-lmdb",
     description                := "Lightning Memory Database (LMDB) for scala ZIO",
     libraryDependencies ++= Seq(
-      "dev.zio"                               %% "zio"                     % versions.zio,
-      "dev.zio"                               %% "zio-streams"             % versions.zio,
-      "dev.zio"                               %% "zio-config"              % versions.zioconfig,
-      "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core"     % versions.jsoniter,
-      "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros"   % versions.jsoniter,
-      "org.lmdbjava"                           % "lmdbjava"                % versions.lmdb,
-      "dev.zio"                               %% "zio-test"                % versions.zio        % Test,
-      "dev.zio"                               %% "zio-logging"             % versions.ziologging % Test,
-      "dev.zio"                               %% "zio-test-sbt"            % versions.zio        % Test,
-      "dev.zio"                               %% "zio-test-scalacheck"     % versions.zio        % Test,
-      "dev.zio"                               %% "zio-nio"                 % versions.zionio     % Test,
-      "com.thesamet.scalapb"                  %% "scalapb-runtime"         % versions.scalapbrt  % "protobuf,test"
+      "dev.zio"                               %% "zio"                   % versions.zio,
+      "dev.zio"                               %% "zio-streams"           % versions.zio,
+      "dev.zio"                               %% "zio-config"            % versions.zioconfig,
+      "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core"   % versions.jsoniter,
+      "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % versions.jsoniter,
+      "org.lmdbjava"                           % "lmdbjava"              % versions.lmdb,
+      "dev.zio"                               %% "zio-test"              % versions.zio        % Test,
+      "dev.zio"                               %% "zio-logging"           % versions.ziologging % Test,
+      "dev.zio"                               %% "zio-test-sbt"          % versions.zio        % Test,
+      "dev.zio"                               %% "zio-test-scalacheck"   % versions.zio        % Test,
+      "dev.zio"                               %% "zio-nio"               % versions.zionio     % Test,
+      "com.thesamet.scalapb"                  %% "scalapb-runtime"       % versions.scalapbrt  % "protobuf,test"
     ),
     Test / PB.targets          := Seq(
       scalapb.gen() -> (Test / sourceManaged).value / "scalapb"
@@ -196,14 +197,14 @@ lazy val sql = (project in file("sql"))
     name                             := "zio-lmdb-sql",
     description                      := "SQL REPL for ZIO LMDB",
     libraryDependencies ++= Seq(
-      "org.jline"  % "jline"               % "4.1.3",
-      "com.lihaoyi" %% "fastparse"          % "3.1.1",
-      "dev.zio"   %% "zio"                  % versions.zio,
-      "dev.zio"   %% "zio-streams"          % versions.zio,
-      "dev.zio"   %% "zio-logging"          % versions.ziologging,
-      "dev.zio"   %% "zio-test"             % versions.zio % Test,
-      "dev.zio"   %% "zio-test-sbt"         % versions.zio % Test,
-      "dev.zio"   %% "zio-test-scalacheck"  % versions.zio % Test
+      "org.jline"    % "jline"               % "4.4.3",
+      "com.lihaoyi" %% "fastparse"           % "3.1.1",
+      "dev.zio"     %% "zio"                 % versions.zio,
+      "dev.zio"     %% "zio-streams"         % versions.zio,
+      "dev.zio"     %% "zio-logging"         % versions.ziologging,
+      "dev.zio"     %% "zio-test"            % versions.zio % Test,
+      "dev.zio"     %% "zio-test-sbt"        % versions.zio % Test,
+      "dev.zio"     %% "zio-test-scalacheck" % versions.zio % Test
     ),
     assembly / mainClass             := Some("zio.lmdb.sql.repl.Main"),
     assembly / assemblyJarName       := "zio-lmdb-sql.jar",
