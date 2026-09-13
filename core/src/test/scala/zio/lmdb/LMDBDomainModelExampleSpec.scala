@@ -32,8 +32,8 @@ import java.time.Instant
   *   - `LMDBCodecJson` — JSON (de)serialization used to read/write records.
   *   - `LMDBSchema` — structural schema captured once, on `collectionCreate`.
   *
-  * The *key* needs nothing: a key is described by the identity of its `KeyCodec` (its stable `keyId`), captured alongside the value schema. Even a custom key type brings its own id — see the second test — so a key is never opaque and a reader never has to guess what the
-  * bytes are.
+  * The *key* needs nothing: a key is described by the identity of its `KeyCodec` (its stable `keyId`), captured alongside the value schema. Even a custom key type brings its own id — see the second test — so a key is never opaque and a reader never
+  * has to guess what the bytes are.
   *
   * Nested types (`LineItem`) require no ceremony: the codec inlines them and the schema describes them structurally.
   */
@@ -50,13 +50,15 @@ object LMDBDomainModelExampleSpec extends ZIOSpecDefault with Commons {
   ) derives LMDBCodecJson,
         LMDBSchema
 
-  /** A user-defined key type with its own `KeyCodec`. It names itself with a stable `keyId`, so the catalog records that identity (not an opaque blob). A reader that hasn't loaded this codec would see the id and fail clearly, rather than mis-decoding the bytes. */
+  /** A user-defined key type with its own `KeyCodec`. It names itself with a stable `keyId`, so the catalog records that identity (not an opaque blob). A reader that hasn't loaded this codec would see the id and fail clearly, rather than
+    * mis-decoding the bytes.
+    */
   final case class LegacyRef(raw: String)
   object LegacyRef {
-    val KeyId: KeyTypeId = KeyTypeId("example:legacy-ref/v1")
+    val KeyId: KeyTypeId      = KeyTypeId("example:legacy-ref/v1")
     given KeyCodec[LegacyRef] = new KeyCodec[LegacyRef] {
-      override val keyId: KeyTypeId                                            = KeyId
-      override def encode(key: LegacyRef): Array[Byte]                         = key.raw.getBytes(UTF_8)
+      override val keyId: KeyTypeId                                               = KeyId
+      override def encode(key: LegacyRef): Array[Byte]                            = key.raw.getBytes(UTF_8)
       override def decode(keyBytes: ByteBuffer): Either[KeyCodecError, LegacyRef] = Right(LegacyRef(UTF_8.decode(keyBytes).toString))
     }
   }

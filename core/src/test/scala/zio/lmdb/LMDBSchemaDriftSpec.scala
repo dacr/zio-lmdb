@@ -40,9 +40,9 @@ object LMDBSchemaDriftSpec extends ZIOSpecDefault with Commons {
         _    <- LMDB.collectionCreate[String, DocA]("drift_value")
         exit <- LMDB.collectionGet[String, DocB]("drift_value").exit
         side  = exit match {
-          case Exit.Failure(cause) => cause.failures.collectFirst { case s: SchemaDrift => s.side }.getOrElse("<other>")
-          case _                   => "<success>"
-        }
+                  case Exit.Failure(cause) => cause.failures.collectFirst { case s: SchemaDrift => s.side }.getOrElse("<other>")
+                  case _                   => "<success>"
+                }
       } yield assert(exit)(failsWithA[SchemaDrift]) &&
         assertTrue(side == "value")
     },
@@ -65,9 +65,9 @@ object LMDBSchemaDriftSpec extends ZIOSpecDefault with Commons {
         // Re-open with the B pair on the to-key side
         exit <- ZIO.serviceWithZIO[LMDB](_.indexGet[String, String]("drift_idx")(using summon, summon, fromConcrete, toConcreteB)).exit
         side  = exit match {
-          case Exit.Failure(cause) => cause.failures.collectFirst { case s: SchemaDrift => s.side }.getOrElse("<other>")
-          case _                   => "<success>"
-        }
+                  case Exit.Failure(cause) => cause.failures.collectFirst { case s: SchemaDrift => s.side }.getOrElse("<other>")
+                  case _                   => "<success>"
+                }
       } yield assert(exit)(failsWithA[SchemaDrift]) &&
         assertTrue(side == "toKey")
     },

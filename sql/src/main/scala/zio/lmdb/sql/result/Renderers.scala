@@ -24,9 +24,8 @@ import java.nio.charset.StandardCharsets.UTF_8
 
 enum Format { case Table, Json, Csv }
 
-/** Renders a [[QueryResult]] to a stream of output lines. `Json` (one object per row) and `Csv`
-  * stream per row; `Table` buffers to compute column widths, then streams — the documented
-  * interactive exception. All three consume the same canonical `QueryResult`.
+/** Renders a [[QueryResult]] to a stream of output lines. `Json` (one object per row) and `Csv` stream per row; `Table` buffers to compute column widths, then streams — the documented interactive exception. All three consume the same canonical
+  * `QueryResult`.
   */
 object Renderer {
 
@@ -61,12 +60,14 @@ object Renderer {
       val widths  = headers.indices.map(i => (headers(i).length :: matrix.map(_(i).length)).max).toList
 
       def line(cells: List[String]): String =
-        cells.zip(widths).zipWithIndex
+        cells
+          .zip(widths)
+          .zipWithIndex
           .map { case ((c, w), i) => if (i == cells.size - 1) c else c.padTo(w, ' ') }
           .mkString(" | ")
 
-      val sep    = widths.map("-" * _).mkString("-+-")
-      val body   = matrix.map(line)
+      val sep  = widths.map("-" * _).mkString("-+-")
+      val body = matrix.map(line)
       // The row count is reported by the caller (the REPL prints `(N rows in <time>)`).
       ZStream.fromIterable(line(headers) :: sep :: body)
     })

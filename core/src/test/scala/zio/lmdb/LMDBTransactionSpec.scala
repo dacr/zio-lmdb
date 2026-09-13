@@ -31,14 +31,14 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
       for {
         collectionName <- Random.nextUUID.map(_.toString)
         _              <- LMDB.collectionCreate[String, String](collectionName)
-        
+
         _ <- LMDB.readWrite { txn =>
                for {
                  _ <- txn.upsert[String, String](collectionName, "key1", _ => "val1")
                  _ <- txn.upsert[String, String](collectionName, "key2", _ => "val2")
                } yield ()
              }
-        
+
         v1 <- LMDB.fetch[String, String](collectionName, "key1")
         v2 <- LMDB.fetch[String, String](collectionName, "key2")
       } yield assertTrue(v1.contains("val1"), v2.contains("val2"))
@@ -47,14 +47,14 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
       for {
         collectionName <- Random.nextUUID.map(_.toString)
         _              <- LMDB.collectionCreate[String, String](collectionName)
-        
+
         _ <- LMDB.readWrite { txn =>
                for {
                  _ <- txn.upsert[String, String](collectionName, "key1", _ => "val1")
                  _ <- ZIO.fail(new Exception("Boom"))
                } yield ()
              }.ignore
-        
+
         v1 <- LMDB.fetch[String, String](collectionName, "key1")
       } yield assertTrue(v1.isEmpty)
     },
@@ -63,11 +63,11 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
         collectionName <- Random.nextUUID.map(_.toString)
         _              <- LMDB.collectionCreate[String, String](collectionName)
         _              <- LMDB.upsert[String, String](collectionName, "key1", _ => "val1")
-        
+
         _ <- LMDB.readOnly { txn =>
                for {
                  v1 <- txn.fetch[String, String](collectionName, "key1")
-                 // This should technically NOT see concurrent writes if isolation works, 
+                 // This should technically NOT see concurrent writes if isolation works,
                  // but checking basic read functionality here.
                  // LMDB provides Snapshot Isolation for read transactions.
                } yield assertTrue(v1.contains("val1"))
@@ -80,7 +80,7 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
         col2 <- Random.nextUUID.map(_.toString)
         _    <- LMDB.collectionCreate[String, String](col1)
         _    <- LMDB.collectionCreate[String, String](col2)
-        
+
         _ <- LMDB.readWrite { txn =>
                for {
                  _ <- txn.upsert[String, String](col1, "k1", _ => "v1")
@@ -88,7 +88,7 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
                  _ <- txn.upsert[String, String](col2, "k1", _ => v.getOrElse("default"))
                } yield ()
              }
-             
+
         res <- LMDB.fetch[String, String](col2, "k1")
       } yield assertTrue(res.contains("v1"))
     },
@@ -96,7 +96,7 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
       for {
         collectionName <- Random.nextUUID.map(_.toString)
         collection     <- LMDB.collectionCreate[String, String](collectionName)
-        
+
         _ <- collection.readWrite { txn =>
                for {
                  _ <- txn.upsert("key1", _ => "val1")
@@ -105,7 +105,7 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
                  _ <- txn.upsert("key2", _ => v.getOrElse("default"))
                } yield ()
              }
-             
+
         v1 <- collection.fetch("key1")
         v2 <- collection.fetch("key2")
       } yield assertTrue(v1.contains("val1"), v2.contains("val1"))
@@ -115,7 +115,7 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
         collectionName <- Random.nextUUID.map(_.toString)
         _              <- LMDB.collectionCreate[String, Int](collectionName)
         _              <- LMDB.upsert[String, Int](collectionName, "counter", _ => 0)
-        
+
         // Run 100 concurrent transactions that increment the counter
         _ <- ZIO.foreachPar(1 to 100) { _ =>
                LMDB.readWrite { txn =>
@@ -125,7 +125,7 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
                  } yield ()
                }
              }
-             
+
         finalValue <- LMDB.fetch[String, Int](collectionName, "counter")
       } yield assertTrue(finalValue.contains(100))
     },
@@ -133,15 +133,15 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
       for {
         collectionName <- Random.nextUUID.map(_.toString)
         _              <- LMDB.collectionCreate[String, String](collectionName)
-        
+
         _ <- LMDB.readWrite { txn =>
                ZIO.foreachDiscard(1 to 10000) { i =>
                  txn.upsert[String, String](collectionName, s"key$i", _ => s"val$i")
                }
              }
-             
-        size <- LMDB.collectionSize(collectionName)
-        v1   <- LMDB.fetch[String, String](collectionName, "key1")
+
+        size  <- LMDB.collectionSize(collectionName)
+        v1    <- LMDB.fetch[String, String](collectionName, "key1")
         vLast <- LMDB.fetch[String, String](collectionName, "key10000")
       } yield assertTrue(size == 10000L, v1.contains("val1"), vLast.contains("val10000"))
     },
@@ -151,7 +151,7 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
         _              <- LMDB.collectionCreate[String, String](collectionName)
         _              <- LMDB.upsert[String, String](collectionName, "key1", _ => "val1")
         _              <- LMDB.upsert[String, String](collectionName, "key2", _ => "val2")
-        
+
         _ <- LMDB.readWrite { txn =>
                for {
                  _ <- txn.delete[String, String](collectionName, "key1")
@@ -159,7 +159,7 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
                  _ <- ZIO.fromOption(v).flip // ensure it's deleted within txn
                } yield ()
              }
-             
+
         v1 <- LMDB.fetch[String, String](collectionName, "key1")
         v2 <- LMDB.fetch[String, String](collectionName, "key2")
       } yield assertTrue(v1.isEmpty, v2.contains("val2"))
@@ -169,14 +169,14 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
         collectionName <- Random.nextUUID.map(_.toString)
         _              <- LMDB.collectionCreate[String, String](collectionName)
         _              <- LMDB.upsert[String, String](collectionName, "key1", _ => "val1")
-        
+
         _ <- LMDB.readWrite { txn =>
                for {
                  _ <- txn.delete[String, String](collectionName, "key1")
                  _ <- ZIO.fail(new Exception("Boom"))
                } yield ()
              }.ignore
-             
+
         v1 <- LMDB.fetch[String, String](collectionName, "key1")
       } yield assertTrue(v1.contains("val1"))
     },
@@ -184,7 +184,7 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
       for {
         collectionName <- Random.nextUUID.map(_.toString)
         _              <- LMDB.collectionCreate[String, String](collectionName)
-        
+
         _ <- LMDB.readWrite { txn =>
                for {
                  _  <- txn.upsert[String, String](collectionName, "key1", _ => "val1")
@@ -202,10 +202,10 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
         collectionName <- Random.nextUUID.map(_.toString)
         _              <- LMDB.collectionCreate[String, String](collectionName)
         _              <- LMDB.upsert[String, String](collectionName, "key1", _ => "init")
-        
+
         promise1 <- Promise.make[Nothing, Unit]
         promise2 <- Promise.make[Nothing, Unit]
-        
+
         writer <- LMDB.readWrite { txn =>
                     for {
                       _ <- txn.upsert[String, String](collectionName, "key1", _ => "updated")
@@ -213,16 +213,16 @@ object LMDBTransactionSpec extends ZIOSpecDefault with Commons {
                       _ <- promise2.await       // wait for reader to check
                     } yield ()
                   }.fork
-                  
+
         _ <- promise1.await // wait for writer to update
-        
+
         readerResult <- LMDB.readOnly { txn =>
                           txn.fetch[String, String](collectionName, "key1")
                         }
-                        
+
         _ <- promise2.succeed(()) // let writer commit
         _ <- writer.join
-        
+
         finalResult <- LMDB.fetch[String, String](collectionName, "key1")
       } yield assertTrue(readerResult.contains("init"), finalResult.contains("updated"))
     }

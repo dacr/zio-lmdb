@@ -21,19 +21,17 @@ import zio.lmdb.LMDBCodec
 
 import java.nio.ByteBuffer
 
-/** A combined codec that provides both LMDB and JSON serialization for type `T`, powered by
-  * jsoniter-scala.
+/** A combined codec that provides both LMDB and JSON serialization for type `T`, powered by jsoniter-scala.
   *
-  * The trait exposes the underlying `JsonValueCodec[T]` so callers can reach into jsoniter's
-  * `writeToString` / `readFromString` / `writeToArray` / `readFromArray` directly when they
-  * need the raw JSON text (e.g. for debugging, for testing, or for storing JSON as bytes
-  * outside of an LMDB collection).
+  * The trait exposes the underlying `JsonValueCodec[T]` so callers can reach into jsoniter's `writeToString` / `readFromString` / `writeToArray` / `readFromArray` directly when they need the raw JSON text (e.g. for debugging, for testing, or for
+  * storing JSON as bytes outside of an LMDB collection).
   *
-  * @tparam T the data class type
+  * @tparam T
+  *   the data class type
   */
 trait LMDBCodecJson[T] extends LMDBCodec[T] {
-  /** The underlying jsoniter-scala value codec. Exposed so callers can drive `writeToString`,
-    * `readFromString`, etc. without going through `LMDBCodec.encode` / `LMDBCodec.decode`.
+
+  /** The underlying jsoniter-scala value codec. Exposed so callers can drive `writeToString`, `readFromString`, etc. without going through `LMDBCodec.encode` / `LMDBCodec.decode`.
     */
   def valueCodec: JsonValueCodec[T]
 
@@ -55,24 +53,20 @@ object LMDBCodecJson {
 
   /** Auto-derive an `LMDBCodecJson[T]` from `T`'s structure via jsoniter-scala's macro.
     *
-    * Reached at the call site as `case class Foo(...) derives LMDBCodecJson` or
-    * `LMDBCodecJson.derived[Foo]`. The macro is inlined; no runtime reflection occurs.
+    * Reached at the call site as `case class Foo(...) derives LMDBCodecJson` or `LMDBCodecJson.derived[Foo]`. The macro is inlined; no runtime reflection occurs.
     */
   inline def derived[T]: LMDBCodecJson[T] = apply(JsonCodecMaker.make[T])
 
-  /** Lowest-priority `given` so any `T` for which the macro can produce a codec is
-    * automatically usable as `LMDBCodec[T]`.
+  /** Lowest-priority `given` so any `T` for which the macro can produce a codec is automatically usable as `LMDBCodec[T]`.
     */
   inline given [T]: LMDBCodecJson[T] = derived
 
-  /** Convenience: encode a typed value to its JSON `String` representation. Used by tests
-    * and debug paths that previously called zio-json's `.toJson` extension method.
+  /** Convenience: encode a typed value to its JSON `String` representation. Used by tests and debug paths that previously called zio-json's `.toJson` extension method.
     */
   def toJsonString[T](value: T)(using codec: LMDBCodecJson[T]): String =
     writeToString(value)(codec.valueCodec)
 
-  /** Convenience: decode a JSON `String` into a typed value. Mirrors the test-time use of
-    * zio-json's `.fromJson[T]`.
+  /** Convenience: decode a JSON `String` into a typed value. Mirrors the test-time use of zio-json's `.fromJson[T]`.
     */
   def fromJsonString[T](json: String)(using codec: LMDBCodecJson[T]): Either[String, T] =
     try Right(readFromString(json)(codec.valueCodec))

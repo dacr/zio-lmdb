@@ -15,6 +15,8 @@
  */
 package zio.lmdb
 
+// scalafmt: { newlines.source = keep } // this spec explodes scalafmt search state with the global maxColumn/align settings
+
 import zio.*
 import zio.test.*
 import zio.test.TestAspect.*
@@ -29,7 +31,7 @@ object LMDBIndexSpec extends ZIOSpecDefault with Commons {
       for {
         indexName <- Random.nextUUID.map(_.toString)
         index     <- LMDB.indexCreate[String, String](indexName)
-        
+
         key1 = "group1"
         id1  = "item1"
         id2  = "item2"
@@ -37,15 +39,15 @@ object LMDBIndexSpec extends ZIOSpecDefault with Commons {
 
         _ <- index.index(key1, id1)
         _ <- index.index(key1, id2)
-        
+
         contains1 <- index.indexContains(key1, id1)
         contains2 <- index.indexContains(key1, id2)
         contains3 <- index.indexContains(key1, id3)
-        
+
         items <- index.indexed(key1).runCollect
-        
+
         _ <- index.unindex(key1, id1)
-        
+
         itemsAfterUnindex <- index.indexed(key1).runCollect
         contains1After    <- index.indexContains(key1, id1)
 
@@ -103,10 +105,10 @@ object LMDBIndexSpec extends ZIOSpecDefault with Commons {
         indexName <- Random.nextUUID.map(_.toString)
         index     <- LMDB.indexCreate[String, String](indexName)
 
-        key = "key"
+        key      = "key"
         otherKey = "id1"
 
-        // LMDB with MDB_DUPSORT does NOT store duplicate (key, value) pairs. 
+        // LMDB with MDB_DUPSORT does NOT store duplicate (key, value) pairs.
         // Putting the same (key, value) again is a no-op or overwrites.
         _ <- index.index(key, otherKey)
         _ <- index.index(key, otherKey)

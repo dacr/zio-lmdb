@@ -20,9 +20,7 @@ import zio.lmdb.json.{JValue, LMDBCodecJson}
 
 import java.security.MessageDigest
 
-/** Describes the shape of values stored in a collection. The artifact is persisted alongside the
-  * collection metadata (`MetaDataEntry`) and is the source of truth used by L2A's drift detection
-  * and by L3 / L5 for higher-level catalog needs.
+/** Describes the shape of values stored in a collection. The artifact is persisted alongside the collection metadata (`MetaDataEntry`) and is the source of truth used by L2A's drift detection and by L3 / L5 for higher-level catalog needs.
   *
   * The artifact's [[fingerprint]] is a stable SHA-256 hex digest of its canonical JSON form.
   */
@@ -32,26 +30,19 @@ sealed trait SchemaArtifact {
 
 object SchemaArtifact {
 
-  /** Schema for codecs derived from the JSON layer: a generic JSON document (a [[JValue]] tree)
-    * that downstream tools can inspect (e.g. the L4 GQL REPL surfacing property names and inferred
-    * types).
+  /** Schema for codecs derived from the JSON layer: a generic JSON document (a [[JValue]] tree) that downstream tools can inspect (e.g. the L4 GQL REPL surfacing property names and inferred types).
     */
   case class JsonSchema(schema: JValue) extends SchemaArtifact
 
   /** Protobuf `.proto` source text describing the message used by the codec. */
   case class ProtobufSchema(proto: String) extends SchemaArtifact
 
-  /** Fallback for codecs that cannot expose a schema. The `hint` is a free-form identifier (e.g.
-    * the codec class name) used purely for diagnostics; it does not contribute to drift detection
-    * in a way callers should rely on across releases.
+  /** Fallback for codecs that cannot expose a schema. The `hint` is a free-form identifier (e.g. the codec class name) used purely for diagnostics; it does not contribute to drift detection in a way callers should rely on across releases.
     */
   case class OpaqueSchema(hint: String) extends SchemaArtifact
 
-  /** Identity of the `KeyCodec` that encodes a collection's key, recorded as the codec's stable
-    * `keyId` (e.g. `lmdb:int64`, `lmdb-geo:location/v1`). Keys are order-encoded bytes whose meaning
-    * cannot be inferred from the bytes alone, so this names exactly which codec produced them — which
-    * is what lets drift detection tell an `Int` key from a `Long` one, and what a reader (the future
-    * L2C REPL) needs to decode a key without guessing.
+  /** Identity of the `KeyCodec` that encodes a collection's key, recorded as the codec's stable `keyId` (e.g. `lmdb:int64`, `lmdb-geo:location/v1`). Keys are order-encoded bytes whose meaning cannot be inferred from the bytes alone, so this names
+    * exactly which codec produced them — which is what lets drift detection tell an `Int` key from a `Long` one, and what a reader (the future L2C REPL) needs to decode a key without guessing.
     */
   case class KeySchema(keyId: String) extends SchemaArtifact
 
@@ -73,13 +64,13 @@ object SchemaArtifact {
       out.writeObjectStart()
       out.writeKey("type")
       x match {
-        case JsonSchema(schema) =>
+        case JsonSchema(schema)    =>
           out.writeVal("JsonSchema"); out.writeKey("value"); jValueCodec.encodeValue(schema, out)
         case ProtobufSchema(proto) =>
           out.writeVal("ProtobufSchema"); out.writeKey("value"); out.writeVal(proto)
-        case OpaqueSchema(hint) =>
+        case OpaqueSchema(hint)    =>
           out.writeVal("OpaqueSchema"); out.writeKey("value"); out.writeVal(hint)
-        case KeySchema(keyId) =>
+        case KeySchema(keyId)      =>
           out.writeVal("KeySchema"); out.writeKey("value"); out.writeVal(keyId)
       }
       out.writeObjectEnd()
@@ -87,11 +78,11 @@ object SchemaArtifact {
 
     override def decodeValue(in: JsonReader, default: SchemaArtifact): SchemaArtifact = {
       if (!in.isNextToken('{')) in.decodeError("expected '{'")
-      val firstKey = in.readKeyAsString()
+      val firstKey               = in.readKeyAsString()
       if (firstKey != "type") in.decodeError(s"expected first key 'type', got '$firstKey'")
-      val tpe = in.readString(null)
+      val tpe                    = in.readString(null)
       if (!in.isNextToken(',')) in.decodeError("expected ',' before 'value'")
-      val valueKey = in.readKeyAsString()
+      val valueKey               = in.readKeyAsString()
       if (valueKey != "value") in.decodeError(s"expected key 'value', got '$valueKey'")
       val result: SchemaArtifact = tpe match {
         case "JsonSchema"     => JsonSchema(jValueCodec.decodeValue(in, JValue.NullV))
@@ -105,16 +96,13 @@ object SchemaArtifact {
     }
   }
 
-  /** Raw jsoniter codec exposed in implicit scope so that `JsonCodecMaker.make[T]` (e.g. for
-    * `MetaDataEntry`) reuses it for nested `SchemaArtifact` fields instead of inlining the
-    * recursive `JValue` it transitively contains.
+  /** Raw jsoniter codec exposed in implicit scope so that `JsonCodecMaker.make[T]` (e.g. for `MetaDataEntry`) reuses it for nested `SchemaArtifact` fields instead of inlining the recursive `JValue` it transitively contains.
     */
   given JsonValueCodec[SchemaArtifact] = SchemaArtifactValueCodec
 
   given LMDBCodecJson[SchemaArtifact] = LMDBCodecJson(SchemaArtifactValueCodec)
 
-  /** SHA-256 of the canonical JSON form. Stable across JVM versions and platforms because the
-    * hand-rolled codec emits fields in a fixed order.
+  /** SHA-256 of the canonical JSON form. Stable across JVM versions and platforms because the hand-rolled codec emits fields in a fixed order.
     */
   private def fingerprintOf(a: SchemaArtifact): String = {
     val sha   = MessageDigest.getInstance("SHA-256")

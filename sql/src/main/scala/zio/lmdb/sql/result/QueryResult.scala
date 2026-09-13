@@ -23,10 +23,8 @@ import zio.lmdb.sql.SqlError
 /** A column header: its name and a type hint (from the value `JsonSchema` or the key `keyId`). */
 final case class Column(name: String, typeHint: String)
 
-/** The standardized, streaming result of any statement. `columns` is known eagerly (after binding);
-  * `rows` is a lazy stream of `MapV(column -> value)` documents that flows straight from the LMDB
-  * cursor, so large results are never fully materialised (`ORDER BY` is the documented exception).
-  * The canonical form is JSON — `rows` are `JValue`s — which is what makes assertions trivial.
+/** The standardized, streaming result of any statement. `columns` is known eagerly (after binding); `rows` is a lazy stream of `MapV(column -> value)` documents that flows straight from the LMDB cursor, so large results are never fully materialised
+  * (`ORDER BY` is the documented exception). The canonical form is JSON — `rows` are `JValue`s — which is what makes assertions trivial.
   */
 final case class QueryResult(columns: List[Column], rows: ZStream[Any, SqlError, JValue]) {
 

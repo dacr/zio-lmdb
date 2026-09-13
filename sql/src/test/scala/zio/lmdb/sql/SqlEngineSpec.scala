@@ -116,10 +116,10 @@ object SqlEngineSpec extends ZIOSpecDefault {
   private val seedGeo =
     for {
       originals <- LMDB.collectionCreate[String, Original]("originals")
-      _         <- originals.upsertOverwrite("louvre", Original("/louvre.jpg", Dim(1, 1), Some(GPoint(48.8606, 2.3376, 34.0))))   // ~1.2 km from ref
-      _         <- originals.upsertOverwrite("eiffel", Original("/eiffel.jpg", Dim(1, 1), Some(GPoint(48.8584, 2.2945, 330.0))))  // ~4.2 km from ref
-      _         <- originals.upsertOverwrite("london", Original("/london.jpg", Dim(1, 1), Some(GPoint(51.5074, -0.1278, 11.0))))  // ~343 km from ref
-      _         <- originals.upsertOverwrite("nowhere", Original("/x.jpg", Dim(1, 1), None))                                       // excluded (null)
+      _         <- originals.upsertOverwrite("louvre", Original("/louvre.jpg", Dim(1, 1), Some(GPoint(48.8606, 2.3376, 34.0))))  // ~1.2 km from ref
+      _         <- originals.upsertOverwrite("eiffel", Original("/eiffel.jpg", Dim(1, 1), Some(GPoint(48.8584, 2.2945, 330.0)))) // ~4.2 km from ref
+      _         <- originals.upsertOverwrite("london", Original("/london.jpg", Dim(1, 1), Some(GPoint(51.5074, -0.1278, 11.0)))) // ~343 km from ref
+      _         <- originals.upsertOverwrite("nowhere", Original("/x.jpg", Dim(1, 1), None))                                     // excluded (null)
     } yield ()
 
   /** Timestamps spanning two years / three months, for date/time function and grouping queries. */
@@ -151,10 +151,10 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |ORDER BY _key""".stripMargin
                 )
       } yield assertTrue(
-        near.map(r => field(r, "_key")) == List(StringV("louvre"), StringV("eiffel")),         // nearest-first; London + null excluded
+        near.map(r => field(r, "_key")) == List(StringV("louvre"), StringV("eiffel")),                             // nearest-first; London + null excluded
         near.map(r => field(r, "dist")).forall { case DoubleV(d) => d <= 50000.0; case _ => false },
         field(near.head, "dist").asInstanceOf[DoubleV].value < field(near(1), "dist").asInstanceOf[DoubleV].value, // ascending by distance
-        obj.map(r => field(r, "_key")) == List(StringV("eiffel"), StringV("louvre"))           // object-arg GEO_WITHIN agrees (ordered by _key)
+        obj.map(r => field(r, "_key")) == List(StringV("eiffel"), StringV("louvre"))                               // object-arg GEO_WITHIN agrees (ordered by _key)
       )
     },
     test("date/time GROUP BY: aggregate by YEAR(timestamp) using the SELECT alias") {
@@ -167,7 +167,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |ORDER BY year""".stripMargin
                 )
       } yield assertTrue(
-        rows.map(r => field(r, "year"))     == List(LongV(2023), LongV(2024)),
+        rows.map(r => field(r, "year")) == List(LongV(2023), LongV(2024)),
         rows.map(r => field(r, "count(*)")) == List(LongV(1), LongV(4))
       )
     },
@@ -183,7 +183,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
       } yield assertTrue(
         rows.map(r => field(r, "dy")) == List(LongV(2023), LongV(2024), LongV(2024)),
         rows.map(r => field(r, "dm")) == List(LongV(5), LongV(1), LongV(3)),
-        rows.map(r => field(r, "n"))  == List(LongV(1), LongV(2), LongV(2))
+        rows.map(r => field(r, "n")) == List(LongV(1), LongV(2), LongV(2))
       )
     },
     test("date/time extraction functions (YEAR/MONTH/DAY) in a projection") {
@@ -195,9 +195,9 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |WHERE _key = 'm4'""".stripMargin
                 )
       } yield assertTrue(
-        field(rows.head, "y")  == LongV(2024),
+        field(rows.head, "y") == LongV(2024),
         field(rows.head, "mo") == LongV(3),
-        field(rows.head, "d")  == LongV(5)
+        field(rows.head, "d") == LongV(5)
       )
     },
     test("date/time comparison: filter by a timestamp bound and by NOW()") {
@@ -255,7 +255,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
                 )
       } yield assertTrue(
         rows.map(r => field(r, "customer")) == List(StringV("Alice")),
-        rows.map(r => field(r, "n"))        == List(LongV(2))
+        rows.map(r => field(r, "n")) == List(LongV(2))
       )
     },
     test("an aggregate alias used in WHERE is still rejected (it belongs in HAVING)") {
@@ -280,7 +280,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |ORDER BY distKm""".stripMargin
                 )
       } yield assertTrue(
-        rows.map(r => field(r, "_key")) == List(StringV("louvre"), StringV("eiffel")),         // london (~343 km) excluded
+        rows.map(r => field(r, "_key")) == List(StringV("louvre"), StringV("eiffel")), // london (~343 km) excluded
         rows.map(r => field(r, "distKm")).forall { case DecimalV(d) => d <= BigDecimal(10); case _ => false },
         field(rows.head, "distKm").asInstanceOf[DecimalV].value < field(rows(1), "distKm").asInstanceOf[DecimalV].value
       )
@@ -295,7 +295,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |ORDER BY amount""".stripMargin
                 )
       } yield assertTrue(
-        rows.map(r => field(r, "_key"))    == List(StringV("o1"), StringV("o2")),
+        rows.map(r => field(r, "_key")) == List(StringV("o1"), StringV("o2")),
         rows.map(r => field(r, "doubled")) == List(LongV(20), LongV(60))
       )
     },
@@ -311,7 +311,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
                 )
       } yield assertTrue(
         rows.map(r => field(r, "band")) == List(StringV("adult"), StringV("young"), StringV("senior")), // 30, 25, 40
-        rows.map(r => field(r, "rare")) == List(NullV, NullV, NullV)                                     // no branch, no ELSE → NULL
+        rows.map(r => field(r, "rare")) == List(NullV, NullV, NullV)                                    // no branch, no ELSE → NULL
       )
     },
     test("CASE: simple form compares the subject for equality") {
@@ -328,18 +328,18 @@ object SqlEngineSpec extends ZIOSpecDefault {
     },
     test("CASE: usable in WHERE and as a GROUP BY bucket") {
       for {
-        _    <- seed
-        whr  <- query("select _key from people where (case when age >= 30 then 1 else 0 end) = 1 order by _key")
-        grp  <- query(
-                  """SELECT CASE WHEN age >= 30 THEN 'old' ELSE 'young' END AS band, count(*) AS n
-                    |FROM people
-                    |GROUP BY band
-                    |ORDER BY band""".stripMargin
-                )
+        _   <- seed
+        whr <- query("select _key from people where (case when age >= 30 then 1 else 0 end) = 1 order by _key")
+        grp <- query(
+                 """SELECT CASE WHEN age >= 30 THEN 'old' ELSE 'young' END AS band, count(*) AS n
+                   |FROM people
+                   |GROUP BY band
+                   |ORDER BY band""".stripMargin
+               )
       } yield assertTrue(
-        whr.map(r => field(r, "_key")) == List(StringV("p1"), StringV("p3")),     // age 30 and 40
+        whr.map(r => field(r, "_key")) == List(StringV("p1"), StringV("p3")), // age 30 and 40
         grp.map(r => field(r, "band")) == List(StringV("old"), StringV("young")),
-        grp.map(r => field(r, "n"))    == List(LongV(2), LongV(1))
+        grp.map(r => field(r, "n")) == List(LongV(2), LongV(1))
       )
     },
     test("COALESCE / NULLIF return first-non-null / null-on-equal") {
@@ -354,7 +354,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
                 )
       } yield assertTrue(
         rows.map(r => field(r, "display")) == List(StringV("Alice"), StringV("Bob"), StringV("Carol")), // no nickname → falls back to name
-        rows.map(r => field(r, "notbob"))  == List(StringV("Alice"), NullV, StringV("Carol"))            // 'Bob' nulled out
+        rows.map(r => field(r, "notbob")) == List(StringV("Alice"), NullV, StringV("Carol"))            // 'Bob' nulled out
       )
     },
     test("CAST converts between types (and a numeric string parses)") {
@@ -369,7 +369,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
       } yield assertTrue(
         field(rows.head, "ageStr") == StringV("25"),
         field(rows.head, "parsed") == LongV(42),
-        field(rows.head, "ageD")   == DoubleV(25.0),
+        field(rows.head, "ageD") == DoubleV(25.0),
         whr.map(r => field(r, "_key")) == List(StringV("p3")) // Carol, age 40
       )
     },
@@ -385,11 +385,11 @@ object SqlEngineSpec extends ZIOSpecDefault {
         deep <- query("select location.altitude from originals where _key = 'o1'")
         miss <- query("select o.location.altitude as alt from originals o where _key = 'o3'")
       } yield assertTrue(
-        rows.map(r => field(r, "_key")) == List(StringV("o1"), StringV("o2")),       // o3 (width 640) excluded
-        rows.map(r => field(r, "alt"))  == List(DecimalV(BigDecimal("35.0")), DecimalV(BigDecimal("10.0"))),
-        rows.map(r => field(r, "w"))    == List(LongV(1920), LongV(800)),
-        field(deep.head, "altitude")    == DecimalV(BigDecimal("35.0")),
-        field(miss.head, "alt")         == NullV                                     // o3 has no location → nested path is NULL
+        rows.map(r => field(r, "_key")) == List(StringV("o1"), StringV("o2")), // o3 (width 640) excluded
+        rows.map(r => field(r, "alt")) == List(DecimalV(BigDecimal("35.0")), DecimalV(BigDecimal("10.0"))),
+        rows.map(r => field(r, "w")) == List(LongV(1920), LongV(800)),
+        field(deep.head, "altitude") == DecimalV(BigDecimal("35.0")),
+        field(miss.head, "alt") == NullV                                       // o3 has no location → nested path is NULL
       )
     },
     test("SELECT with WHERE, ORDER BY and projection over real stored data") {
@@ -398,7 +398,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
         rows <- query("select _key, name, age from people where age >= 30 order by age")
       } yield assertTrue(
         rows.map(r => field(r, "name")) == List(StringV("Alice"), StringV("Carol")),
-        rows.map(r => field(r, "age"))  == List(LongV(30), LongV(40)),
+        rows.map(r => field(r, "age")) == List(LongV(30), LongV(40)),
         rows.map(r => field(r, "_key")) == List(StringV("p1"), StringV("p3"))
       )
     },
@@ -410,7 +410,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
         rows.size == 1,
         field(rows.head, "_key") == StringV("p2"),
         field(rows.head, "name") == StringV("Bob"),
-        field(rows.head, "age")  == LongV(25)
+        field(rows.head, "age") == LongV(25)
       )
     },
     test("LIMIT bounds the result") {
@@ -438,9 +438,9 @@ object SqlEngineSpec extends ZIOSpecDefault {
         str  <- query("select name from people where name in ('Alice', 'Zoe') order by name")
         notI <- query("select _key from people where age not in (25, 40) order by _key")
       } yield assertTrue(
-        in.map(r => field(r, "_key"))    == List(StringV("p2"), StringV("p3")),
-        str.map(r => field(r, "name"))   == List(StringV("Alice")),
-        notI.map(r => field(r, "_key"))  == List(StringV("p1")) // 30 is in neither list
+        in.map(r => field(r, "_key")) == List(StringV("p2"), StringV("p3")),
+        str.map(r => field(r, "name")) == List(StringV("Alice")),
+        notI.map(r => field(r, "_key")) == List(StringV("p1")) // 30 is in neither list
       )
     },
     test("BETWEEN / NOT BETWEEN test an inclusive range") {
@@ -450,9 +450,9 @@ object SqlEngineSpec extends ZIOSpecDefault {
         notB <- query("select _key from people where age not between 26 and 40 order by _key")
         edge <- query("select _key from people where age between 25 and 30 order by age") // bounds are inclusive
       } yield assertTrue(
-        btw.map(r => field(r, "_key"))  == List(StringV("p1"), StringV("p3")), // 30, 40
-        notB.map(r => field(r, "_key")) == List(StringV("p2")),                // 25
-        edge.map(r => field(r, "_key")) == List(StringV("p2"), StringV("p1"))  // 25, 30 — both endpoints included
+        btw.map(r => field(r, "_key")) == List(StringV("p1"), StringV("p3")), // 30, 40
+        notB.map(r => field(r, "_key")) == List(StringV("p2")),               // 25
+        edge.map(r => field(r, "_key")) == List(StringV("p2"), StringV("p1")) // 25, 30 — both endpoints included
       )
     },
     test("IN combines with AND/OR and reuses an AS alias") {
@@ -465,7 +465,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |ORDER BY _key""".stripMargin
                 )
       } yield assertTrue(
-        rows.map(r => field(r, "_key"))    == List(StringV("o1"), StringV("o2")), // amount 10→20, 30→60
+        rows.map(r => field(r, "_key")) == List(StringV("o1"), StringV("o2")), // amount 10→20, 30→60
         rows.map(r => field(r, "doubled")) == List(LongV(20), LongV(60))
       )
     },
@@ -507,8 +507,8 @@ object SqlEngineSpec extends ZIOSpecDefault {
         _    <- seedOrders
         rows <- query("select sum(amount * 2) as s, avg(amount + 10) as a from orders")
       } yield assertTrue(
-        field(rows.head, "s") == DecimalV(BigDecimal(90)),          // (10 + 30 + 5) * 2
-        field(rows.head, "a") == DecimalV(BigDecimal(25))           // ((20 + 40 + 15) / 3)
+        field(rows.head, "s") == DecimalV(BigDecimal(90)), // (10 + 30 + 5) * 2
+        field(rows.head, "a") == DecimalV(BigDecimal(25))  // ((20 + 40 + 15) / 3)
       )
     },
     test("a whole-table aggregate written as an expression over aggregates yields exactly one row") {
@@ -520,7 +520,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
       } yield assertTrue(
         rows.size == 1,
         field(rows.head, "avgRounded") == DecimalV(BigDecimal("15.0")),
-        field(rows.head, "mean")       == DecimalV(BigDecimal(15))
+        field(rows.head, "mean") == DecimalV(BigDecimal(15))
       )
     },
     test("COUNT(DISTINCT col) counts distinct values, whole-table and per group") {
@@ -534,23 +534,23 @@ object SqlEngineSpec extends ZIOSpecDefault {
                    |ORDER BY customer""".stripMargin
                )
       } yield assertTrue(
-        field(all.head, "c") == LongV(2),                            // Alice, Bob
-        field(all.head, "d") == LongV(3),                            // amounts 10, 30, 5 — all distinct
+        field(all.head, "c") == LongV(2),                       // Alice, Bob
+        field(all.head, "d") == LongV(3),                       // amounts 10, 30, 5 — all distinct
         grp.map(r => field(r, "customer")) == List(StringV("Alice"), StringV("Bob")),
-        grp.map(r => field(r, "d"))        == List(LongV(2), LongV(1)) // Alice: {10,30}=2, Bob: {5}=1
+        grp.map(r => field(r, "d")) == List(LongV(2), LongV(1)) // Alice: {10,30}=2, Bob: {5}=1
       )
     },
     test("SUM(DISTINCT col) sums only distinct values") {
       for {
         _   <- LMDB.collectionCreate[String, Order]("orders").flatMap { orders =>
                  orders.upsertOverwrite("o1", Order("Alice", 10)) *>
-                   orders.upsertOverwrite("o2", Order("Bob", 10)) *>   // duplicate amount 10
+                   orders.upsertOverwrite("o2", Order("Bob", 10)) *> // duplicate amount 10
                    orders.upsertOverwrite("o3", Order("Carol", 30))
                }
         row <- query("select sum(distinct amount) as s, sum(amount) as total from orders")
       } yield assertTrue(
-        field(row.head, "s")     == DecimalV(BigDecimal(40)),        // distinct {10, 30}
-        field(row.head, "total") == DecimalV(BigDecimal(50))         // 10 + 10 + 30
+        field(row.head, "s") == DecimalV(BigDecimal(40)),    // distinct {10, 30}
+        field(row.head, "total") == DecimalV(BigDecimal(50)) // 10 + 10 + 30
       )
     },
     test("GROUP BY with COUNT and SUM, ordered by the group key") {
@@ -563,9 +563,9 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |ORDER BY customer""".stripMargin
                 )
       } yield assertTrue(
-        rows.map(r => field(r, "customer"))    == List(StringV("Alice"), StringV("Bob")),
-        rows.map(r => field(r, "count(*)"))     == List(LongV(2), LongV(1)),
-        rows.map(r => field(r, "sum(amount)"))  == List(DecimalV(BigDecimal(40)), DecimalV(BigDecimal(5)))
+        rows.map(r => field(r, "customer")) == List(StringV("Alice"), StringV("Bob")),
+        rows.map(r => field(r, "count(*)")) == List(LongV(2), LongV(1)),
+        rows.map(r => field(r, "sum(amount)")) == List(DecimalV(BigDecimal(40)), DecimalV(BigDecimal(5)))
       )
     },
     test("alias (AS count) and ORDER BY the alias") {
@@ -578,7 +578,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |ORDER BY count""".stripMargin
                 )
       } yield assertTrue(
-        rows.map(r => field(r, "count"))    == List(LongV(1), LongV(2)), // Bob:1, Alice:2 — ascending by the alias
+        rows.map(r => field(r, "count")) == List(LongV(1), LongV(2)), // Bob:1, Alice:2 — ascending by the alias
         rows.map(r => field(r, "customer")) == List(StringV("Bob"), StringV("Alice"))
       )
     },
@@ -604,11 +604,11 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |WHERE _key = 'p1'""".stripMargin
                 )
       } yield assertTrue(
-        field(rows.head, "u")       == StringV("ALICE"),
-        field(rows.head, "l")       == StringV("alice"),
-        field(rows.head, "t")       == StringV("x"),
-        field(rows.head, "lt")      == StringV("x  "),
-        field(rows.head, "rt")      == StringV("  x"),
+        field(rows.head, "u") == StringV("ALICE"),
+        field(rows.head, "l") == StringV("alice"),
+        field(rows.head, "t") == StringV("x"),
+        field(rows.head, "lt") == StringV("x  "),
+        field(rows.head, "rt") == StringV("  x"),
         field(rows.head, "missing") == NullV // no such field → NULL propagates
       )
     },
@@ -624,10 +624,10 @@ object SqlEngineSpec extends ZIOSpecDefault {
                 )
         whr  <- query("select _key from people where substr(name, 1, 1) = 'A'")
       } yield assertTrue(
-        field(rows.head, "s") == StringV("Car"),       // substr("Carol", 1, 3)
-        field(rows.head, "c") == StringV("Carol-40"),  // concat coerces the age to text
-        field(rows.head, "r") == StringV("CXrol"),     // replace 'a' → 'X'
-        field(rows.head, "i") == LongV(4),             // 'o' is the 4th character of "Carol"
+        field(rows.head, "s") == StringV("Car"),              // substr("Carol", 1, 3)
+        field(rows.head, "c") == StringV("Carol-40"),         // concat coerces the age to text
+        field(rows.head, "r") == StringV("CXrol"),            // replace 'a' → 'X'
+        field(rows.head, "i") == LongV(4),                    // 'o' is the 4th character of "Carol"
         whr.map(r => field(r, "_key")) == List(StringV("p1")) // only "Alice" starts with 'A'
       )
     },
@@ -642,14 +642,14 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |WHERE _key = 'p1'""".stripMargin
                 )
       } yield assertTrue(
-        field(rows.head, "a")  == LongV(7),
-        field(rows.head, "f")  == LongV(3),
-        field(rows.head, "c")  == LongV(4),
-        field(rows.head, "r")  == DecimalV(BigDecimal("3.14")),
-        field(rows.head, "r0") == LongV(3),                 // HALF_UP
+        field(rows.head, "a") == LongV(7),
+        field(rows.head, "f") == LongV(3),
+        field(rows.head, "c") == LongV(4),
+        field(rows.head, "r") == DecimalV(BigDecimal("3.14")),
+        field(rows.head, "r0") == LongV(3), // HALF_UP
         field(rows.head, "sg") == LongV(-1),
-        field(rows.head, "m")  == LongV(1),
-        field(rows.head, "p")  == DoubleV(1024.0),
+        field(rows.head, "m") == LongV(1),
+        field(rows.head, "p") == DoubleV(1024.0),
         field(rows.head, "sq") == DoubleV(12.0)
       )
     },
@@ -671,7 +671,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
                 )
       } yield assertTrue(
         rows.map(r => field(r, "customer")) == List(StringV("Alice")), // Bob has only 1 order
-        rows.map(r => field(r, "count"))    == List(LongV(2))
+        rows.map(r => field(r, "count")) == List(LongV(2))
       )
     },
     test("an aggregate in WHERE is rejected (belongs in HAVING)") {
@@ -723,7 +723,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
         ins == List(MapV(scala.collection.immutable.ListMap("affected" -> LongV(1)))),
         got.size == 1,
         field(got.head, "name") == StringV("Dave"),
-        field(got.head, "age")  == LongV(50)
+        field(got.head, "age") == LongV(50)
       )
     },
     test("UPDATE modifies matching rows") {
@@ -753,8 +753,8 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |ORDER BY s._key""".stripMargin
                 )
       } yield assertTrue(
-        rows.map(r => field(r, "_key"))   == List(StringV("s1"), StringV("s2"), StringV("s3")), // s4 (absent customer) excluded
-        rows.map(r => field(r, "name"))   == List(StringV("Alice"), StringV("Alice"), StringV("Bob")),
+        rows.map(r => field(r, "_key")) == List(StringV("s1"), StringV("s2"), StringV("s3")), // s4 (absent customer) excluded
+        rows.map(r => field(r, "name")) == List(StringV("Alice"), StringV("Alice"), StringV("Bob")),
         rows.map(r => field(r, "amount")) == List(LongV(10), LongV(30), LongV(5))
       )
     },
@@ -784,8 +784,8 @@ object SqlEngineSpec extends ZIOSpecDefault {
                 )
       } yield assertTrue(
         rows.map(r => field(r, "country")) == List(StringV("FR"), StringV("US")),
-        rows.map(r => field(r, "n"))       == List(LongV(2), LongV(1)),
-        rows.map(r => field(r, "total"))   == List(DecimalV(BigDecimal(40)), DecimalV(BigDecimal(5)))
+        rows.map(r => field(r, "n")) == List(LongV(2), LongV(1)),
+        rows.map(r => field(r, "total")) == List(DecimalV(BigDecimal(40)), DecimalV(BigDecimal(5)))
       )
     },
     test("JOIN coerces a value field to the joined _key's datatype (string → Long key)") {
@@ -798,7 +798,7 @@ object SqlEngineSpec extends ZIOSpecDefault {
                     |ORDER BY r._key""".stripMargin
                 )
       } yield assertTrue(
-        rows.map(r => field(r, "_key"))  == List(StringV("r1"), StringV("r2")),
+        rows.map(r => field(r, "_key")) == List(StringV("r1"), StringV("r2")),
         rows.map(r => field(r, "label")) == List(StringV("Widget"), StringV("Gadget"))
       )
     },

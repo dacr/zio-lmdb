@@ -40,11 +40,11 @@ object LMDBMetaDataSpec extends ZIOSpecDefault with Commons {
     },
     test("creating collection updates metadata") {
       for {
-        config      <- ZIO.config(LMDB.config)
-        colName      = "test-collection"
-        _           <- LMDB.collectionAllocate(colName)
-        metaCol     <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
-        entry       <- metaCol.fetch(colName).some
+        config  <- ZIO.config(LMDB.config)
+        colName  = "test-collection"
+        _       <- LMDB.collectionAllocate(colName)
+        metaCol <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
+        entry   <- metaCol.fetch(colName).some
       } yield assertTrue(
         entry.collectionName == colName,
         entry.collectionKind == CollectionKind.Regular
@@ -52,11 +52,11 @@ object LMDBMetaDataSpec extends ZIOSpecDefault with Commons {
     },
     test("creating index updates metadata") {
       for {
-        config      <- ZIO.config(LMDB.config)
-        indexName    = "test-index"
-        _           <- LMDB.indexCreate[String, String](indexName)
-        metaCol     <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
-        entry       <- metaCol.fetch(indexName).some
+        config   <- ZIO.config(LMDB.config)
+        indexName = "test-index"
+        _        <- LMDB.indexCreate[String, String](indexName)
+        metaCol  <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
+        entry    <- metaCol.fetch(indexName).some
       } yield assertTrue(
         entry.collectionName == indexName,
         entry.collectionKind == CollectionKind.Index
@@ -64,31 +64,31 @@ object LMDBMetaDataSpec extends ZIOSpecDefault with Commons {
     },
     test("dropping collection removes metadata") {
       for {
-        config      <- ZIO.config(LMDB.config)
-        colName      = "test-drop-col"
-        _           <- LMDB.collectionAllocate(colName)
-        _           <- LMDB.collectionDrop(colName)
-        metaCol     <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
-        entry       <- metaCol.fetch(colName)
+        config  <- ZIO.config(LMDB.config)
+        colName  = "test-drop-col"
+        _       <- LMDB.collectionAllocate(colName)
+        _       <- LMDB.collectionDrop(colName)
+        metaCol <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
+        entry   <- metaCol.fetch(colName)
       } yield assertTrue(entry.isEmpty)
     },
     test("dropping index removes metadata") {
       for {
-        config      <- ZIO.config(LMDB.config)
-        indexName    = "test-drop-index"
-        _           <- LMDB.indexCreate[String, String](indexName)
-        _           <- LMDB.indexDrop(indexName)
-        metaCol     <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
-        entry       <- metaCol.fetch(indexName)
+        config   <- ZIO.config(LMDB.config)
+        indexName = "test-drop-index"
+        _        <- LMDB.indexCreate[String, String](indexName)
+        _        <- LMDB.indexDrop(indexName)
+        metaCol  <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
+        entry    <- metaCol.fetch(indexName)
       } yield assertTrue(entry.isEmpty)
     },
     test("typed collectionCreate persists key and value schema artifacts") {
       for {
-        config <- ZIO.config(LMDB.config)
-        colName = "typed-col-schema"
-        _      <- LMDB.collectionCreate[String, TaggedDoc](colName)
+        config  <- ZIO.config(LMDB.config)
+        colName  = "typed-col-schema"
+        _       <- LMDB.collectionCreate[String, TaggedDoc](colName)
         metaCol <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
-        entry  <- metaCol.fetch(colName).some
+        entry   <- metaCol.fetch(colName).some
       } yield assertTrue(
         entry.layoutVersion == MetaDataEntry.CurrentLayoutVersion,
         entry.valueSchema.contains(SchemaArtifact.JsonSchema(StringV("TaggedDoc/v1"))),
@@ -97,11 +97,11 @@ object LMDBMetaDataSpec extends ZIOSpecDefault with Commons {
     },
     test("typed multiCreate persists schema artifacts") {
       for {
-        config <- ZIO.config(LMDB.config)
-        colName = "typed-multi-schema"
-        _      <- LMDB.multiCreate[String, TaggedDoc](colName)
+        config  <- ZIO.config(LMDB.config)
+        colName  = "typed-multi-schema"
+        _       <- LMDB.multiCreate[String, TaggedDoc](colName)
         metaCol <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
-        entry  <- metaCol.fetch(colName).some
+        entry   <- metaCol.fetch(colName).some
       } yield assertTrue(
         entry.collectionKind == CollectionKind.Multi,
         entry.valueSchema.exists(_.fingerprint == SchemaArtifact.JsonSchema(StringV("TaggedDoc/v1")).fingerprint)
@@ -109,11 +109,11 @@ object LMDBMetaDataSpec extends ZIOSpecDefault with Commons {
     },
     test("untyped collectionAllocate leaves schema fields as None") {
       for {
-        config <- ZIO.config(LMDB.config)
-        colName = "untyped-col-schema"
-        _      <- LMDB.collectionAllocate(colName)
+        config  <- ZIO.config(LMDB.config)
+        colName  = "untyped-col-schema"
+        _       <- LMDB.collectionAllocate(colName)
         metaCol <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
-        entry  <- metaCol.fetch(colName).some
+        entry   <- metaCol.fetch(colName).some
       } yield assertTrue(
         entry.keySchema.isEmpty,
         entry.valueSchema.isEmpty,
@@ -125,16 +125,16 @@ object LMDBMetaDataSpec extends ZIOSpecDefault with Commons {
         config      <- ZIO.config(LMDB.config)
         colName      = "test-migration"
         // 1. Manually create collection without metadata (simulating old version)
-        // We can't easily bypass metadata update with public API anymore, 
+        // We can't easily bypass metadata update with public API anymore,
         // but we can delete the metadata entry manually.
         _           <- LMDB.collectionAllocate(colName)
         metaCol     <- LMDB.collectionGet[String, MetaDataEntry](config.metaDataCollectionName)
         _           <- metaCol.delete(colName)
         entryBefore <- metaCol.fetch(colName)
-        
+
         // 2. Call collectionCreate with failIfExists=false
-        _           <- LMDB.collectionCreate[String, String](colName, failIfExists = false)
-        entryAfter  <- metaCol.fetch(colName).some
+        _          <- LMDB.collectionCreate[String, String](colName, failIfExists = false)
+        entryAfter <- metaCol.fetch(colName).some
       } yield assertTrue(
         entryBefore.isEmpty,
         entryAfter.collectionName == colName,

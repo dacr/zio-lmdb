@@ -13,7 +13,7 @@ object LMDBAutoIndexSpec extends ZIOSpecDefault with Commons {
       for {
         userIndex <- LMDB.indexCreate[String, String]("users_by_name")
         usersRaw  <- LMDB.collectionCreate[String, SimpleUser]("users_auto_idx_test")
-        
+
         users = usersRaw.withIndex(userIndex)(u => Some(u.name))
 
         userId1   = "user1"
@@ -35,7 +35,7 @@ object LMDBAutoIndexSpec extends ZIOSpecDefault with Commons {
 
         // 2. Test update (change name)
         newUserName1 = "Alicia"
-        _ <- users.update(userId1, _ => SimpleUser(newUserName1))
+        _           <- users.update(userId1, _ => SimpleUser(newUserName1))
 
         idxAlice2  <- userIndex.indexed(userName1).runCollect
         idxAlicia2 <- userIndex.indexed(newUserName1).runCollect

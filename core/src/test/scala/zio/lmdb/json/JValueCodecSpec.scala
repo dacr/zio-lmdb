@@ -65,54 +65,64 @@ object JValueCodecSpec extends ZIOSpecDefault {
       assertTrue(roundTrip(NullV) == NullV)
     },
     test("empty ListV round-trips") {
-      val v = ListV(Seq.empty)
+      val v  = ListV(Seq.empty)
       val rt = roundTrip(v)
       assertTrue(rt.asInstanceOf[ListV].value.isEmpty)
     },
     test("ListV with mixed primitives round-trips") {
-      val v = ListV(Seq(StringV("a"), LongV(1L), BoolV(true), NullV))
+      val v  = ListV(Seq(StringV("a"), LongV(1L), BoolV(true), NullV))
       val rt = roundTrip(v).asInstanceOf[ListV]
       assertTrue(rt.value.toList == List(StringV("a"), LongV(1L), BoolV(true), NullV))
     },
     test("empty MapV round-trips") {
-      val v = MapV(Map.empty)
+      val v  = MapV(Map.empty)
       val rt = roundTrip(v)
       assertTrue(rt.asInstanceOf[MapV].value.isEmpty)
     },
     test("MapV with primitives round-trips") {
-      val v = MapV(Map("name" -> StringV("alice"), "age" -> LongV(30L)))
+      val v  = MapV(Map("name" -> StringV("alice"), "age" -> LongV(30L)))
       val rt = roundTrip(v).asInstanceOf[MapV]
       assertTrue(rt.value("name") == StringV("alice")) &&
       assertTrue(rt.value("age") == LongV(30L))
     },
     test("nested ListV inside MapV round-trips") {
-      val v = MapV(Map(
-        "tags" -> ListV(Seq(StringV("scala"), StringV("zio"))),
-        "id"   -> LongV(7L)
-      ))
+      val v  = MapV(
+        Map(
+          "tags" -> ListV(Seq(StringV("scala"), StringV("zio"))),
+          "id"   -> LongV(7L)
+        )
+      )
       val rt = roundTrip(v).asInstanceOf[MapV]
       assertTrue(rt.value("tags").asInstanceOf[ListV].value.toList == List(StringV("scala"), StringV("zio"))) &&
       assertTrue(rt.value("id") == LongV(7L))
     },
     test("deeply nested MapV round-trips") {
-      val v = MapV(Map(
-        "outer" -> MapV(Map(
-          "inner" -> MapV(Map(
-            "leaf" -> StringV("found")
-          ))
-        ))
-      ))
+      val v  = MapV(
+        Map(
+          "outer" -> MapV(
+            Map(
+              "inner" -> MapV(
+                Map(
+                  "leaf" -> StringV("found")
+                )
+              )
+            )
+          )
+        )
+      )
       val rt = roundTrip(v)
       assertTrue(rt == v)
     },
     test("MapV containing IdentifierV and InstantV round-trips") {
       val id = UUID.fromString("550e8400-e29b-41d4-a716-446655440001")
       val ts = Instant.parse("2026-06-02T12:34:56Z")
-      val v  = MapV(Map(
-        "id"        -> IdentifierV(id),
-        "createdAt" -> InstantV(ts),
-        "score"     -> DecimalV(BigDecimal("99.99"))
-      ))
+      val v  = MapV(
+        Map(
+          "id"        -> IdentifierV(id),
+          "createdAt" -> InstantV(ts),
+          "score"     -> DecimalV(BigDecimal("99.99"))
+        )
+      )
       val rt = roundTrip(v).asInstanceOf[MapV]
       assertTrue(rt.value("id") == IdentifierV(id)) &&
       assertTrue(rt.value("createdAt") == InstantV(ts)) &&
@@ -139,24 +149,26 @@ object JValueCodecSpec extends ZIOSpecDefault {
     },
     test("Option fields: round-trip preserves None / Some") {
       val codec = summon[LMDBCodecJson[Profile]].valueCodec
-      val p1 = Profile("u1", None, None)
-      val p2 = Profile("u1", Some("alice"), Some(30))
-      val p3 = readFromString[Profile]("""{"id":"u1"}""")(codec)
-      val p4 = readFromString[Profile]("""{"id":"u1","name":"alice","age":30}""")(codec)
+      val p1    = Profile("u1", None, None)
+      val p2    = Profile("u1", Some("alice"), Some(30))
+      val p3    = readFromString[Profile]("""{"id":"u1"}""")(codec)
+      val p4    = readFromString[Profile]("""{"id":"u1","name":"alice","age":30}""")(codec)
       assertTrue(p3 == p1) && assertTrue(p4 == p2)
     },
     test("fromPlainJson parses a generic JSON document (object, integral vs fractional, array, null)") {
       val parsed = JValue.fromPlainJson("""{"name":"Alice","age":30,"price":9.99,"tags":["a","b"],"note":null,"ok":true}""".getBytes("UTF-8"))
       assertTrue(
         parsed == Right(
-          MapV(scala.collection.immutable.ListMap(
-            "name"  -> StringV("Alice"),
-            "age"   -> LongV(30),
-            "price" -> DecimalV(BigDecimal("9.99")),
-            "tags"  -> ListV(Seq(StringV("a"), StringV("b"))),
-            "note"  -> NullV,
-            "ok"    -> BoolV(true)
-          ))
+          MapV(
+            scala.collection.immutable.ListMap(
+              "name"  -> StringV("Alice"),
+              "age"   -> LongV(30),
+              "price" -> DecimalV(BigDecimal("9.99")),
+              "tags"  -> ListV(Seq(StringV("a"), StringV("b"))),
+              "note"  -> NullV,
+              "ok"    -> BoolV(true)
+            )
+          )
         )
       )
     },

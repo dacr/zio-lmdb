@@ -22,27 +22,21 @@ import scala.collection.immutable.ListMap
 import scala.compiletime.{constValue, erasedValue, summonInline}
 import scala.deriving.Mirror
 
-/** Structural description of a type `T` as a [[JValue]] tree, shaped like a (lightweight) JSON
-  * Schema document and derived from the Scala model via `Mirror` — no runtime reflection, no extra
-  * dependency.
+/** Structural description of a type `T` as a [[JValue]] tree, shaped like a (lightweight) JSON Schema document and derived from the Scala model via `Mirror` — no runtime reflection, no extra dependency.
   *
-  *   - leaf types  → `{"type":"string"}` / `{"type":"integer"}` / … (`Instant` and
-  *     `OffsetDateTime` add `format:"date-time"`, `UUID` adds `format:"uuid"`)
-  *   - case class  → `{"type":"object","properties":{…},"required":[…]}`
+  *   - leaf types → `{"type":"string"}` / `{"type":"integer"}` / … (`Instant` and `OffsetDateTime` add `format:"date-time"`, `UUID` adds `format:"uuid"`)
+  *   - case class → `{"type":"object","properties":{…},"required":[…]}`
   *   - sealed/enum → `{"oneOf":[…]}`
   *   - `Option[T]` → the inner shape, with the field omitted from the enclosing `required` list
   *   - `Seq`/`List`/`Vector`/`Set`/`Array[T]` → `{"type":"array","items":…}`
   *   - `Map[K, V]` → `{"type":"object","additionalProperties":…}` (keys are stringified on the wire)
-  *   - `(A, B[, C[, D]])` tuple → `{"type":"array","prefixItems":[…]}` (describes composite keys
-  *     positionally rather than as a generic `_1`/`_2` object)
+  *   - `(A, B[, C[, D]])` tuple → `{"type":"array","prefixItems":[…]}` (describes composite keys positionally rather than as a generic `_1`/`_2` object)
   *
-  * This is the source the L2A catalog uses when a type opts in via `derives LMDBSchema`. It is
-  * deliberately not a spec-complete JSON Schema 2020-12 document (no `$schema`, no `$ref`/`$defs`);
-  * it is rich enough for structural drift detection and human inspection.
+  * This is the source the L2A catalog uses when a type opts in via `derives LMDBSchema`. It is deliberately not a spec-complete JSON Schema 2020-12 document (no `$schema`, no `$ref`/`$defs`); it is rich enough for structural drift detection and
+  * human inspection.
   *
-  * '''Recursion.''' A self-referential model (e.g. `case class Tree(children: Seq[Tree])`) makes
-  * the inductive derivation diverge at compile time. Such types must declare an explicit
-  * `given LMDBSchema[T]` instead; a `$ref`/`$defs` emitter is left for a later iteration.
+  * '''Recursion.''' A self-referential model (e.g. `case class Tree(children: Seq[Tree])`) makes the inductive derivation diverge at compile time. Such types must declare an explicit `given LMDBSchema[T]` instead; a `$ref`/`$defs` emitter is left
+  * for a later iteration.
   */
 trait SchemaShape[T] {
   def shape: JValue
@@ -60,16 +54,16 @@ object SchemaShape extends SchemaShapeLowPriority {
   private def array(items: JValue): JValue =
     MapV(ListMap("type" -> StringV("array"), "items" -> items))
 
-  given SchemaShape[String]            = typeOnly("string")
-  given SchemaShape[Boolean]           = typeOnly("boolean")
-  given SchemaShape[Byte]              = typeOnly("integer")
-  given SchemaShape[Short]             = typeOnly("integer")
-  given SchemaShape[Int]               = typeOnly("integer")
-  given SchemaShape[Long]              = typeOnly("integer")
-  given SchemaShape[BigInt]            = typeOnly("integer")
-  given SchemaShape[Float]             = typeOnly("number")
-  given SchemaShape[Double]            = typeOnly("number")
-  given SchemaShape[BigDecimal]        = typeOnly("number")
+  given SchemaShape[String]                   = typeOnly("string")
+  given SchemaShape[Boolean]                  = typeOnly("boolean")
+  given SchemaShape[Byte]                     = typeOnly("integer")
+  given SchemaShape[Short]                    = typeOnly("integer")
+  given SchemaShape[Int]                      = typeOnly("integer")
+  given SchemaShape[Long]                     = typeOnly("integer")
+  given SchemaShape[BigInt]                   = typeOnly("integer")
+  given SchemaShape[Float]                    = typeOnly("number")
+  given SchemaShape[Double]                   = typeOnly("number")
+  given SchemaShape[BigDecimal]               = typeOnly("number")
   given SchemaShape[java.time.Instant]        = stringFormat("date-time")
   given SchemaShape[java.time.OffsetDateTime] = stringFormat("date-time")
   given SchemaShape[java.util.UUID]           = stringFormat("uuid")
@@ -91,17 +85,16 @@ object SchemaShape extends SchemaShapeLowPriority {
   // Composite-key shapes, mirroring the tuple2/3/4 KeyCodecs. Declared explicitly (and at higher
   // priority than the Mirror `derived` below) so a tuple key is described as a positional array
   // rather than as an object with `_1`/`_2` fields.
-  given tuple2Shape[A, B](using a: SchemaShape[A], b: SchemaShape[B]): SchemaShape[(A, B)] =
+  given tuple2Shape[A, B](using a: SchemaShape[A], b: SchemaShape[B]): SchemaShape[(A, B)]                                                   =
     make(tuple(List(a.shape, b.shape)))
-  given tuple3Shape[A, B, C](using a: SchemaShape[A], b: SchemaShape[B], c: SchemaShape[C]): SchemaShape[(A, B, C)] =
+  given tuple3Shape[A, B, C](using a: SchemaShape[A], b: SchemaShape[B], c: SchemaShape[C]): SchemaShape[(A, B, C)]                          =
     make(tuple(List(a.shape, b.shape, c.shape)))
   given tuple4Shape[A, B, C, D](using a: SchemaShape[A], b: SchemaShape[B], c: SchemaShape[C], d: SchemaShape[D]): SchemaShape[(A, B, C, D)] =
     make(tuple(List(a.shape, b.shape, c.shape, d.shape)))
 }
 
-/** The `Mirror`-based product / sum derivation lives at lower priority than the explicit leaf and
-  * collection givens above, so a concrete type (e.g. `Option[T]`, which has its own `Mirror`)
-  * resolves to its hand-written shape rather than the generic structural one.
+/** The `Mirror`-based product / sum derivation lives at lower priority than the explicit leaf and collection givens above, so a concrete type (e.g. `Option[T]`, which has its own `Mirror`) resolves to its hand-written shape rather than the generic
+  * structural one.
   */
 trait SchemaShapeLowPriority {
 
@@ -113,8 +106,7 @@ trait SchemaShapeLowPriority {
       case s: Mirror.SumOf[T]     => make(oneOfSchema(variantShapesOf[s.MirroredElemTypes]))
     }
 
-  /** Non-inline so the collection combinators below are compiled once rather than duplicated at
-    * every derivation site. `fields` pairs each property shape with whether it is optional.
+  /** Non-inline so the collection combinators below are compiled once rather than duplicated at every derivation site. `fields` pairs each property shape with whether it is optional.
     */
   protected def objectSchema(names: List[String], fields: List[(JValue, Boolean)]): JValue = {
     val props    = ListMap.from(names.zip(fields.map(_._1)))

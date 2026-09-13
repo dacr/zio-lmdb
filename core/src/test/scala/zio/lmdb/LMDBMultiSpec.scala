@@ -21,7 +21,7 @@ object LMDBMultiSpec extends ZIOSpecDefault with Commons {
         _   <- col.put("group1", Person("Alice", 30))
         _   <- col.put("group1", Person("Bob", 25))
         _   <- col.put("group2", Person("Charlie", 40))
-        
+
         group1 <- col.fetch("group1")
         group2 <- col.fetch("group2")
         group3 <- col.fetch("group3")
@@ -34,10 +34,10 @@ object LMDBMultiSpec extends ZIOSpecDefault with Commons {
         col <- LMDB.multiCreate[String, Person]("people3")
         _   <- col.put("group1", Person("Alice", 30))
         _   <- col.put("group1", Person("Bob", 25))
-        
+
         deleted1 <- col.delete("group1", Person("Alice", 30))
         deleted2 <- col.delete("group1", Person("Charlie", 40)) // Not in collection
-        
+
         group1 <- col.fetch("group1")
       } yield assert(deleted1)(isTrue) &&
         assert(deleted2)(isFalse) &&
@@ -49,10 +49,10 @@ object LMDBMultiSpec extends ZIOSpecDefault with Commons {
         _   <- col.put("group1", Person("Alice", 30))
         _   <- col.put("group1", Person("Bob", 25))
         _   <- col.put("group2", Person("Charlie", 40))
-        
+
         deleted1 <- col.deleteAll("group1")
         deleted2 <- col.deleteAll("group3") // Not in collection
-        
+
         group1 <- col.fetch("group1")
         group2 <- col.fetch("group2")
       } yield assert(deleted1)(isTrue) &&
@@ -66,7 +66,7 @@ object LMDBMultiSpec extends ZIOSpecDefault with Commons {
         _   <- col.put("group1", Person("Alice", 30))
         _   <- col.put("group1", Person("Bob", 25))
         _   <- col.put("group2", Person("Charlie", 40))
-        
+
         size1 <- col.size()
         _     <- col.clear()
         size2 <- col.size()
@@ -75,13 +75,13 @@ object LMDBMultiSpec extends ZIOSpecDefault with Commons {
     },
     test("transactional readWrite") {
       for {
-        col <- LMDB.multiCreate[String, Person]("people6")
-        _   <- col.readWrite { ops =>
-                 for {
-                   _ <- ops.put("group1", Person("Alice", 30))
-                   _ <- ops.put("group1", Person("Bob", 25))
-                 } yield ()
-               }
+        col    <- LMDB.multiCreate[String, Person]("people6")
+        _      <- col.readWrite { ops =>
+                    for {
+                      _ <- ops.put("group1", Person("Alice", 30))
+                      _ <- ops.put("group1", Person("Bob", 25))
+                    } yield ()
+                  }
         group1 <- col.fetch("group1")
       } yield assert(group1)(hasSameElements(List(Person("Alice", 30), Person("Bob", 25))))
     },

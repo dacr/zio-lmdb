@@ -26,9 +26,8 @@ import zio.lmdb.sql.result.{Format, Renderer}
 import java.nio.file.{Files, Path, Paths}
 import java.util.concurrent.atomic.AtomicReference
 
-/** The interactive SQL shell. The terminal is the only I/O; statements go through the pure
-  * `SqlEngine` pipeline and are rendered with the selected [[Format]]. Anything that does not start
-  * with `\` is SQL; `\`-commands handle connection, catalog shortcuts, output format, and exit.
+/** The interactive SQL shell. The terminal is the only I/O; statements go through the pure `SqlEngine` pipeline and are rendered with the selected [[Format]]. Anything that does not start with `\` is SQL; `\`-commands handle connection, catalog
+  * shortcuts, output format, and exit.
   */
 object Main extends ZIOAppDefault {
 
@@ -49,15 +48,12 @@ object Main extends ZIOAppDefault {
     format: Ref[Format],
     catalog: AtomicReference[CatalogSnapshot]
   ) {
-    def out(s: String): UIO[Unit]  = ZIO.attempt { terminal.writer().println(s); terminal.writer().flush() }.orDie
-    def err(s: String): UIO[Unit]  = out(s"! $s")
+    def out(s: String): UIO[Unit] = ZIO.attempt { terminal.writer().println(s); terminal.writer().flush() }.orDie
+    def err(s: String): UIO[Unit] = out(s"! $s")
   }
 
-  /** Parsed command-line arguments. `home` overrides the databases home (otherwise it comes from the
-    * built LMDB config); `connect` is an optional database name to open automatically on startup (and
-    * the database to run against in batch mode); `execute` are SQL statements to run non-interactively
-    * (`--execute`/`-e`, repeatable) — when present the REPL runs them and exits instead of prompting;
-    * `format` is the output format (`--format`/`-f`, default `table`).
+  /** Parsed command-line arguments. `home` overrides the databases home (otherwise it comes from the built LMDB config); `connect` is an optional database name to open automatically on startup (and the database to run against in batch mode);
+    * `execute` are SQL statements to run non-interactively (`--execute`/`-e`, repeatable) — when present the REPL runs them and exits instead of prompting; `format` is the output format (`--format`/`-f`, default `table`).
     */
   private final case class CliArgs(home: Option[String], connect: Option[String], execute: List[String], format: Format)
 
@@ -83,8 +79,8 @@ object Main extends ZIOAppDefault {
       case _       => None
     }
 
-  /** Resolve the databases home the same way `LMDBLive.setup` does: explicit override, else the value
-    * from the built config (`lmdb.home` / `LMDB_HOME`), else `$HOME/.lmdb`. */
+  /** Resolve the databases home the same way `LMDBLive.setup` does: explicit override, else the value from the built config (`lmdb.home` / `LMDB_HOME`), else `$HOME/.lmdb`.
+    */
   private def resolveHome(homeOpt: Option[String], config: LMDBConfig): Path =
     homeOpt.orElse(config.databasesHome) match {
       case Some(h) => Paths.get(h).toAbsolutePath
@@ -93,20 +89,20 @@ object Main extends ZIOAppDefault {
 
   override def run =
     (for {
-      args      <- getArgs
-      cli        = parseArgs(args.toList)
+      args   <- getArgs
+      cli     = parseArgs(args.toList)
       // The databases home comes from the built LMDB config (honouring `lmdb.home` / `LMDB_HOME`),
       // not from a positional argument — the positional argument names a database to auto-connect to.
-      config    <- ZIO.config(LMDB.config).orElseSucceed(LMDBConfig.default)
-      dbHome     = resolveHome(cli.home, config)
-      _         <- ZIO.attemptBlocking(if (!Files.exists(dbHome)) Files.createDirectories(dbHome))
+      config <- ZIO.config(LMDB.config).orElseSucceed(LMDBConfig.default)
+      dbHome  = resolveHome(cli.home, config)
+      _      <- ZIO.attemptBlocking(if (!Files.exists(dbHome)) Files.createDirectories(dbHome))
       // `--execute` switches to non-interactive batch mode: run the statements against the named
       // database and exit, with no banner or jline terminal (so output is clean for scripting).
-      _         <- if (cli.execute.nonEmpty) batch(cli, dbHome) else interactive(cli, dbHome)
+      _      <- if (cli.execute.nonEmpty) batch(cli, dbHome) else interactive(cli, dbHome)
     } yield ()).catchAll(e => Console.printLineError(s"Fatal: $e").orDie)
 
-  /** Non-interactive `--execute` mode: open the named database, render each statement's result to
-    * stdout in the chosen format, and exit non-zero if any statement failed. */
+  /** Non-interactive `--execute` mode: open the named database, render each statement's result to stdout in the chosen format, and exit non-zero if any statement failed.
+    */
   private def batch(cli: CliArgs, dbHome: Path): Task[Unit] =
     cli.connect match {
       case None       =>
@@ -116,16 +112,18 @@ object Main extends ZIOAppDefault {
         ZIO.attemptBlocking(Files.exists(dbPath.resolve("data.mdb")) || !Files.exists(dbPath)).flatMap { ok =>
           if (!ok) Console.printLineError(s"error: '$name' is not an LMDB database directory in $dbHome").orDie *> exit(ExitCode.failure)
           else
-            ZIO.scoped {
-              LMDBLive
-                .setup(LMDBConfig.default.copy(databasesHome = Some(dbHome.toString), databaseName = name))
-                .flatMap(lmdb => ZIO.foreach(cli.execute)(sql => runBatchStmt(lmdb, cli.format, sql)))
-            }.flatMap(oks => ZIO.when(oks.contains(false))(exit(ExitCode.failure)).unit)
+            ZIO
+              .scoped {
+                LMDBLive
+                  .setup(LMDBConfig.default.copy(databasesHome = Some(dbHome.toString), databaseName = name))
+                  .flatMap(lmdb => ZIO.foreach(cli.execute)(sql => runBatchStmt(lmdb, cli.format, sql)))
+              }
+              .flatMap(oks => ZIO.when(oks.contains(false))(exit(ExitCode.failure)).unit)
         }
     }
 
-  /** Run one statement in batch mode: render its rows to stdout, or print a clean `error: …` line to
-    * stderr. Returns whether it succeeded (used to set the process exit code). */
+  /** Run one statement in batch mode: render its rows to stdout, or print a clean `error: …` line to stderr. Returns whether it succeeded (used to set the process exit code).
+    */
   private def runBatchStmt(lmdb: LMDB, fmt: Format, sql: String): UIO[Boolean] =
     (for {
       result <- SqlEngine.run(sql).provide(ZLayer.succeed(lmdb))
@@ -135,58 +133,60 @@ object Main extends ZIOAppDefault {
   /** The interactive jline shell (the default when no `--execute` is given). */
   private def interactive(cli: CliArgs, dbHome: Path): Task[Unit] =
     for {
-      active    <- Ref.make[Option[LMDB]](None)
-      scope     <- Ref.make[Option[Scope.Closeable]](None)
-      format    <- Ref.make[Format](Format.Table)
-      catalog    = new AtomicReference(CatalogSnapshot.empty)
-      ctx       <- ZIO.attempt {
-                     // JLine 4.x probes the terminal for DEC mode 2027 (grapheme-cluster) support when a
-                     // terminal is built, emitting ESC[?2027$p ESC[c ESC[6n. The cursor-position (CPR)
-                     // reply leaks onto stdin: it prints `^[[27;1R` before our banner and gets prepended
-                     // to the first line read, so e.g. `\c name` no longer starts with `\` and is treated
-                     // as SQL ("no database selected"). We don't need grapheme-width precision here, so
-                     // turn the probe off. Must be set before TerminalBuilder.build().
-                     java.lang.System.setProperty("org.jline.terminal.graphemeCluster", "false")
-                     val terminal = TerminalBuilder.builder().system(true).build()
-                     val history  = Paths.get(java.lang.System.getProperty("user.home"), ".zio-lmdb-sql-history")
-                     // Our commands are psql-style and start with '\' (\c, \l, \h, \d, \format, \q). JLine's
-                     // history "event expansion" treats a leading '\' as an escape and strips it, so readLine
-                     // would return "l" for "\l"; the line then fails the startsWith("\\") dispatch and is run
-                     // as SQL ("no database selected"). Disable event expansion to keep '\' literal (and '!',
-                     // as in SQL "!="), and drop '\' as a parser escape char so word-splitting/continuation
-                     // leave our commands intact.
-                     val parser   = new DefaultParser()
-                     parser.setEscapeChars(null)
-                     val reader   = LineReaderBuilder
-                                      .builder()
-                                      .terminal(terminal)
-                                      .parser(parser)
-                                      .completer(new SqlCompleter(catalog))
-                                      .variable(LineReader.HISTORY_FILE, history)
-                                      .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
-                                      .build()
-                     Ctx(terminal, reader, dbHome, active, scope, format, catalog)
-                   }
-      _         <- ctx.out(s"zio-lmdb-sql  —  databases home: $dbHome")
-      _         <- ctx.out("Type SQL, or \\h for help. \\q to quit.")
-      _         <- refreshDatabases(ctx) // populate \c completion before any connection
-      _         <- ZIO.foreachDiscard(cli.connect)(name => connect(ctx, name).catchAll(e => ctx.err(e.getMessage)))
-      _         <- loop(ctx)
+      active <- Ref.make[Option[LMDB]](None)
+      scope  <- Ref.make[Option[Scope.Closeable]](None)
+      format <- Ref.make[Format](Format.Table)
+      catalog = new AtomicReference(CatalogSnapshot.empty)
+      ctx    <- ZIO.attempt {
+                  // JLine 4.x probes the terminal for DEC mode 2027 (grapheme-cluster) support when a
+                  // terminal is built, emitting ESC[?2027$p ESC[c ESC[6n. The cursor-position (CPR)
+                  // reply leaks onto stdin: it prints `^[[27;1R` before our banner and gets prepended
+                  // to the first line read, so e.g. `\c name` no longer starts with `\` and is treated
+                  // as SQL ("no database selected"). We don't need grapheme-width precision here, so
+                  // turn the probe off. Must be set before TerminalBuilder.build().
+                  java.lang.System.setProperty("org.jline.terminal.graphemeCluster", "false")
+                  val terminal = TerminalBuilder.builder().system(true).build()
+                  val history  = Paths.get(java.lang.System.getProperty("user.home"), ".zio-lmdb-sql-history")
+                  // Our commands are psql-style and start with '\' (\c, \l, \h, \d, \format, \q). JLine's
+                  // history "event expansion" treats a leading '\' as an escape and strips it, so readLine
+                  // would return "l" for "\l"; the line then fails the startsWith("\\") dispatch and is run
+                  // as SQL ("no database selected"). Disable event expansion to keep '\' literal (and '!',
+                  // as in SQL "!="), and drop '\' as a parser escape char so word-splitting/continuation
+                  // leave our commands intact.
+                  val parser   = new DefaultParser()
+                  parser.setEscapeChars(null)
+                  val reader   = LineReaderBuilder
+                    .builder()
+                    .terminal(terminal)
+                    .parser(parser)
+                    .completer(new SqlCompleter(catalog))
+                    .variable(LineReader.HISTORY_FILE, history)
+                    .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
+                    .build()
+                  Ctx(terminal, reader, dbHome, active, scope, format, catalog)
+                }
+      _      <- ctx.out(s"zio-lmdb-sql  —  databases home: $dbHome")
+      _      <- ctx.out("Type SQL, or \\h for help. \\q to quit.")
+      _      <- refreshDatabases(ctx) // populate \c completion before any connection
+      _      <- ZIO.foreachDiscard(cli.connect)(name => connect(ctx, name).catchAll(e => ctx.err(e.getMessage)))
+      _      <- loop(ctx)
     } yield ()
 
   private def loop(ctx: Ctx): Task[Unit] =
-    prompt(ctx).flatMap { p =>
-      ZIO.attempt {
-        try ctx.reader.readLine(p)
-        catch { case _: UserInterruptException => ""; case _: EndOfFileException => null }
+    prompt(ctx)
+      .flatMap { p =>
+        ZIO.attempt {
+          try ctx.reader.readLine(p)
+          catch { case _: UserInterruptException => ""; case _: EndOfFileException => null }
+        }
       }
-    }.flatMap {
-      case null                                              => ZIO.unit
-      case line if line.trim.isEmpty                         => loop(ctx)
-      case line if line.trim == "\\q" || line.trim == "exit" => ZIO.unit
-      case line if line.trim.startsWith("\\")                => meta(ctx, line.trim).catchAllCause(c => ctx.err(c.squash.getMessage)) *> loop(ctx)
-      case line                                              => runSql(ctx, line).catchAllCause(c => ctx.err(c.squash.getMessage)) *> loop(ctx)
-    }
+      .flatMap {
+        case null                                              => ZIO.unit
+        case line if line.trim.isEmpty                         => loop(ctx)
+        case line if line.trim == "\\q" || line.trim == "exit" => ZIO.unit
+        case line if line.trim.startsWith("\\")                => meta(ctx, line.trim).catchAllCause(c => ctx.err(c.squash.getMessage)) *> loop(ctx)
+        case line                                              => runSql(ctx, line).catchAllCause(c => ctx.err(c.squash.getMessage)) *> loop(ctx)
+      }
 
   private def prompt(ctx: Ctx): UIO[String] =
     ctx.active.get.map {
@@ -202,10 +202,10 @@ object Main extends ZIOAppDefault {
           fmt     <- ctx.format.get
           counter <- Ref.make(0L)
           timed   <- (for {
-                        result <- SqlEngine.run(sql).provide(ZLayer.succeed(lmdb))
-                        tapped  = result.copy(rows = result.rows.tap(_ => counter.update(_ + 1)))
-                        _      <- Renderer.render(fmt, tapped).runForeach(ctx.out)
-                      } yield ()).timed
+                       result <- SqlEngine.run(sql).provide(ZLayer.succeed(lmdb))
+                       tapped  = result.copy(rows = result.rows.tap(_ => counter.update(_ + 1)))
+                       _      <- Renderer.render(fmt, tapped).runForeach(ctx.out)
+                     } yield ()).timed
           n       <- counter.get
           _       <- ctx.out(s"($n row${if (n == 1) "" else "s"} in ${formatDuration(timed._1.toMillis)})")
         } yield ()).catchAll(e => ctx.err(e.message))
@@ -213,7 +213,7 @@ object Main extends ZIOAppDefault {
 
   /** Compact elapsed-time rendering: `42ms`, `10s200ms`, `1m42s5ms`. */
   private def formatDuration(totalMs: Long): String = {
-    val ms        = totalMs % 1000
+    val ms        = totalMs   % 1000
     val totalSecs = totalMs / 1000
     val secs      = totalSecs % 60
     val mins      = totalSecs / 60
@@ -225,14 +225,14 @@ object Main extends ZIOAppDefault {
   private def meta(ctx: Ctx, line: String): Task[Unit] = {
     val parts = line.split("\\s+").toList
     parts match {
-      case "\\h" :: _              => help(ctx)
-      case "\\l" :: _              => listDatabases(ctx)
-      case "\\c" :: name :: _      => connect(ctx, name)
-      case "\\dt" :: _             => runSql(ctx, "show collections")
-      case "\\di" :: _             => runSql(ctx, "show indexes")
-      case "\\d" :: name :: _      => runSql(ctx, s"describe $name")
-      case "\\format" :: f :: _    => setFormat(ctx, f)
-      case other                   => ctx.err(s"unknown command: ${other.mkString(" ")}  (try \\h)")
+      case "\\h" :: _           => help(ctx)
+      case "\\l" :: _           => listDatabases(ctx)
+      case "\\c" :: name :: _   => connect(ctx, name)
+      case "\\dt" :: _          => runSql(ctx, "show collections")
+      case "\\di" :: _          => runSql(ctx, "show indexes")
+      case "\\d" :: name :: _   => runSql(ctx, s"describe $name")
+      case "\\format" :: f :: _ => setFormat(ctx, f)
+      case other                => ctx.err(s"unknown command: ${other.mkString(" ")}  (try \\h)")
     }
   }
 

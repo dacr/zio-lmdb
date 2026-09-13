@@ -21,11 +21,11 @@ sealed trait SqlError {
 }
 
 object SqlError {
-  final case class Parse(index: Int, detail: String)                 extends SqlError { def message = s"parse error at offset $index: $detail" }
-  final case class UnknownCollection(name: String)                   extends SqlError { def message = s"unknown collection '$name'"            }
-  final case class UnknownColumn(name: String, collection: String)   extends SqlError { def message = s"unknown column '$name' in '$collection'" }
-  final case class TypeMismatch(detail: String)                      extends SqlError { def message = detail                                   }
-  final case class Unsupported(detail: String)                       extends SqlError { def message = detail                                   }
-  final case class KeyError(detail: String)                          extends SqlError { def message = detail                                   }
-  final case class Storage(detail: String)                           extends SqlError { def message = detail                                   }
+  final case class Parse(index: Int, detail: String)               extends SqlError { def message = s"parse error at offset $index: $detail"   }
+  final case class UnknownCollection(name: String)                 extends SqlError { def message = s"unknown collection '$name'"              }
+  final case class UnknownColumn(name: String, collection: String) extends SqlError { def message = s"unknown column '$name' in '$collection'" }
+  final case class TypeMismatch(detail: String)                    extends SqlError { def message = detail                                     }
+  final case class Unsupported(detail: String)                     extends SqlError { def message = detail                                     }
+  final case class KeyError(detail: String)                        extends SqlError { def message = detail                                     }
+  final case class Storage(detail: String)                         extends SqlError { def message = detail                                     }
 }

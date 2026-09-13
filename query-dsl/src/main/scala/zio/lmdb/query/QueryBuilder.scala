@@ -134,7 +134,7 @@ case class QueryBuilder[K, T](
     */
   def joinByKey[RK, RT](rightCollection: LMDBCollection[RK, RT])(extractKey: T => RK): JoinedQueryBuilder[T, RT] = {
     val joinedStream = toStream.mapZIO { leftValue =>
-      val rightKey = extractKey(leftValue)
+      val rightKey    = extractKey(leftValue)
       val fetchResult = ops match {
         case Some(o) => o.fetch(rightCollection.name, rightKey)(rightCollection.kodec, rightCollection.codec)
         case None    => rightCollection.fetch(rightKey)
@@ -170,23 +170,21 @@ case class QueryBuilder[K, T](
     index: LMDBIndex[IK, RK]
   )(extractIndexKey: T => IK): JoinedQueryBuilder[T, RT] = {
     val joinedStream = toStream.flatMap { leftValue =>
-      val indexKey = extractIndexKey(leftValue)
+      val indexKey      = extractIndexKey(leftValue)
       val indexedStream = ops match {
         case Some(o) => o.indexed(index.name, indexKey)(index.keyCodec, index.toKeyCodec)
         case None    => index.indexed(indexKey)
       }
-      indexedStream
-        .mapZIO { case (_, rightKey) =>
-          val fetchResult = ops match {
-            case Some(o) => o.fetch(rightCollection.name, rightKey)(rightCollection.kodec, rightCollection.codec)
-            case None    => rightCollection.fetch(rightKey)
-          }
-          fetchResult.map {
-            case Some(rightValue) => Some((leftValue, rightValue))
-            case None             => None
-          }
+      indexedStream.mapZIO { case (_, rightKey) =>
+        val fetchResult = ops match {
+          case Some(o) => o.fetch(rightCollection.name, rightKey)(rightCollection.kodec, rightCollection.codec)
+          case None    => rightCollection.fetch(rightKey)
         }
-        .collectSome
+        fetchResult.map {
+          case Some(rightValue) => Some((leftValue, rightValue))
+          case None             => None
+        }
+      }.collectSome
     }
 
     JoinedQueryBuilder(joinedStream, ops)
@@ -240,7 +238,7 @@ case class IndexQueryBuilder[IK, RK](
     *   A ZStream of matching target keys
     */
   def toStream: ZStream[Any, IndexErrors, RK] = {
-    val stream = ops match {
+    val stream   = ops match {
       case Some(o) => o.indexed(index.name, indexKey, limitToKey)(index.keyCodec, index.toKeyCodec)
       case None    => index.indexed(indexKey, limitToKey)
     }
@@ -334,7 +332,7 @@ case class JoinedQueryBuilder[L, R](
     */
   def joinByKey[RK, RT](rightCollection: LMDBCollection[RK, RT])(extractKey: ((L, R)) => RK): JoinedQueryBuilder[(L, R), RT] = {
     val joinedStream = stream.mapZIO { pair =>
-      val rightKey = extractKey(pair)
+      val rightKey    = extractKey(pair)
       val fetchResult = ops match {
         case Some(o) => o.fetch(rightCollection.name, rightKey)(rightCollection.kodec, rightCollection.codec)
         case None    => rightCollection.fetch(rightKey)
@@ -370,23 +368,21 @@ case class JoinedQueryBuilder[L, R](
     index: LMDBIndex[IK, RK]
   )(extractIndexKey: ((L, R)) => IK): JoinedQueryBuilder[(L, R), RT] = {
     val joinedStream = stream.flatMap { pair =>
-      val indexKey = extractIndexKey(pair)
+      val indexKey      = extractIndexKey(pair)
       val indexedStream = ops match {
         case Some(o) => o.indexed(index.name, indexKey)(index.keyCodec, index.toKeyCodec)
         case None    => index.indexed(indexKey)
       }
-      indexedStream
-        .mapZIO { case (_, rightKey) =>
-          val fetchResult = ops match {
-            case Some(o) => o.fetch(rightCollection.name, rightKey)(rightCollection.kodec, rightCollection.codec)
-            case None    => rightCollection.fetch(rightKey)
-          }
-          fetchResult.map {
-            case Some(rightValue) => Some((pair, rightValue))
-            case None             => None
-          }
+      indexedStream.mapZIO { case (_, rightKey) =>
+        val fetchResult = ops match {
+          case Some(o) => o.fetch(rightCollection.name, rightKey)(rightCollection.kodec, rightCollection.codec)
+          case None    => rightCollection.fetch(rightKey)
         }
-        .collectSome
+        fetchResult.map {
+          case Some(rightValue) => Some((pair, rightValue))
+          case None             => None
+        }
+      }.collectSome
     }
 
     JoinedQueryBuilder(joinedStream, ops)

@@ -20,9 +20,7 @@ import org.jline.reader.{Candidate, Completer, LineReader, ParsedLine}
 import java.util.concurrent.atomic.AtomicReference
 import scala.jdk.CollectionConverters.*
 
-/** The catalog data the completer needs. `databases` is the `\c` target list (scanned from the
-  * databases home, available before connecting); `collections`/`columns` come from the connected
-  * database and are refreshed on each `\c`.
+/** The catalog data the completer needs. `databases` is the `\c` target list (scanned from the databases home, available before connecting); `collections`/`columns` come from the connected database and are refreshed on each `\c`.
   */
 final case class CatalogSnapshot(databases: List[String], collections: List[String], columns: Map[String, List[String]])
 object CatalogSnapshot { val empty: CatalogSnapshot = CatalogSnapshot(Nil, Nil, Map.empty) }
@@ -32,9 +30,7 @@ object CatalogSnapshot { val empty: CatalogSnapshot = CatalogSnapshot(Nil, Nil, 
   *   - the database list right after FROM / INTO / UPDATE / DESCRIBE;
   *   - otherwise SQL keywords, the database list, and the columns of the FROM/INTO/UPDATE collection.
   *
-  * JLine filters whatever we offer by the word prefix already typed, so it is safe to over-offer.
-  * Live names come from a [[CatalogSnapshot]] updated by the REPL on connect, read here (off the ZIO
-  * fiber) through an `AtomicReference`.
+  * JLine filters whatever we offer by the word prefix already typed, so it is safe to over-offer. Live names come from a [[CatalogSnapshot]] updated by the REPL on connect, read here (off the ZIO fiber) through an `AtomicReference`.
   */
 final class SqlCompleter(snapshot: AtomicReference[CatalogSnapshot]) extends Completer {
   import SqlCompleter.*
@@ -73,16 +69,84 @@ object SqlCompleter {
 
   /** SQL keywords and the aggregate-call openers (so `cou`<TAB> → `count(`). */
   val keywords: List[String] = List(
-    "select", "distinct", "as", "from", "where", "group", "by", "order", "limit", "asc", "desc",
-    "insert", "into", "values", "update", "set", "delete", "describe", "show", "collections", "indexes",
-    "join", "inner", "left", "outer", "on",
-    "and", "or", "not", "like", "in", "between", "is", "null", "case", "when", "then", "else", "end",
-    "count(", "sum(", "avg(", "min(", "max(",
-    "length(", "upper(", "lower(", "trim(", "ltrim(", "rtrim(", "substr(", "substring(", "concat(", "replace(", "instr(",
-    "coalesce(", "nullif(", "cast(",
-    "abs(", "floor(", "ceil(", "ceiling(", "round(", "sign(", "mod(", "power(", "pow(", "sqrt(",
-    "year(", "month(", "day(", "hour(", "minute(", "second(", "now(", "date_diff(",
-    "geo_distance(", "geo_within("
+    "select",
+    "distinct",
+    "as",
+    "from",
+    "where",
+    "group",
+    "by",
+    "order",
+    "limit",
+    "asc",
+    "desc",
+    "insert",
+    "into",
+    "values",
+    "update",
+    "set",
+    "delete",
+    "describe",
+    "show",
+    "collections",
+    "indexes",
+    "join",
+    "inner",
+    "left",
+    "outer",
+    "on",
+    "and",
+    "or",
+    "not",
+    "like",
+    "in",
+    "between",
+    "is",
+    "null",
+    "case",
+    "when",
+    "then",
+    "else",
+    "end",
+    "count(",
+    "sum(",
+    "avg(",
+    "min(",
+    "max(",
+    "length(",
+    "upper(",
+    "lower(",
+    "trim(",
+    "ltrim(",
+    "rtrim(",
+    "substr(",
+    "substring(",
+    "concat(",
+    "replace(",
+    "instr(",
+    "coalesce(",
+    "nullif(",
+    "cast(",
+    "abs(",
+    "floor(",
+    "ceil(",
+    "ceiling(",
+    "round(",
+    "sign(",
+    "mod(",
+    "power(",
+    "pow(",
+    "sqrt(",
+    "year(",
+    "month(",
+    "day(",
+    "hour(",
+    "minute(",
+    "second(",
+    "now(",
+    "date_diff(",
+    "geo_distance(",
+    "geo_within("
   )
 
   /** Positions where a collection name is expected next. */

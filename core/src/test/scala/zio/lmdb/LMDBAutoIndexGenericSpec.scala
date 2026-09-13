@@ -13,7 +13,7 @@ object LMDBAutoIndexGenericSpec extends ZIOSpecDefault with Commons {
       for {
         userIndex <- LMDB.indexCreate[String, String]("users_by_name_generic")
         usersRaw  <- LMDB.collectionCreate[String, SimpleUser]("users_auto_idx_generic_test")
-        
+
         // Generic index: maps name to "ID: " + id
         users = usersRaw.withIndexFull(userIndex)((k, u) => Some((u.name, s"ID: $k")))
 
@@ -36,7 +36,7 @@ object LMDBAutoIndexGenericSpec extends ZIOSpecDefault with Commons {
 
         // 2. Test update (change name)
         newUserName1 = "Alicia"
-        _ <- users.update(userId1, _ => SimpleUser(newUserName1))
+        _           <- users.update(userId1, _ => SimpleUser(newUserName1))
 
         idxAlice2  <- userIndex.indexed(userName1).runCollect
         idxAlicia2 <- userIndex.indexed(newUserName1).runCollect

@@ -38,15 +38,13 @@ package object json {
   /** Implicit codec for `Boolean` using JSON representation. */
   implicit val booleanCodec: LMDBCodec[Boolean] = LMDBCodecJson(JsonCodecMaker.make[Boolean])
 
-  /** Encode a typed value to its JSON `String` representation.
-    * Same call shape as zio-json's `.toJson` extension method.
+  /** Encode a typed value to its JSON `String` representation. Same call shape as zio-json's `.toJson` extension method.
     */
   extension [T](value: T) {
     def toJson(using codec: LMDBCodecJson[T]): String = writeToString(value)(codec.valueCodec)
   }
 
-  /** Decode a JSON `String` into a typed value.
-    * Same call shape as zio-json's `.fromJson[T]` extension method.
+  /** Decode a JSON `String` into a typed value. Same call shape as zio-json's `.fromJson[T]` extension method.
     */
   extension (json: String) {
     def fromJson[T](using codec: LMDBCodecJson[T]): Either[String, T] =

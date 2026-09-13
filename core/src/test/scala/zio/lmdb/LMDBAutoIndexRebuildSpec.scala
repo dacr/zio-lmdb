@@ -11,8 +11,8 @@ object LMDBAutoIndexRebuildSpec extends ZIOSpecDefault with Commons {
   override def spec = suite("LMDB Auto Indexing Rebuild")(
     test("rebuild index from existing collection") {
       for {
-        usersRaw  <- LMDB.collectionCreate[String, SimpleUser]("users_rebuild_idx_test")
-        
+        usersRaw <- LMDB.collectionCreate[String, SimpleUser]("users_rebuild_idx_test")
+
         userId1   = "user1"
         userName1 = "Alice"
         userId2   = "user2"
@@ -23,7 +23,7 @@ object LMDBAutoIndexRebuildSpec extends ZIOSpecDefault with Commons {
         _ <- usersRaw.upsertOverwrite(userId2, SimpleUser(userName2))
 
         userIndex <- LMDB.indexCreate[String, String]("users_by_name_rebuild")
-        
+
         users = usersRaw.withIndex(userIndex)(u => Some(u.name))
 
         // Rebuild index

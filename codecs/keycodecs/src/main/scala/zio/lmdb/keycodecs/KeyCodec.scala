@@ -24,11 +24,8 @@ import scala.annotation.tailrec
 
 /** A stable, globally-unique identifier for a key encoding, persisted in the collection schema.
   *
-  * Keys are order-encoded bytes whose meaning cannot be inferred from the bytes alone — a `Long` and
-  * a geo key are both 8 bytes; a `UUID`, a `UUIDv7` and a `ULID` are all 16 — so the id is the only
-  * thing that distinguishes them. It is a versioned URN (e.g. `lmdb:int64`, `lmdb-geo:location/v1`):
-  * because it lands on disk it is a wire contract, so a change to the byte layout must bump the
-  * version part.
+  * Keys are order-encoded bytes whose meaning cannot be inferred from the bytes alone — a `Long` and a geo key are both 8 bytes; a `UUID`, a `UUIDv7` and a `ULID` are all 16 — so the id is the only thing that distinguishes them. It is a versioned
+  * URN (e.g. `lmdb:int64`, `lmdb-geo:location/v1`): because it lands on disk it is a wire contract, so a change to the byte layout must bump the version part.
   */
 final case class KeyTypeId(value: String)
 
@@ -62,9 +59,7 @@ trait KeyCodec[K] {
     */
   def width: Option[Int] = None
 
-  /** A stable, unique identifier for this encoding (see [[KeyTypeId]]). Abstract on purpose: every
-    * implementation — built-in, extension, or user-supplied — must name itself, so a key can always
-    * be identified rather than guessed at from its bytes.
+  /** A stable, unique identifier for this encoding (see [[KeyTypeId]]). Abstract on purpose: every implementation — built-in, extension, or user-supplied — must name itself, so a key can always be identified rather than guessed at from its bytes.
     */
   def keyId: KeyTypeId
 }
@@ -182,9 +177,7 @@ object KeyCodec {
     override def width: Option[Int] = Some(16)
   }
 
-  /** Raw bytes used verbatim as the key. Identity encoding, so LMDB's unsigned byte-wise comparison
-    * orders these keys lexicographically. Variable width, so as a tuple component it is escaped like
-    * any other variable-width key.
+  /** Raw bytes used verbatim as the key. Identity encoding, so LMDB's unsigned byte-wise comparison orders these keys lexicographically. Variable width, so as a tuple component it is escaped like any other variable-width key.
     */
   given byteArrayKeyCodec: KeyCodec[Array[Byte]] = new KeyCodec[Array[Byte]] {
     override val keyId: KeyTypeId = KeyTypeId("lmdb:bytes")
@@ -273,7 +266,7 @@ object KeyCodec {
                 if (pos + 1 >= limit) Left(MissingSeparator(pos + 1))
                 else {
                   val next = keyBytes.get(pos + 1)
-                  if (next == 0) Right(pos)            // Two-byte separator 0x00 0x00
+                  if (next == 0) Right(pos)                  // Two-byte separator 0x00 0x00
                   else if (next == 1) findSeparator(pos + 2) // Escape sequence 0x00 0x01
                   else Left(UnescapedZero(pos))
                 }

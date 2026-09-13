@@ -25,9 +25,9 @@ import zio.lmdb.query.QueryBuilder._
 
 object QueryBuilderSpec extends ZIOSpecDefault {
 
-  case class User(id: String, name: String, age: Int, active: Boolean)       derives LMDBCodecJson
-  case class Post(id: String, authorId: String, title: String)               derives LMDBCodecJson
-  case class Comment(id: String, postId: String, text: String)               derives LMDBCodecJson
+  case class User(id: String, name: String, age: Int, active: Boolean) derives LMDBCodecJson
+  case class Post(id: String, authorId: String, title: String) derives LMDBCodecJson
+  case class Comment(id: String, postId: String, text: String) derives LMDBCodecJson
 
   val users = List(
     User("1", "Alice", 25, true),
@@ -232,7 +232,8 @@ object QueryBuilderSpec extends ZIOSpecDefault {
         authorToPostIdx <- lmdb.indexGet[String, String]("author_to_post")
 
         // Find all posts by Alice (authorId = "1") via the index
-        results <- authorToPostIdx.query("1")
+        results <- authorToPostIdx
+                     .query("1")
                      .join(postsCol)
                      .toList
       } yield assertTrue(
@@ -249,7 +250,8 @@ object QueryBuilderSpec extends ZIOSpecDefault {
         authorToPostIdx <- lmdb.indexGet[String, String]("author_to_post")
 
         // Find Alice's posts, but only those whose ID ends with "1"
-        results <- authorToPostIdx.query("1")
+        results <- authorToPostIdx
+                     .query("1")
                      .whereTargetKey(_.endsWith("1"))
                      .join(postsCol)
                      .toList
@@ -269,14 +271,14 @@ object QueryBuilderSpec extends ZIOSpecDefault {
 
         // Use readOnly to share the transaction
         results <- lmdb.readOnly { ops =>
-          val users = usersCol.lift(ops)
+                     val users = usersCol.lift(ops)
 
-          // Start query from lifted ops
-          users.query
-            .whereValue(_.active)
-            .joinByIndex(postsCol, authorToPostIdx)(_.id)
-            .toList
-        }
+                     // Start query from lifted ops
+                     users.query
+                       .whereValue(_.active)
+                       .joinByIndex(postsCol, authorToPostIdx)(_.id)
+                       .toList
+                   }
       } yield assertTrue(
         results.size == 4,
         results.count { case (user, _) => user.name == "Alice" } == 2,

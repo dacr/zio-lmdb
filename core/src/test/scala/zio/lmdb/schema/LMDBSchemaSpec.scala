@@ -32,7 +32,7 @@ object LMDBSchemaSpec extends ZIOSpecDefault {
       val s = LMDBSchema[Bar].artifact
       s match {
         case SchemaArtifact.OpaqueSchema(_) => assertCompletes
-        case other                           => assertNever(s"expected OpaqueSchema, got $other")
+        case other                          => assertNever(s"expected OpaqueSchema, got $other")
       }
     },
     test("from() produces a schema whose fingerprint matches the underlying artifact") {

@@ -29,9 +29,7 @@ enum StorageUserError {
   case NestedWriteTransactionError(activeTransaction: ActiveTransaction)
   case KeyAlreadyExists(name: CollectionName, key: String)
 
-  /** L2A drift detection: the caller's declared schema disagrees with the schema first persisted
-    * for this collection / index / multi-collection. `side` is one of `"key"`, `"value"`,
-    * `"fromKey"`, `"toKey"`.
+  /** L2A drift detection: the caller's declared schema disagrees with the schema first persisted for this collection / index / multi-collection. `side` is one of `"key"`, `"value"`, `"fromKey"`, `"toKey"`.
     */
   case SchemaDrift(name: String, side: String, expectedFingerprint: String, actualFingerprint: String)
 }
