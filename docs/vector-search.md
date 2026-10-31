@@ -27,7 +27,7 @@ faceIndex: FaceId → Array[Float] (512 components)
 
 Vectors are stored as an ordinary collection — one record per key — so they get the usual LMDB properties for free: ACID writes, mmap'd/page-cached reads, backup/restore. `searchNearest` is an **exact**, full-scan search: every stored vector is compared against the query, with the scan spread across CPU cores instead of running on a single thread (see below).
 
-For workloads that run many searches against a mostly-static corpus, `searchApproximate` trades a little recall for search cost that grows logarithmically rather than linearly — see [Approximate search](#approximate-search-hnsw) below.
+For workloads that run many searches against a mostly-static corpus, `searchApproximate` trades a little recall for search cost that grows logarithmically rather than linearly — see [Approximate search](#approximate-search-hnsw) below. For a large corpus searched interactively while it changes, `searchQuantized` scans an in-memory int8 copy kept up to date by the writes — see [Quantized search](#quantized-search).
 
 ---
 
@@ -178,3 +178,26 @@ Both the build and the resulting graph are in-memory and snapshot-like: any `ins
 **When it pays**: the build reads and links every vector, so it costs meaningfully more than a single exact scan. It wins when many searches amortize it — a batch job matching a large query set against a mostly-static corpus — and loses for a handful of one-off queries, where `searchNearest` finishes sooner than a build would.
 
 An on-disk, incrementally-maintained variant (persisting the graph in LMDB rather than rebuilding it per process) is sketched in `docs/internal/vector-search-hnsw-design.md`.
+
+---
+
+## Quantized search
+
+A corpus too large to keep in memory as floats, searched interactively while it keeps changing — the text chunks of a personal knowledge base, say — fits neither the exact scan (it reads every vector from LMDB at each search) nor the HNSW graph (dropped by every write, and holding every float vector in memory). `buildQuantizedIndex` keeps an in-memory copy of the vectors with each component quantized to one signed byte: a fourth of the memory of the float vectors (about 1 GiB per million 1024-dimension vectors), scanned at memory speed.
+
+```scala
+def buildQuantizedIndex(batchSize: Int = 2048, parallelism: Int = <cores>): IO[StreamErrors, Unit]
+def searchQuantized(query: Array[Float], k: Int, oversampling: Int = 4, parallelism: Int = <cores>): IO[StreamErrors | VectorDimensionMismatch, Chunk[(K, Double)]]
+def dropQuantizedIndex(): UIO[Unit]
+```
+
+```scala
+_    <- index.buildQuantizedIndex().forkDaemon            // once, at startup
+hits <- index.searchQuantized(queryEmbedding, k = 20)     // the exact scan until the build is over
+```
+
+`searchQuantized` selects the `k * oversampling` closest candidates by the quantized vectors, then ranks them by their exact vectors, read from the collection: the distances returned are exact, and a true neighbor is missed only when quantization pushes it beyond the candidates, which a larger `oversampling` makes rarer.
+
+**Unlike the warm snapshot and the HNSW graph, the quantized index is maintained, not invalidated**: `insert` and `delete` update it, including those made while it is being built, so it is built once per process. Until the build is over, `searchQuantized` falls back to `searchNearest`. `cooldown()` doesn't drop it; `dropQuantizedIndex()` does.
+
+Measured on 200 000 clustered 1024-dimension vectors, 8 cores: the build takes about 1 s, a search for `k = 100` about 25 ms and for `k = 600` about 45 ms, against about 200 ms for the exact scan, with the same 600 neighbors found.

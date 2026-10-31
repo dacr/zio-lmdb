@@ -75,6 +75,20 @@ object LMDBVectorIndexSpec extends ZIOSpecDefault {
         expected = naiveNearest(vectors, query, k = 5, VectorMetric.Cosine)
       } yield assertTrue(got.map(_._1).toList == expected)
     },
+    test("searchNearest decodes the keys of the winners only, whatever their codec, the same cold or warm") {
+      val dimension = 24
+      val count     = 300
+      for {
+        index   <- LMDBVectorIndex.create[Long]("vec-long-keys", dimension, metric = VectorMetric.Cosine, failIfExists = false)
+        vectors <- ZIO.foreach((0L until count.toLong).toList)(key => randomVector(dimension).map(key -> _))
+        _       <- ZIO.foreach(vectors) { case (key, v) => index.insert(key, v) }
+        query   <- randomVector(dimension)
+        cold    <- index.searchNearest(query, k = 7, batchSize = 50, parallelism = 3)
+        _       <- index.warm()
+        warm    <- index.searchNearest(query, k = 7, batchSize = 50, parallelism = 3)
+        expected = vectors.map { case (key, v) => key -> VectorMetric.Cosine.distance(query, v) }.sortBy(_._2).take(7)
+      } yield assertTrue(cold == Chunk.fromIterable(expected), warm == cold)
+    },
     test("searchApproximate uses the graph once built, and falls back to the exact scan before that") {
       val dimension = 16
       val count     = 400
@@ -109,6 +123,46 @@ object LMDBVectorIndexSpec extends ZIOSpecDefault {
         cold == warm,
         after.map(_._1) == Chunk("z")
       )
+    },
+    test("searchQuantized finds the exact neighbors, with their exact distances, and falls back to the exact scan before its index is built") {
+      val dimension = 64
+      val count     = 3000
+      val k         = 10
+      for {
+        index    <- LMDBVectorIndex.create[String]("vec-quantized", dimension, metric = VectorMetric.Cosine, failIfExists = false)
+        vectors  <- ZIO.foreach((0 until count).toList)(i => randomVector(dimension).map(s"k$i" -> _))
+        _        <- ZIO.foreachDiscard(vectors) { case (key, v) => index.insert(key, v) }
+        queries  <- ZIO.foreach((1 to 20).toList)(_ => randomVector(dimension))
+        query     = queries.head
+        fallback <- index.searchQuantized(query, k)
+        exact    <- index.searchNearest(query, k)
+        _        <- index.buildQuantizedIndex(batchSize = 100, parallelism = 4)
+        results  <- ZIO.foreach(queries)(q => index.searchQuantized(q, k).zip(index.searchNearest(q, k)).map((quantized, exact) => (q, quantized, exact)))
+        found     = results.map((_, quantized, exact) => quantized.map(_._1).toSet.intersect(exact.map(_._1).toSet).size).sum
+        recall    = found.toDouble / (queries.size * k)
+        stored    = vectors.toMap
+        distances = results.forall((q, quantized, _) => quantized.size == k && quantized.forall((key, d) => d == VectorMetric.Cosine.distance(q, stored(key))))
+      } yield assertTrue(fallback == exact, recall >= 0.95, distances)
+    },
+    test("searchQuantized sees the writes made after its index was built, and while it was being built") {
+      val dimension = 32
+      for {
+        index    <- LMDBVectorIndex.create[Long]("vec-quantized-writes", dimension, metric = VectorMetric.Euclidean, failIfExists = false)
+        initial  <- ZIO.foreach((0L until 2000L).toList)(key => randomVector(dimension).map(key -> _))
+        _        <- ZIO.foreachDiscard(initial) { case (key, v) => index.insert(key, v) }
+        added    <- ZIO.foreach((10000L until 10200L).toList)(key => randomVector(dimension).map(key -> _))
+        removed   = initial.take(100)
+        building <- index.buildQuantizedIndex(batchSize = 50, parallelism = 2).fork
+        _        <- ZIO.foreachDiscard(added) { case (key, v) => index.insert(key, v) } <&> ZIO.foreachDiscard(removed)((key, _) => index.delete(key))
+        _        <- building.join
+        addedOk  <- ZIO.forall(added)((key, v) => index.searchQuantized(v, 1).map(_.map(_._1) == Chunk(key)))
+        gone     <- ZIO.forall(removed)((key, v) => index.searchQuantized(v, 1).map(!_.exists(_._1 == key)))
+        late      = Array.fill(dimension)(1000f)
+        _        <- index.insert(-1L, late)
+        lateHit  <- index.searchQuantized(late, 1)
+        _        <- index.delete(-1L)
+        lateGone <- index.searchQuantized(late, 1)
+      } yield assertTrue(addedOk, gone, lateHit.map(_._1) == Chunk(-1L), !lateGone.exists(_._1 == -1L))
     }
   ).provideShared(
     Scope.default,

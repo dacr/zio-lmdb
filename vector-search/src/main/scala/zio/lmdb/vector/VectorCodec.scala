@@ -17,7 +17,7 @@ package zio.lmdb.vector
 
 import zio.lmdb.LMDBCodec
 
-import java.nio.ByteBuffer
+import java.nio.{ByteBuffer, ByteOrder}
 
 /** `LMDBCodec[Array[Float]]` used to store raw vectors: 4 bytes per component, no framing. Kept separate from any particular dimension so it can back indexes of any size.
   */
@@ -38,15 +38,17 @@ object VectorCodec {
       if (remaining % java.lang.Float.BYTES != 0)
         Left(s"invalid vector byte length: $remaining is not a multiple of ${java.lang.Float.BYTES}")
       else {
-        val count  = remaining / java.lang.Float.BYTES
-        val values = new Array[Float](count)
-        var i      = 0
-        while (i < count) {
-          values(i) = valueBytes.getFloat()
-          i += 1
-        }
+        val values = new Array[Float](remaining / java.lang.Float.BYTES)
+        readFloats(valueBytes, values)
+        valueBytes.position(valueBytes.limit())
         Right(values)
       }
     }
   }
+
+  /** Copies the floats of `bytes`, from its position, into `target` in one bulk copy, as `encode` wrote them (big-endian): decoding float by float with `getFloat` is a bounds and session check per component, the major cost of a scan over a large
+    * index. Leaves the position of `bytes` untouched.
+    */
+  def readFloats(bytes: ByteBuffer, target: Array[Float]): Unit =
+    bytes.duplicate().order(ByteOrder.BIG_ENDIAN).asFloatBuffer().get(target)
 }
